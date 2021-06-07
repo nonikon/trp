@@ -1,0 +1,75 @@
+/*
+ * Copyright (C) 2021 nonikon@qq.com.
+ * All rights reserved.
+ */
+
+#ifndef _COMMON_H_
+#define _COMMON_H_
+
+#include <uv.h>
+
+#define xcontainer_of(ptr, type, member) \
+            ((type*) ((char*) (ptr) - offsetof(type, member)))
+
+#define VERSION_MAJOR       0x01
+#define VERSION_MINOR       0x00
+
+#define DEF_SERVER_PORT     9901
+#define DEF_XSERVER_PORT    9902
+#define DEF_TSERVER_PORT    9903
+#define LISTEN_BACKLOG      1024
+
+#define MAX_SOCKBUF_SIZE    (4096 - sizeof(uv_write_t))
+#define MAX_WQUEUE_SIZE     (0) /* bytes */
+
+#define DEVICE_ID_SIZE      8
+
+typedef unsigned char   u8_t;
+typedef signed char     s8_t;
+typedef unsigned short  u16_t;
+typedef signed short    s16_t;
+typedef unsigned int    u32_t;
+typedef signed int      s32_t;
+
+/* Q - Query, R - Reply */
+enum {
+    QCMD_CONNECT,
+    QCMD_DEVINFO,
+    QCMD_MAX,
+};
+
+#define CMD_TAG         0x7E
+
+typedef struct {
+    u8_t tag;
+    u8_t major;
+    u8_t minor;
+    u8_t cmd;
+    u16_t rsv;
+    u16_t port; /* Big Endian */
+    u8_t addr[16];
+    u8_t devid[DEVICE_ID_SIZE];
+} cmd_t;
+
+#define is_valid_devid(s)   (*(u32_t*) (s))
+
+#define is_valid_cmd(c)     ( \
+            (c)->tag == CMD_TAG && \
+            (c)->major <= VERSION_MAJOR && \
+            (c)->minor <= VERSION_MINOR && \
+            (c)->cmd < QCMD_MAX)
+
+/* parse ipv4 string to sockaddr_in. Eg:
+ * - [1.2.3.4:8080] -> [1.2.3.4], [8080]
+ * - [:8080] -> [127.0.0.1], [8080]
+ * - [1.2.3.4] -> [1.2.3.4], [defport]
+ */
+int parse_ip4_str(const char* str, int defport, struct sockaddr_in* addr);
+
+/* device id to string. */
+const char* devid_to_str(u8_t id[DEVICE_ID_SIZE]);
+
+/* string to device id. */
+int str_to_devid(u8_t id[DEVICE_ID_SIZE], const char* str);
+
+#endif // _COMMON_H_
