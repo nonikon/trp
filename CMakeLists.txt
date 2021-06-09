@@ -15,12 +15,6 @@ endif()
 # else()
 #     set(libs pthread dl)
 # endif()
-if(MSVC)
-    add_compile_definitions(
-        _WINSOCK_DEPRECATED_NO_WARNINGS
-        _CRT_SECURE_NO_WARNINGS
-    )
-endif()
 
 set(server_sources
     xhash.c
@@ -60,32 +54,28 @@ set(tunnel_defines
     XLOG_OUT_CTRL=4
 )
 
-add_executable(trp-server ${server_sources})
-if(LIBUV_EMBEDDED)
-    target_include_directories(trp-server PRIVATE ${LIBUV_SRC_PATH}/include)
-    target_link_libraries(trp-server uv_a)
-else()
-    target_link_libraries(trp-server uv)
+if(MSVC)
+    add_compile_definitions(
+        _WINSOCK_DEPRECATED_NO_WARNINGS
+        _CRT_SECURE_NO_WARNINGS
+    )
 endif()
+
+if(LIBUV_EMBEDDED)
+    include_directories(${LIBUV_SRC_PATH}/include)
+    link_libraries(uv_a)
+else()
+    link_libraries(uv)
+endif()
+
+add_executable(trp-server ${server_sources})
 target_compile_definitions(trp-server PRIVATE ${server_defines})
 # target_compile_options(trp-server PRIVATE ${server_cflags})
 
 add_executable(trp-client ${client_sources})
-if(LIBUV_EMBEDDED)
-    target_include_directories(trp-client PRIVATE ${LIBUV_SRC_PATH}/include)
-    target_link_libraries(trp-client uv_a)
-else()
-    target_link_libraries(trp-client uv)
-endif()
 target_compile_definitions(trp-client PRIVATE ${client_defines})
 # target_compile_options(trp-client PRIVATE ${client_cflags})
 
 add_executable(trp-tunnel ${tunnel_sources})
-if(LIBUV_EMBEDDED)
-    target_include_directories(trp-tunnel PRIVATE ${LIBUV_SRC_PATH}/include)
-    target_link_libraries(trp-tunnel uv_a)
-else()
-    target_link_libraries(trp-tunnel uv)
-endif()
 target_compile_definitions(trp-tunnel PRIVATE ${tunnel_defines})
 # target_compile_options(trp-tunnel PRIVATE ${tunnel_cflags})
