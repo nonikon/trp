@@ -14,13 +14,17 @@
 #define VERSION_MAJOR       0x01
 #define VERSION_MINOR       0x00
 
-#define DEF_SERVER_PORT     9901
-#define DEF_XSERVER_PORT    9902
-#define DEF_TSERVER_PORT    9903
+#define DEF_SERVER_PORT     9901    /* default server port */
+#define DEF_XSERVER_PORT    9902    /* default proxy server port */
+#define DEF_CONTROL_PORT    9903    /* default control (http) port */
+#define DEF_TSERVER_PORT    8800    /* default tunnel server port */
+#define DEF_SOCKS5_PORT     8801    /* default socks5 proxy port */
 #define LISTEN_BACKLOG      1024
 
-#define MAX_SOCKBUF_SIZE    (4096 - sizeof(uv_write_t))
-#define MAX_WQUEUE_SIZE     (0) /* bytes */
+#define MAX_IPADDR_LEN      16
+#define MAX_DOMAIN_LEN      64
+#define MAX_SOCKBUF_SIZE    4096
+#define MAX_WQUEUE_SIZE     0 /* bytes */
 
 #define DEVICE_ID_SIZE      8
 
@@ -31,11 +35,14 @@ typedef signed short    s16_t;
 typedef unsigned int    u32_t;
 typedef signed int      s32_t;
 
-/* Q - Query, R - Reply */
 enum {
-    QCMD_CONNECT,
-    QCMD_DEVINFO,
-    QCMD_MAX,
+    CMD_CONNECT_IPV4,
+    CMD_CONNECT_IPV6,   /* current not supported */
+    CMD_CONNECT_DOMAIN, /* current not supported */
+    CMD_CONNECT_CLIENT,
+    CMD_REPORT_DEVID,
+
+    CMD_LIMIT_MAX,
 };
 
 #define CMD_TAG         0x7E
@@ -45,19 +52,34 @@ typedef struct {
     u8_t major;
     u8_t minor;
     u8_t cmd;
-    u16_t rsv;
-    u16_t port; /* Big Endian */
-    u8_t addr[16];
-    u8_t devid[DEVICE_ID_SIZE];
+
+    union {
+        /* CMD_CONNECT_IPV4 | CMD_CONNECT_IPV6 */
+        struct {
+            u16_t resv;  /* reserved */
+            u16_t port; /* big endian */
+            u8_t addr[MAX_IPADDR_LEN];
+        } i;
+        /* CMD_CONNECT_DOMAIN */
+        struct {
+            u16_t resv;  /* reserved */
+            u16_t port; /* big endian */
+            u8_t domain[MAX_DOMAIN_LEN];
+        } m;
+        /* CMD_CONNECT_CLIENT | CMD_REPORT_DEVID */
+        struct {
+            u8_t devid[DEVICE_ID_SIZE];
+        } d;
+    };
 } cmd_t;
 
 #define is_valid_devid(s)   (*(u32_t*) (s))
 
 #define is_valid_cmd(c)     ( \
             (c)->tag == CMD_TAG && \
-            (c)->major <= VERSION_MAJOR && \
-            (c)->minor <= VERSION_MINOR && \
-            (c)->cmd < QCMD_MAX)
+            (c)->major == VERSION_MAJOR && \
+            (c)->minor == VERSION_MINOR && \
+            (c)->cmd < CMD_LIMIT_MAX)
 
 /* parse ipv4 string to sockaddr_in. Eg:
  * - [1.2.3.4:8080] -> [1.2.3.4], [8080]

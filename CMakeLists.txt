@@ -15,6 +15,12 @@ endif()
 # else()
 #     set(libs pthread dl)
 # endif()
+if(MSVC)
+    add_compile_definitions(
+        _WINSOCK_DEPRECATED_NO_WARNINGS
+        _CRT_SECURE_NO_WARNINGS
+    )
+endif()
 
 set(server_sources
     xhash.c

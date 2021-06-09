@@ -27,18 +27,21 @@ enum {
  */
 
 typedef struct {
+    uv_write_t wreq;
+    u32_t idx;
+    u32_t len;
+    char buffer[MAX_SOCKBUF_SIZE - sizeof(uv_write_t) - 8];
+} io_buf_t;
+
+typedef struct {
     uv_tcp_t io_server;
     uv_tcp_t io_remote;
+    io_buf_t* pending_iob;  /* the pending 'io_buf_t' before 'io_remote' connected */
     u8_t ref_count;         /* increase when 'io_server' or 'io_remote' opened, decrease when closed */
     u8_t server_blocked;    /* server reading is stopped */
     u8_t remote_blocked;    /* remote reading is stopped */
     u8_t stage;
 } client_ctx_t;
-
-typedef struct {
-    uv_write_t wreq;
-    char buffer[MAX_SOCKBUF_SIZE];
-} io_buf_t;
 
 static uv_loop_t* loop;
 static uv_timer_t reconnect_timer;
@@ -61,12 +64,10 @@ static void new_server_connection(uv_timer_t* handle);
 
 static void on_iobuf_alloc(uv_handle_t* handle, size_t sg_size, uv_buf_t* buf)
 {
-    client_ctx_t* ctx = handle->data;
     io_buf_t* iob = xlist_alloc_back(&io_buffers);
 
     buf->base = iob->buffer;
-    /* set buflen 'sizeof(cmd_t)' to avoid packet splicing at command stage. */
-    buf->len = ctx->stage != STAGE_COMMAND ? MAX_SOCKBUF_SIZE : sizeof(cmd_t);
+    buf->len = sizeof(iob->buffer);
 }
 
 static void on_io_closed(uv_handle_t* handle)
@@ -76,6 +77,10 @@ static void on_io_closed(uv_handle_t* handle)
     if (ctx->ref_count > 1) {
         --ctx->ref_count;
     } else {
+
+        if (ctx->pending_iob) {
+            xlist_erase(&io_buffers, xlist_value_iter(ctx->pending_iob));
+        }
         xlist_erase(&client_ctxs, xlist_value_iter(ctx));
 
         xlog_debug("current %zd ctxs, %zd iobufs.",
@@ -121,7 +126,7 @@ static void on_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
 
         if (uv_stream_get_write_queue_size(
                 (uv_stream_t*) &ctx->io_server) > MAX_WQUEUE_SIZE) {
-            xlog_error("server write queue pending.");
+            xlog_debug("server write queue pending.");
 
             /* stop reading from remote until server write queue cleared. */
             uv_read_stop(stream);
@@ -164,6 +169,21 @@ static void on_remote_connected(uv_connect_t* req, int status)
 
     } else {
         xlog_debug("remote connected.");
+
+        if (ctx->pending_iob) {
+            /* write 'ctx->pending_iob' to remote. */
+            io_buf_t* iob = ctx->pending_iob;
+            uv_buf_t buf;
+
+            buf.base = iob->buffer + iob->idx;
+            buf.len = iob->len;
+
+            iob->wreq.data = ctx;
+            ctx->pending_iob = NULL;
+
+            uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_remote,
+                &buf, 1, on_remote_write);
+        }
 
         uv_read_start((uv_stream_t*) &ctx->io_remote,
             on_iobuf_alloc, on_remote_read);
@@ -260,29 +280,41 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
         if (ctx->stage == STAGE_COMMAND) {
             cmd_t* cmd = (cmd_t*) buf->base;
 
-            if (nread != sizeof(cmd_t) || !is_valid_cmd(cmd)) {
-                xlog_warn("got an error packet from server, ignore.");
+            /* start a new server connection always. */
+            new_server_connection(NULL);
 
-            } else if (cmd->cmd == QCMD_CONNECT) {
-                xlog_debug("got CONNECT cmd from server, process.");
+            if (nread < sizeof(cmd_t) || !is_valid_cmd(cmd)) {
+                xlog_warn("got an error packet from server.");
+                uv_close((uv_handle_t*) stream, on_io_closed);
 
-                /* start a new server connection. */
-                new_server_connection(NULL);
-                /* disable tcp-keepalive. */
-                uv_tcp_keepalive((uv_tcp_t*) stream, 0, 0);
+            } else if (cmd->cmd == CMD_CONNECT_IPV4) {
+                xlog_debug("got CONNECT_IPV4 cmd (%s:%d) from proxy client, process.",
+                    inet_ntoa(*(struct in_addr*) cmd->i.addr), ntohs(cmd->i.port));
+
                 /* stop reading from server until remote connected.
                  * so we can't know this connection is closed (by server) or not
                  * before remote connected, TODO.
                  */
                 uv_read_stop(stream);
 
-                if (connect_remote(ctx, cmd->addr, cmd->port) != 0) {
+                if (connect_remote(ctx, cmd->i.addr, cmd->i.port) != 0) {
                     /* connect failed immediately, just close this connection. */
                     uv_close((uv_handle_t*) stream, on_io_closed);
                 }
 
+                if (nread > sizeof(cmd_t)) {
+                    xlog_debug("pending the remaining iob.");
+
+                    iob->idx = sizeof(cmd_t);
+                    iob->len = nread - sizeof(cmd_t);
+                    /* 'iob' free later. */
+                    ctx->pending_iob = iob;
+                    return;
+                }
+
             } else {
-                xlog_warn("got an error command from server, ignore.");
+                xlog_warn("got an error command from server.");
+                uv_close((uv_handle_t*) stream, on_io_closed);
             }
 
         } else {
@@ -297,7 +329,9 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
         if (ctx->stage == STAGE_FORWARD) {
             uv_close((uv_handle_t*) &ctx->io_remote, on_io_closed);
         } else if (ctx->stage == STAGE_COMMAND) {
-            new_server_connection(NULL);
+            /* delay connect */
+            uv_timer_start(&reconnect_timer, new_server_connection,
+                RECONNECT_INTERVAL, RECONNECT_INTERVAL);
         } else { /* STAGE_CONNECT */
             /* should not reach here */
             xlog_error("unexpected state happen when disconnect.");
@@ -314,7 +348,7 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
     xlist_erase(&io_buffers, xlist_value_iter(iob));
 }
 
-static void send_device_info(client_ctx_t* ctx)
+static void report_device_id(client_ctx_t* ctx)
 {
     uv_buf_t buf;
     io_buf_t* iob = xlist_alloc_back(&io_buffers);
@@ -323,9 +357,9 @@ static void send_device_info(client_ctx_t* ctx)
     cmd->tag = CMD_TAG;
     cmd->major = VERSION_MAJOR;
     cmd->minor = VERSION_MINOR;
-    cmd->cmd = QCMD_DEVINFO;
+    cmd->cmd = CMD_REPORT_DEVID;
 
-    memcpy(cmd->devid, device_id, DEVICE_ID_SIZE);
+    memcpy(cmd->d.devid, device_id, DEVICE_ID_SIZE);
 
     buf.base = iob->buffer;
     buf.len = sizeof(cmd_t);
@@ -358,10 +392,10 @@ static void on_server_connected(uv_connect_t* req, int status)
         uv_timer_stop(&reconnect_timer);
         uv_read_start((uv_stream_t*) &ctx->io_server,
             on_iobuf_alloc, on_server_read);
-        /* enable tcp-keepalive until enter FORWARD stage. */
+        /* enable tcp-keepalive. */
         uv_tcp_keepalive(&ctx->io_server, 1, KEEPIDLE_TIME);
 
-        send_device_info(ctx);
+        report_device_id(ctx);
 
         ctx->stage = STAGE_COMMAND;
     }
@@ -379,6 +413,7 @@ static void new_server_connection(uv_timer_t* timer)
 
     ctx->io_server.data = ctx;
     ctx->io_remote.data = ctx;
+    ctx->pending_iob = NULL;
     ctx->ref_count = 1;
     ctx->server_blocked = 0;
     ctx->remote_blocked = 0;
@@ -404,19 +439,16 @@ int main(int argc, char** argv)
 {
     const char* server_str = "127.0.0.1";
     const char* devid_str = NULL;
-    unsigned log_level = XLOG_INFO;
+    int verbose = 0;
     int i;
 
     for (i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "-s")) {
-            if (++i < argc)
-                server_str = argv[i];
+            if (++i < argc) server_str = argv[i];
         } else if (!strcmp(argv[i], "-d")) {
-            if (++i < argc)
-                devid_str = argv[i];
-        } else if (!strcmp(argv[i], "-L")) {
-            if (++i < argc)
-                log_level = (unsigned) atoi(argv[i]);
+            if (++i < argc) devid_str = argv[i];
+        } else if (!strcmp(argv[i], "-v")) {
+            verbose = 1;
         } else {
             // usage, TODO
             fprintf(stderr, "wrong args.\n");
@@ -427,13 +459,7 @@ int main(int argc, char** argv)
     loop = uv_default_loop();
 
     xlog_init(NULL);
-
-    if (log_level <= XLOG_DEBUG) {
-        xlog_ctrl(log_level, 0, 0);
-    } else {
-        xlog_ctrl(XLOG_INFO, 0, 0);
-        xlog_warn("wrong log level, use default.");
-    }
+    xlog_ctrl(verbose ? XLOG_DEBUG : XLOG_INFO, 0, 0);
 
     if (!devid_str) {
         xlog_info("device id not set, use default.");

@@ -14,6 +14,14 @@
 #include "xlog.h"
 #include "xlist.h"
 
+#define KEEPIDLE_TIME       (40) /* s */
+
+/*  --------------         ---------------         --------------
+ * | proxy-server | <---> | tunnel-server | <---> | applications |
+ *  --------------         ---------------         --------------
+ *                         (proxy-client)
+ */
+
 typedef struct {
     uv_tcp_t io_tclient;    /* tunnel-client */
     uv_tcp_t io_xserver;    /* proxy-server */
@@ -27,7 +35,7 @@ typedef struct {
 
 typedef struct {
     uv_write_t wreq;
-    char buffer[MAX_SOCKBUF_SIZE];
+    char buffer[MAX_SOCKBUF_SIZE - sizeof(uv_write_t)];
 } io_buf_t;
 
 static uv_loop_t* loop;
@@ -49,7 +57,7 @@ static void on_iobuf_alloc(uv_handle_t* handle, size_t sg_size, uv_buf_t* buf)
     io_buf_t* iob = xlist_alloc_back(&io_buffers);
 
     buf->base = iob->buffer;
-    buf->len = MAX_SOCKBUF_SIZE;
+    buf->len = sizeof(iob->buffer);
 }
 
 static void on_io_closed(uv_handle_t* handle)
@@ -104,7 +112,7 @@ static void on_xserver_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
 
         if (uv_stream_get_write_queue_size(
                 (uv_stream_t*) &ctx->io_tclient) > MAX_WQUEUE_SIZE) {
-            xlog_error("tunnel client write queue pending.");
+            xlog_debug("tunnel client write queue pending.");
 
             /* stop reading from proxy server until tunnel client write queue cleared. */
             uv_read_stop(stream);
@@ -168,7 +176,7 @@ static void on_tclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
 
         if (uv_stream_get_write_queue_size(
                 (uv_stream_t*) &ctx->io_xserver) > MAX_WQUEUE_SIZE) {
-            xlog_error("proxy server write queue pending.");
+            xlog_debug("proxy server write queue pending.");
 
             /* stop reading from tunnel client until proxy server write queue cleared. */
             uv_read_stop(stream);
@@ -200,26 +208,35 @@ static void send_connect_cmd(tserver_ctx_t* ctx)
     io_buf_t* iob = xlist_alloc_back(&io_buffers);
     cmd_t* cmd = (cmd_t*) iob->buffer;
 
+    if (is_valid_devid(device_id)) {
+        cmd->tag = CMD_TAG;
+        cmd->major = VERSION_MAJOR;
+        cmd->minor = VERSION_MINOR;
+        cmd->cmd = CMD_CONNECT_CLIENT;
+
+        memcpy(cmd->d.devid, device_id, DEVICE_ID_SIZE);
+        cmd += 1;
+    }
+
     cmd->tag = CMD_TAG;
     cmd->major = VERSION_MAJOR;
     cmd->minor = VERSION_MINOR;
-    cmd->cmd = QCMD_CONNECT;
+    cmd->cmd = CMD_CONNECT_IPV4;
 
 #ifdef __linux__
     if (!tunnel_addr.sin_family) {
-        cmd->port = ctx->dest_addr.sin_port;
-        memcpy(cmd->addr, &ctx->dest_addr.sin_addr, 4);
-    } else
+        cmd->i.port = ctx->dest_addr.sin_port;
+        memcpy(cmd->i.addr, &ctx->dest_addr.sin_addr, 4);
+    } else {
 #endif
-    {
-        cmd->port = tunnel_addr.sin_port;
-        memcpy(cmd->addr, &tunnel_addr.sin_addr, 4);
+        cmd->i.port = tunnel_addr.sin_port;
+        memcpy(cmd->i.addr, &tunnel_addr.sin_addr, 4);
+#ifdef __linux__
     }
-
-    memcpy(cmd->devid, device_id, DEVICE_ID_SIZE);
+#endif
 
     buf.base = iob->buffer;
-    buf.len = sizeof(cmd_t);
+    buf.len = (char*) (cmd + 1) - iob->buffer;
 
     iob->wreq.data = ctx;
 
@@ -249,6 +266,8 @@ static void on_xserver_connected(uv_connect_t* req, int status)
             on_iobuf_alloc, on_tclient_read);
         uv_read_start((uv_stream_t*) &ctx->io_xserver,
             on_iobuf_alloc, on_xserver_read);
+        /* enable tcp-keepalive. */
+        uv_tcp_keepalive(&ctx->io_xserver, 1, KEEPIDLE_TIME);
 
         send_connect_cmd(ctx);
     }
@@ -336,25 +355,20 @@ int main(int argc, char** argv)
     const char* tserver_str = "127.0.0.1";
     const char* tunnel_str = NULL;
     const char* devid_str = NULL;
-    unsigned log_level = XLOG_INFO;
+    int verbose = 0;
     int error, i;
 
     for (i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "-x")) {
-            if (++i < argc)
-                xserver_str = argv[i];
+            if (++i < argc) xserver_str = argv[i];
         } else if (!strcmp(argv[i], "-b")) {
-            if (++i < argc)
-                tserver_str = argv[i];
+            if (++i < argc) tserver_str = argv[i];
         } else if (!strcmp(argv[i], "-t")) {
-            if (++i < argc)
-                tunnel_str = argv[i];
+            if (++i < argc) tunnel_str = argv[i];
         } else if (!strcmp(argv[i], "-d")) {
-            if (++i < argc)
-                devid_str = argv[i];
-        } else if (!strcmp(argv[i], "-L")) {
-            if (++i < argc)
-                log_level = (unsigned) atoi(argv[i]);
+            if (++i < argc) devid_str = argv[i];
+        } else if (!strcmp(argv[i], "-v")) {
+            verbose = 1;
         } else {
             // usage, TODO
             fprintf(stderr, "wrong args.\n");
@@ -365,13 +379,7 @@ int main(int argc, char** argv)
     loop = uv_default_loop();
 
     xlog_init(NULL);
-
-    if (log_level <= XLOG_DEBUG) {
-        xlog_ctrl(log_level, 0, 0);
-    } else {
-        xlog_ctrl(XLOG_INFO, 0, 0);
-        xlog_warn("wrong log level, use default.");
-    }
+    xlog_ctrl(verbose ? XLOG_DEBUG : XLOG_INFO, 0, 0);
 
     uv_tcp_init(loop, &io_tserver);
 

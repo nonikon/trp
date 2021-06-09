@@ -48,7 +48,7 @@ extern unsigned xlog_out_level;
 // #define XLOG_MACRO_N2S_(x)  #x
 // #define XLOG_MACRO_N2S(x)   XLOG_MACRO_N2S_(x)
 // #define XLOG_FORMAT(fmt)    "[" __FILE__ ":" XLOG_MACRO_N2S(__LINE__) "] " fmt
-#define XLOG_FORMAT(fmt)    "[%s:%d] " fmt, __FILE__, __LINE__
+#define XLOG_FORMAT(fmt)    "[%s:%d] " fmt, __FUNCTION__, __LINE__
 #else
 #define XLOG_FORMAT(fmt)    fmt
 #endif
