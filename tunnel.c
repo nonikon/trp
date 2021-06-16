@@ -83,7 +83,7 @@ static void on_xserver_write(uv_write_t* req, int status)
             (uv_stream_t*) &ctx->io_xserver) == 0) {
         xlog_debug("proxy server write queue cleared.");
 
-        /* proxy server write queue cleared, start reading from proxy server. */
+        /* proxy server write queue cleared, start reading from tunnel client. */
         uv_read_start((uv_stream_t*) &ctx->io_tclient,
             on_iobuf_alloc, on_tclient_read);
         ctx->tclient_blocked = 0;
@@ -116,7 +116,7 @@ static void on_xserver_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
 
             /* stop reading from proxy server until tunnel client write queue cleared. */
             uv_read_stop(stream);
-            ctx->tclient_blocked = 1;
+            ctx->xserver_blocked = 1;
         }
 
         /* don't release 'iob' in this place,
@@ -180,7 +180,7 @@ static void on_tclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
 
             /* stop reading from tunnel client until proxy server write queue cleared. */
             uv_read_stop(stream);
-            ctx->xserver_blocked = 1;
+            ctx->tclient_blocked = 1;
         }
 
         /* don't release 'iob' in this place,
