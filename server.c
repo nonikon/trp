@@ -5,6 +5,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <uv.h>
 
 #include "common.h"
@@ -12,6 +13,7 @@
 #include "xlist.h"
 #include "xhash.h"
 #include "http_server.h"
+#include "crypto.h"
 
 #define CLIENT_CONNECT_DELAY    (2 * 1000) /* ms */
 
@@ -48,6 +50,7 @@ typedef struct {
 typedef struct {
     uv_tcp_t io;                /* 'io.data' pointed to 'xserver_ctx_t' */
     pending_ctx_t* pending_ctx; /* the 'pending_ctx_t' belonging to */
+    crypto_ctx_t edctx;         /* 'dctx' at COMMAND stage, 'ectx' at FORWARD stage */
 } peer_t;
 
 /* proxy-server context */
@@ -57,6 +60,7 @@ typedef struct {
     peer_t* peer;               /* remote or client */
     pending_ctx_t* pending_ctx; /* the 'pending_ctx_t' belonging to */
     io_buf_t* pending_iob;      /* the pending 'io_buf_t' before 'remote' connected */
+    crypto_ctx_t dctx;
     u8_t peer_is_client;
     u8_t xclient_blocked;
     u8_t peer_blocked;
@@ -70,6 +74,9 @@ static xlist_t peers;           /* peer_t */
 static xlist_t xserver_ctxs;    /* xserver_ctx_t */
 static xlist_t io_buffers;      /* io_buf_t */
 static xlist_t conn_reqs;       /* uv_connect_t */
+
+static crypto_t crypto;
+static u8_t crypto_key[16];
 
 static void connect_client(xserver_ctx_t* ctx, peer_t* client);
 
@@ -118,17 +125,17 @@ static void on_peer_write(uv_write_t* req, int status)
     xlist_erase(&io_buffers, xlist_value_iter(iob));
 }
 
-static void on_peer_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
+static void on_client_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 {
     xserver_ctx_t* ctx = stream->data;
     io_buf_t* iob = xcontainer_of(buf->base, io_buf_t, buffer);
 
     if (nread > 0) {
         if (ctx != NULL) {
-            /* peer is already associated with an xclient, foward data. */
+            /* client is already associated with an xclient, foward data. */
             uv_buf_t wbuf;
 
-            xlog_debug("recved %zd bytes from peer, forward.", nread);
+            xlog_debug("recved %zd bytes from client, forward.", nread);
 
             wbuf.base = buf->base;
             wbuf.len = nread;
@@ -142,7 +149,7 @@ static void on_peer_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf
                     (uv_stream_t*) &ctx->io_xclient) > MAX_WQUEUE_SIZE) {
                 xlog_debug("proxy client write queue pending.");
 
-                /* stop reading from peer until proxy client write queue cleared. */
+                /* stop reading from client until proxy client write queue cleared. */
                 uv_read_stop(stream);
                 ctx->peer_blocked = 1;
             }
@@ -154,49 +161,52 @@ static void on_peer_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf
         }
 
         /* ctx == NULL */
-        {
+        if (nread == sizeof(cmd_t) + MAX_NONCE_LEN) {
             /* process command from client */
-            cmd_t* cmd = (cmd_t*) buf->base;
+            cmd_t* cmd = (cmd_t*) (buf->base + MAX_NONCE_LEN);
+            peer_t* client = xcontainer_of(stream, peer_t, io);
 
-            if (nread != sizeof(cmd_t) || !is_valid_cmd(cmd)
-                    || !is_valid_devid(cmd->d.devid)) {
-                xlog_warn("got an error packet from client.");
+            crypto.init(&client->edctx, crypto_key, (u8_t*) buf->base);
+            crypto.decrypt(&client->edctx, (u8_t*) cmd, nread - MAX_NONCE_LEN);
+
+            if (!is_valid_cmd(cmd) || !is_valid_devid(cmd->d.devid)) {
+                xlog_warn("got an error packet (content) from client.");
                 uv_close((uv_handle_t*) stream, on_peer_closed);
 
             } else if (cmd->cmd == CMD_REPORT_DEVID) {
-                peer_t* client = xcontainer_of(stream, peer_t, io);
 
                 if (!client->pending_ctx) {
-                    pending_ctx_t* dctx = xhash_get_data(&pending_ctxs, cmd->d.devid);
+                    pending_ctx_t* pdctx = xhash_get_data(&pending_ctxs, cmd->d.devid);
 
                     xlog_debug("got REPORT_DEVID cmd from client, process.");
 
-                    if (dctx == XHASH_INVALID_DATA) {
+                    if (pdctx == XHASH_INVALID_DATA) {
                         xlog_info("device_id [%s] not exist, insert.", devid_to_str(cmd->d.devid));
-                        /* create if not exist maybe unsafe, TODO */
-                        dctx = xhash_iter_data(xhash_put_ex(
-                                &pending_ctxs, cmd->d.devid, DEVICE_ID_SIZE));
 
-                        xlist_init(&dctx->clients, sizeof(peer_t), NULL);
-                        xlist_init(&dctx->xclients, sizeof(xserver_ctx_t), NULL);
+                        /* create if not exist maybe unsafe, TODO */
+                        pdctx = xhash_iter_data(xhash_put_ex(&pending_ctxs,
+                                    cmd->d.devid, DEVICE_ID_SIZE));
+
+                        xlist_init(&pdctx->clients, sizeof(peer_t), NULL);
+                        xlist_init(&pdctx->xclients, sizeof(xserver_ctx_t), NULL);
                     }
 
-                    if (xlist_empty(&dctx->xclients)) {
+                    if (xlist_empty(&pdctx->xclients)) {
                         xlog_debug("no pending proxy client match, move to pending list.");
 
-                        client->pending_ctx = dctx;
-                        /* move peer (client) node froms 'peers' to 'dctx->clients' */
-                        xlist_paste_back(&dctx->clients,
+                        client->pending_ctx = pdctx;
+                        /* move peer (client) node froms 'peers' to 'pdctx->clients' */
+                        xlist_paste_back(&pdctx->clients,
                             xlist_cut(&peers, xlist_value_iter(client)));
 
                     } else {
                         xlog_debug("pending proxy client match, associate.");
 
-                        ctx = xlist_front(&dctx->xclients);
+                        ctx = xlist_front(&pdctx->xclients);
                         ctx->pending_ctx = NULL;
                         /* move proxy client node from 'dctx->xclients' to 'xserver_ctxs' */
                         xlist_paste_back(&xserver_ctxs, xlist_cut(
-                            &dctx->xclients, xlist_value_iter(ctx)));
+                            &pdctx->xclients, xlist_value_iter(ctx)));
 
                         connect_client(ctx, client);
 
@@ -207,9 +217,13 @@ static void on_peer_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf
                 }
 
             } else {
-                xlog_warn("got an error command from client, ignore.");
+                xlog_warn("got an error command from client.");
                 uv_close((uv_handle_t*) stream, on_peer_closed);
             }
+
+        } else {
+            xlog_warn("got an error packet (length) from client.");
+            uv_close((uv_handle_t*) stream, on_peer_closed);
         }
 
     } else if (nread < 0) {
@@ -249,11 +263,57 @@ static void on_client_connect(uv_stream_t* stream, int status)
         client->pending_ctx = NULL;
 
         uv_read_start((uv_stream_t*) &client->io,
-            on_iobuf_alloc, on_peer_read);
+            on_iobuf_alloc, on_client_read);
     } else {
         xlog_error("uv_accept failed.");
 
         uv_close((uv_handle_t*) &client->io, on_peer_closed);
+    }
+}
+
+static void on_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
+{
+    xserver_ctx_t* ctx = stream->data;
+    io_buf_t* iob = xcontainer_of(buf->base, io_buf_t, buffer);
+
+    if (nread > 0) {
+        uv_buf_t wbuf;
+
+        xlog_debug("recved %zd bytes from remote, forward.", nread);
+
+        wbuf.base = buf->base;
+        wbuf.len = nread;
+
+        iob->wreq.data = ctx;
+
+        crypto.encrypt(&ctx->peer->edctx, (u8_t*) wbuf.base, wbuf.len);
+
+        uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_xclient,
+            &wbuf, 1, on_xclient_write);
+
+        if (uv_stream_get_write_queue_size(
+                (uv_stream_t*) &ctx->io_xclient) > MAX_WQUEUE_SIZE) {
+            xlog_debug("proxy client write queue pending.");
+
+            /* stop reading from remote until proxy client write queue cleared. */
+            uv_read_stop(stream);
+            ctx->peer_blocked = 1;
+        }
+
+        /* 'iob' free later. */
+    } else if (nread < 0) {
+        xlog_debug("disconnected from remote: %s.", uv_err_name(nread));
+
+        uv_close((uv_handle_t*) &ctx->io_xclient, on_xclient_closed);
+        uv_close((uv_handle_t*) stream, on_peer_closed);
+
+        if (buf->base) {
+            /* 'buf->base' may be 'NULL' when 'nread' < 0. */
+            xlist_erase(&io_buffers, xlist_value_iter(iob));
+        }
+
+    } else {
+        xlist_erase(&io_buffers, xlist_value_iter(iob));
     }
 }
 
@@ -273,28 +333,36 @@ static void on_remote_connected(uv_connect_t* req, int status)
         // }
 
     } else {
+        io_buf_t* iob = ctx->pending_iob;
+
         xlog_debug("remote connected.");
 
-        if (ctx->pending_iob) {
-            /* write 'ctx->pending_iob' to remote. */
-            io_buf_t* iob = ctx->pending_iob;
+        convert_nonce(iob->buffer);
+        crypto.init(&ctx->peer->edctx, crypto_key, (u8_t*) iob->buffer);
+
+        if (iob->len > 0) {
             uv_buf_t buf;
 
             buf.base = iob->buffer + iob->idx;
             buf.len = iob->len;
 
             iob->wreq.data = ctx;
-            ctx->pending_iob = NULL;
 
+            crypto.decrypt(&ctx->dctx, (u8_t*) buf.base, buf.len);
+            /* write 'iob' to remote, 'iob' free later. */
             uv_write(&iob->wreq, (uv_stream_t*) &ctx->peer->io,
                 &buf, 1, on_peer_write);
+        } else {
+            /* free this 'iob' now. */
+            xlist_erase(&io_buffers, xlist_value_iter(iob));
         }
 
         uv_read_start((uv_stream_t*) &ctx->peer->io,
-            on_iobuf_alloc, on_peer_read);
+            on_iobuf_alloc, on_remote_read);
         uv_read_start((uv_stream_t*) &ctx->io_xclient,
             on_iobuf_alloc, on_xclient_read);
 
+        ctx->pending_iob = NULL;
         ctx->stage = STAGE_FORWARD;
     }
 
@@ -335,26 +403,29 @@ static int connect_remote(xserver_ctx_t* ctx, u8_t* addr, u16_t port)
 
 static void connect_client(xserver_ctx_t* ctx, peer_t* client)
 {
+    io_buf_t* iob = ctx->pending_iob;
+
     client->io.data = ctx;
     client->pending_ctx = NULL;
 
     ctx->peer = client;
     ctx->peer_is_client = 1;
+    ctx->pending_iob = NULL;
     ctx->stage = STAGE_FORWARD;
 
-    if (ctx->pending_iob) {
-        /* write the 'pending_iob' to client. */
-        io_buf_t* iob = ctx->pending_iob;
+    if (iob->len > 0) {
         uv_buf_t buf;
 
         buf.base = iob->buffer + iob->idx;
         buf.len = iob->len;
 
         iob->wreq.data = ctx;
-        ctx->pending_iob = NULL;
-
+        /* write this 'iob' to client, 'iob' free later. */
         uv_write(&iob->wreq, (uv_stream_t*) &client->io,
             &buf, 1, on_peer_write);
+    } else {
+        /* free this 'iob' now. */
+        xlist_erase(&io_buffers, xlist_value_iter(iob));
     }
 }
 
@@ -365,7 +436,7 @@ static void on_connect_client_timeout(uv_timer_t* timer)
     xlog_debug("still no available client after %d seconds.",
         CLIENT_CONNECT_DELAY / 1000);
 
-    /* move proxy client node from 'dctx->xclients' to 'xserver_ctxs'. */
+    /* move proxy client node from 'pending_ctx->xclients' to 'xserver_ctxs'. */
     xlist_paste_back(&xserver_ctxs, xlist_cut(
         &ctx->pending_ctx->xclients, xlist_value_iter(ctx)));
 
@@ -397,8 +468,8 @@ static void on_xclient_write(uv_write_t* req, int status)
         xlog_debug("proxy client write queue cleared.");
 
         /* proxy client write queue cleared, start reading from peer. */
-        uv_read_start((uv_stream_t*) &ctx->peer->io,
-            on_iobuf_alloc, on_peer_read);
+        uv_read_start((uv_stream_t*) &ctx->peer->io, on_iobuf_alloc,
+            ctx->peer_is_client ? on_client_read : on_remote_read);
         ctx->peer_blocked = 0;
     }
 
@@ -421,6 +492,10 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
 
             iob->wreq.data = ctx;
 
+            if (!ctx->peer_is_client) {
+                crypto.decrypt(&ctx->dctx, (u8_t*) wbuf.base, wbuf.len);
+            }
+
             uv_write(&iob->wreq, (uv_stream_t*) &ctx->peer->io,
                 &wbuf, 1, on_peer_write);
 
@@ -440,95 +515,86 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
         }
 
         if (ctx->stage == STAGE_COMMAND) {
-            cmd_t* cmd = (cmd_t*) buf->base;
 
-            if (nread < sizeof(cmd_t) || !is_valid_cmd(cmd)) {
-                xlog_warn("got an error packet from proxy client.");
-                uv_close((uv_handle_t*) stream, on_xclient_closed);
+            if (nread >= sizeof(cmd_t) + MAX_NONCE_LEN) {
+                cmd_t* cmd = (cmd_t*) (buf->base + MAX_NONCE_LEN);
 
-            } else if (cmd->cmd == CMD_CONNECT_IPV4) {
-                xlog_debug("got CONNECT_IPV4 cmd (%s:%d) from proxy client, process.",
-                    inet_ntoa(*(struct in_addr*) cmd->i.addr), ntohs(cmd->i.port));
+                crypto.init(&ctx->dctx, crypto_key, (u8_t*) buf->base);
+                crypto.decrypt(&ctx->dctx, (u8_t*) cmd, sizeof(cmd_t));
 
-                /* stop reading from proxy client until remote connected.
-                 * so we can't know this connection is closed (by proxy client) or not
-                 * before remote connected, TODO.
-                 */
-                uv_read_stop(stream);
+                /* pending this 'iob' always (nonce will be used when remote connected). */
+                iob->idx = sizeof(cmd_t) + MAX_NONCE_LEN;
+                iob->len = nread - sizeof(cmd_t) - MAX_NONCE_LEN;
+                ctx->pending_iob = iob;
 
-                if (connect_remote(ctx, cmd->i.addr, cmd->i.port) != 0) {
-                    /* connect failed immediately, just close this connection. */
+                if (!is_valid_cmd(cmd)) {
+                    xlog_warn("got an error packet (content) from proxy client.");
                     uv_close((uv_handle_t*) stream, on_xclient_closed);
-                }
 
-                if (nread > sizeof(cmd_t)) {
-                    xlog_debug("pending the remaining iob.");
+                } else if (cmd->cmd == CMD_CONNECT_IPV4) {
+                    xlog_debug("got CONNECT_IPV4 cmd (%s:%d) from proxy client, process.",
+                        inet_ntoa(*(struct in_addr*) cmd->i.addr), ntohs(cmd->i.port));
 
-                    iob->idx = sizeof(cmd_t);
-                    iob->len = nread - sizeof(cmd_t);
-                    /* 'iob' free later. */
-                    ctx->pending_iob = iob;
-                    return;
-                }
+                    /* stop reading from proxy client until remote connected.
+                     * so we can't know this connection is closed (by proxy client) or not
+                     * before remote connected, TODO.
+                     */
+                    uv_read_stop(stream);
 
-            } else if (cmd->cmd = CMD_CONNECT_CLIENT) {
-                /* find an online client and send CONNECT cmd. */
-                pending_ctx_t* dctx = xhash_get_data(&pending_ctxs, cmd->d.devid);
-
-                xlog_debug("got CONNECT_CLIENT cmd (%s) from proxy client, process.",
-                    devid_to_str(cmd->d.devid));
-
-                if (dctx != XHASH_INVALID_DATA) {
-
-                    if (nread > sizeof(cmd_t)) {
-                        xlog_debug("pending the remaining iob.");
-
-                        iob->idx = sizeof(cmd_t);
-                        iob->len = nread - sizeof(cmd_t);
-
-                        ctx->pending_iob = iob;
+                    if (connect_remote(ctx, cmd->i.addr, cmd->i.port) != 0) {
+                        /* connect failed immediately, just close this connection. */
+                        uv_close((uv_handle_t*) stream, on_xclient_closed);
                     }
 
-                    if (!xlist_empty(&dctx->clients)) {
-                        /* online client exist.
-                         * send CONNECT cmd (forward the current 'iob').
-                         */
-                        xlog_debug("found an available client, connect to it.");
-                        connect_client(ctx, xlist_front(&dctx->clients));
+                } else if (cmd->cmd == CMD_CONNECT_CLIENT) {
+                    /* find an online client and send CONNECT cmd. */
+                    pending_ctx_t* pdctx = xhash_get_data(&pending_ctxs, cmd->d.devid);
 
-                        /* move peer (client) node from 'dctx->clients' to 'peers' */
-                        xlist_paste_back(&peers, xlist_cut_front(&dctx->clients));
+                    xlog_debug("got CONNECT_CLIENT cmd (%s) from proxy client, process.",
+                        devid_to_str(cmd->d.devid));
+
+                    if (pdctx != XHASH_INVALID_DATA) {
+
+                        if (!xlist_empty(&pdctx->clients)) {
+                            /* online client exist, associate. */
+                            xlog_debug("found an available client, connect to it.");
+
+                            connect_client(ctx, xlist_front(&pdctx->clients));
+                            /* move peer (client) node from 'pdctx->clients' to 'peers' */
+                            xlist_paste_back(&peers, xlist_cut_front(&pdctx->clients));
+
+                        } else {
+                            /* no online client. stop reading from proxy client,
+                             * and move it to 'pending_ctx_t'.
+                             */
+                            xlog_debug("no available client, pending this proxy client.");
+
+                            ctx->pending_ctx = pdctx;
+
+                            uv_read_stop(stream);
+                            uv_timer_init(loop, &ctx->timer);
+                            uv_timer_start(&ctx->timer, on_connect_client_timeout,
+                                CLIENT_CONNECT_DELAY, 0);
+
+                            /* move proxy client node from 'xserver_ctxs' to 'pdctx->xclients' */
+                            xlist_paste_back(&pdctx->xclients, xlist_cut(
+                                &xserver_ctxs, xlist_value_iter(ctx)));
+                        }
 
                     } else {
-                        /* no online client. stop reading from proxy client,
-                         * and move it to 'pending_ctx_t'.
-                         */
-                        ctx->pending_ctx = dctx;
-
-                        xlog_debug("no available client, pending this proxy client.");
-
-                        uv_read_stop(stream);
-                        uv_timer_init(loop, &ctx->timer);
-                        uv_timer_start(&ctx->timer, on_connect_client_timeout,
-                            CLIENT_CONNECT_DELAY, 0);
-
-                        /* move proxy client node from 'xserver_ctxs' to 'dctx->xclients' */
-                        xlist_paste_back(&dctx->xclients, xlist_cut(
-                            &xserver_ctxs, xlist_value_iter(ctx)));
-                    }
-
-                    if (nread > sizeof(cmd_t)) {
-                        /* 'iob' free later. */
-                        return;
+                        xlog_warn("device_id not exist for proxy client.");
+                        uv_close((uv_handle_t*) stream, on_xclient_closed);
                     }
 
                 } else {
-                    xlog_warn("device_id not exist for proxy client.");
+                    xlog_warn("got an error command from proxy client.");
                     uv_close((uv_handle_t*) stream, on_xclient_closed);
                 }
+                /* 'iob' free later. */
+                return;
 
             } else {
-                xlog_warn("got an error command from proxy client.");
+                xlog_warn("got an error packet (length) from proxy client.");
                 uv_close((uv_handle_t*) stream, on_xclient_closed);
             }
 
@@ -617,6 +683,8 @@ int main(int argc, char** argv)
     struct sockaddr_in xaddr;
     const char* server_str = "127.0.0.1";
     const char* xserver_str = "127.0.0.1";
+    const char* passwd = NULL;
+    int method = CRYPTO_CHACHA20;
     int verbose = 0;
     int error, i;
 
@@ -625,6 +693,10 @@ int main(int argc, char** argv)
             if (++i < argc) server_str = argv[i];
         } else if (!strcmp(argv[i], "-x")) {
             if (++i < argc) xserver_str = argv[i];
+        } else if (!strcmp(argv[i], "-m")) {
+            if (++i < argc) method = atoi(argv[i]);
+        } else if (!strcmp(argv[i], "-k")) {
+            if (++i < argc) passwd = argv[i];
         } else if (!strcmp(argv[i], "-v")) {
             verbose = 1;
         } else {
@@ -636,11 +708,25 @@ int main(int argc, char** argv)
 
     loop = uv_default_loop();
 
+    seed_rand((u32_t) time(NULL));
+
     xlog_init(NULL);
     xlog_ctrl(verbose ? XLOG_DEBUG : XLOG_INFO, 0, 0);
 
     uv_tcp_init(loop, &io_server);
     uv_tcp_init(loop, &io_xserver);
+
+    if (passwd) {
+        derive_key(crypto_key, passwd);
+    } else {
+        xlog_info("password not set, disable crypto.");
+        method = CRYPTO_NONE;
+    }
+
+    if (crypto_init(&crypto, method) != 0) {
+        xlog_error("invalid crypto method: %d.", method);
+        goto end;
+    }
 
     if (parse_ip4_str(server_str, DEF_SERVER_PORT, &addr) != 0) {
         xlog_error("invalid server address [%s].", server_str);

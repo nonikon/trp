@@ -16,11 +16,18 @@ endif()
 #     set(libs pthread dl)
 # endif()
 
-set(server_sources
-    xhash.c
+set(generic_sources
     xlist.c
     xlog.c
     common.c
+    crypto.c
+    sm4.c
+    chacha.c
+)
+
+set(server_sources
+    ${generic_sources}
+    xhash.c
     http_parser.c
     http_server.c
     server.c
@@ -33,9 +40,7 @@ set(server_defines
 )
 
 set(client_sources
-    xlist.c
-    xlog.c
-    common.c
+    ${generic_sources}
     client.c
 )
 set(client_defines
@@ -44,9 +49,7 @@ set(client_defines
 )
 
 set(tunnel_sources
-    xlist.c
-    xlog.c
-    common.c
+    ${generic_sources}
     tunnel.c
 )
 set(tunnel_defines

@@ -12,7 +12,7 @@
             ((type*) ((char*) (ptr) - offsetof(type, member)))
 
 #define VERSION_MAJOR       0x01
-#define VERSION_MINOR       0x00
+#define VERSION_MINOR       0x01
 
 #define DEF_SERVER_PORT     9901    /* default server port */
 #define DEF_XSERVER_PORT    9902    /* default proxy server port */
@@ -21,6 +21,7 @@
 #define DEF_SOCKS5_PORT     8801    /* default socks5 proxy port */
 #define LISTEN_BACKLOG      1024
 
+#define MAX_NONCE_LEN       16
 #define MAX_IPADDR_LEN      16
 #define MAX_DOMAIN_LEN      64
 #define MAX_SOCKBUF_SIZE    4096
@@ -56,13 +57,13 @@ typedef struct {
     union {
         /* CMD_CONNECT_IPV4 | CMD_CONNECT_IPV6 */
         struct {
-            u16_t resv;  /* reserved */
+            u16_t resv; /* reserved */
             u16_t port; /* big endian */
             u8_t addr[MAX_IPADDR_LEN];
         } i;
         /* CMD_CONNECT_DOMAIN */
         struct {
-            u16_t resv;  /* reserved */
+            u16_t resv; /* reserved */
             u16_t port; /* big endian */
             u8_t domain[MAX_DOMAIN_LEN];
         } m;
@@ -81,6 +82,9 @@ typedef struct {
             (c)->minor == VERSION_MINOR && \
             (c)->cmd < CMD_LIMIT_MAX)
 
+void seed_rand(u32_t seed);
+void rand_bytes(u8_t* data, u32_t len);
+
 /* parse ipv4 string to sockaddr_in. Eg:
  * - [1.2.3.4:8080] -> [1.2.3.4], [8080]
  * - [:8080] -> [127.0.0.1], [8080]
@@ -88,10 +92,7 @@ typedef struct {
  */
 int parse_ip4_str(const char* str, int defport, struct sockaddr_in* addr);
 
-/* device id to string. */
 const char* devid_to_str(u8_t id[DEVICE_ID_SIZE]);
-
-/* string to device id. */
 int str_to_devid(u8_t id[DEVICE_ID_SIZE], const char* str);
 
 #endif // _COMMON_H_

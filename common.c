@@ -8,6 +8,32 @@
 
 #include "common.h"
 
+static u32_t _seed;
+
+void seed_rand(u32_t seed)
+{
+    _seed = seed;
+}
+
+static u32_t rand_int()
+{
+    return _seed = _seed * 1103515245 + 12345;
+}
+
+void rand_bytes(u8_t* data, u32_t len)
+{
+    while (len >= 4) {
+        *((u32_t*) data) = rand_int();
+
+        data += 4;
+        len -= 4;
+    }
+
+    while (len--) {
+        *data++ = (u8_t) rand_int();
+    }
+}
+
 int parse_ip4_str(const char* str, int defport, struct sockaddr_in* addr)
 {
     char* p = strchr(str, ':');

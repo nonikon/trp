@@ -5,6 +5,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <uv.h>
 #ifdef __linux__
 #include <linux/netfilter_ipv4.h>
@@ -13,6 +14,7 @@
 #include "common.h"
 #include "xlog.h"
 #include "xlist.h"
+#include "crypto.h"
 
 #define KEEPIDLE_TIME       (40) /* s */
 
@@ -28,6 +30,8 @@ typedef struct {
 #ifdef __linux__
     struct sockaddr_in dest_addr;
 #endif
+    crypto_ctx_t ectx;
+    crypto_ctx_t dctx;
     u8_t ref_count;         /* increase when 'io_xserver' or 'io_tclient' opened, decrease when closed */
     u8_t tclient_blocked;
     u8_t xserver_blocked;
@@ -42,10 +46,15 @@ static uv_loop_t* loop;
 
 static struct sockaddr_in xserver_addr;
 static struct sockaddr_in tunnel_addr;
-static u8_t device_id[DEVICE_ID_SIZE];
 static xlist_t tserver_ctxs;/* client_ctx_t */
 static xlist_t io_buffers;  /* io_buf_t */
 static xlist_t conn_reqs;   /* uv_connect_t */
+
+static crypto_t crypto;
+static crypto_t cryptox;
+static u8_t crypto_key[16];
+static u8_t cryptox_key[16];
+static u8_t device_id[DEVICE_ID_SIZE];
 
 static void on_xserver_write(uv_write_t* req, int status);
 static void on_xserver_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf);
@@ -106,6 +115,8 @@ static void on_xserver_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
         wbuf.len = nread;
 
         iob->wreq.data = ctx;
+
+        cryptox.decrypt(&ctx->dctx, (u8_t*) wbuf.base, wbuf.len);
 
         uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_tclient,
             &wbuf, 1, on_tclient_write);
@@ -171,6 +182,8 @@ static void on_tclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
 
         iob->wreq.data = ctx;
 
+        cryptox.encrypt(&ctx->ectx, (u8_t*) wbuf.base, wbuf.len);
+
         uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_xserver,
             &wbuf, 1, on_xserver_write);
 
@@ -204,19 +217,32 @@ static void on_tclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
 
 static void send_connect_cmd(tserver_ctx_t* ctx)
 {
-    uv_buf_t buf;
     io_buf_t* iob = xlist_alloc_back(&io_buffers);
-    cmd_t* cmd = (cmd_t*) iob->buffer;
+    cmd_t* cmd = (cmd_t*) (iob->buffer + MAX_NONCE_LEN);
+    uv_buf_t buf;
+    u8_t iv[16];
 
     if (is_valid_devid(device_id)) {
+        /* generate and prepend iv in the first packet */
+        rand_bytes((u8_t*) cmd - MAX_NONCE_LEN, MAX_NONCE_LEN);
+
         cmd->tag = CMD_TAG;
         cmd->major = VERSION_MAJOR;
         cmd->minor = VERSION_MINOR;
         cmd->cmd = CMD_CONNECT_CLIENT;
 
         memcpy(cmd->d.devid, device_id, DEVICE_ID_SIZE);
-        cmd += 1;
+
+        crypto.init(&ctx->ectx, crypto_key, (u8_t*) cmd - MAX_NONCE_LEN);
+        crypto.encrypt(&ctx->ectx, (u8_t*) cmd, sizeof(cmd_t));
+
+        cmd = (cmd_t*) ((u8_t*) cmd + sizeof(cmd_t) + MAX_NONCE_LEN);
     }
+
+    /* generate and prepend iv in the first packet */
+    rand_bytes((u8_t*) cmd - MAX_NONCE_LEN, MAX_NONCE_LEN);
+    memcpy(iv, (u8_t*) cmd - MAX_NONCE_LEN, 16);
+    convert_nonce(iv);
 
     cmd->tag = CMD_TAG;
     cmd->major = VERSION_MAJOR;
@@ -234,6 +260,10 @@ static void send_connect_cmd(tserver_ctx_t* ctx)
 #ifdef __linux__
     }
 #endif
+
+    cryptox.init(&ctx->ectx, cryptox_key, (u8_t*) cmd - MAX_NONCE_LEN);
+    cryptox.init(&ctx->dctx, cryptox_key, iv);
+    cryptox.encrypt(&ctx->ectx, (u8_t*) cmd, sizeof(cmd_t));
 
     buf.base = iob->buffer;
     buf.len = (char*) (cmd + 1) - iob->buffer;
@@ -355,6 +385,10 @@ int main(int argc, char** argv)
     const char* tserver_str = "127.0.0.1";
     const char* tunnel_str = NULL;
     const char* devid_str = NULL;
+    const char* passwd = NULL;
+    const char* passwdx = NULL;
+    int method = CRYPTO_CHACHA20;
+    int methodx = CRYPTO_CHACHA20;
     int verbose = 0;
     int error, i;
 
@@ -367,6 +401,14 @@ int main(int argc, char** argv)
             if (++i < argc) tunnel_str = argv[i];
         } else if (!strcmp(argv[i], "-d")) {
             if (++i < argc) devid_str = argv[i];
+        } else if (!strcmp(argv[i], "-m")) {
+            if (++i < argc) method = atoi(argv[i]);
+        } else if (!strcmp(argv[i], "-M")) {
+            if (++i < argc) methodx = atoi(argv[i]);
+        } else if (!strcmp(argv[i], "-k")) {
+            if (++i < argc) passwd = argv[i];
+        } else if (!strcmp(argv[i], "-K")) {
+            if (++i < argc) passwdx = argv[i];
         } else if (!strcmp(argv[i], "-v")) {
             verbose = 1;
         } else {
@@ -378,6 +420,8 @@ int main(int argc, char** argv)
 
     loop = uv_default_loop();
 
+    seed_rand((u32_t) time(NULL));
+
     xlog_init(NULL);
     xlog_ctrl(verbose ? XLOG_DEBUG : XLOG_INFO, 0, 0);
 
@@ -385,6 +429,36 @@ int main(int argc, char** argv)
 
     if (devid_str && str_to_devid(device_id, devid_str) != 0) {
         xlog_error("invalid device id string [%s].", devid_str);
+        goto end;
+    }
+
+    if (passwd) {
+        derive_key(crypto_key, passwd);
+    } else {
+        xlog_info("password not set, disable crypto with proxy server.");
+        method = CRYPTO_NONE;
+    }
+    if (devid_str) {
+        if (passwdx) {
+            derive_key(cryptox_key, passwdx);
+        } else {
+            xlog_info("PASSWORD (-K) not set, disable crypto with client.");
+            methodx = CRYPTO_NONE;
+        }
+    } else {
+        if (passwdx) {
+            xlog_info("device id not set, ignore PASSWORD (-K).");
+        }
+        methodx = method;
+        memcpy(cryptox_key, crypto_key, 16);
+    }
+
+    if (crypto_init(&crypto, method) != 0) {
+        xlog_error("invalid crypto method: %d.", method);
+        goto end;
+    }
+    if (crypto_init(&cryptox, methodx) != 0) {
+        xlog_error("invalid crypto METHOD: %d.", methodx);
         goto end;
     }
 
@@ -424,6 +498,8 @@ int main(int argc, char** argv)
     xlist_init(&io_buffers, sizeof(io_buf_t), NULL);
     xlist_init(&conn_reqs, sizeof(uv_connect_t), NULL);
 
+    xlog_info("proxy server [%s:%d].",
+        inet_ntoa(xserver_addr.sin_addr), ntohs(xserver_addr.sin_port));
     xlog_info("tunnel server listen at [%s:%d]...",
         inet_ntoa(taddr.sin_addr), ntohs(taddr.sin_port));
     uv_run(loop, UV_RUN_DEFAULT);

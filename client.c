@@ -5,11 +5,13 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <uv.h>
 
 #include "common.h"
 #include "xlog.h"
 #include "xlist.h"
+#include "crypto.h"
 
 #define RECONNECT_INTERVAL  (10 * 1000) /* ms */
 #define KEEPIDLE_TIME       (40) /* s */
@@ -37,6 +39,8 @@ typedef struct {
     uv_tcp_t io_server;
     uv_tcp_t io_remote;
     io_buf_t* pending_iob;  /* the pending 'io_buf_t' before 'io_remote' connected */
+    crypto_ctx_t ectx;
+    crypto_ctx_t dctx;
     u8_t ref_count;         /* increase when 'io_server' or 'io_remote' opened, decrease when closed */
     u8_t server_blocked;    /* server reading is stopped */
     u8_t remote_blocked;    /* remote reading is stopped */
@@ -47,10 +51,15 @@ static uv_loop_t* loop;
 static uv_timer_t reconnect_timer;
 
 static struct sockaddr_in server_addr;
-static u8_t device_id[DEVICE_ID_SIZE];
 static xlist_t client_ctxs; /* client_ctx_t */
 static xlist_t io_buffers;  /* io_buf_t */
 static xlist_t conn_reqs;   /* uv_connect_t */
+
+static crypto_t crypto;     /* crypto between client and server */
+static crypto_t cryptox;    /* crypto between client and proxy-client */
+static u8_t crypto_key[16]; /* crypto key between client and server */
+static u8_t cryptox_key[16];/* crypto key between client and proxy-client */
+static u8_t device_id[DEVICE_ID_SIZE];
 
 static void on_remote_write(uv_write_t* req, int status);
 static void on_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf);
@@ -120,6 +129,8 @@ static void on_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
         wbuf.len = nread;
 
         iob->wreq.data = ctx;
+
+        cryptox.encrypt(&ctx->ectx, (u8_t*) wbuf.base, wbuf.len);
 
         uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_server,
             &wbuf, 1, on_server_write);
@@ -259,6 +270,8 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
 
             iob->wreq.data = ctx;
 
+            cryptox.decrypt(&ctx->dctx, (u8_t*) wbuf.base, wbuf.len);
+
             uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_remote,
                 &wbuf, 1, on_remote_write);
 
@@ -278,42 +291,54 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
         }
 
         if (ctx->stage == STAGE_COMMAND) {
-            cmd_t* cmd = (cmd_t*) buf->base;
-
             /* start a new server connection always. */
             new_server_connection(NULL);
 
-            if (nread < sizeof(cmd_t) || !is_valid_cmd(cmd)) {
-                xlog_warn("got an error packet from server.");
-                uv_close((uv_handle_t*) stream, on_io_closed);
+            if (nread >= sizeof(cmd_t) + MAX_NONCE_LEN) {
+                cmd_t* cmd = (cmd_t*) (buf->base + MAX_NONCE_LEN);
 
-            } else if (cmd->cmd == CMD_CONNECT_IPV4) {
-                xlog_debug("got CONNECT_IPV4 cmd (%s:%d) from proxy client, process.",
-                    inet_ntoa(*(struct in_addr*) cmd->i.addr), ntohs(cmd->i.port));
+                cryptox.init(&ctx->dctx, cryptox_key, (u8_t*) buf->base);
+                cryptox.decrypt(&ctx->dctx, (u8_t*) cmd, nread - MAX_NONCE_LEN);
 
-                /* stop reading from server until remote connected.
-                 * so we can't know this connection is closed (by server) or not
-                 * before remote connected, TODO.
-                 */
-                uv_read_stop(stream);
+                convert_nonce((u8_t*) buf->base);
+                cryptox.init(&ctx->ectx, cryptox_key, (u8_t*) buf->base);
 
-                if (connect_remote(ctx, cmd->i.addr, cmd->i.port) != 0) {
-                    /* connect failed immediately, just close this connection. */
+                if (!is_valid_cmd(cmd)) {
+                    xlog_warn("got an error packet (content) from proxy client.");
+                    uv_close((uv_handle_t*) stream, on_io_closed);
+
+                } else if (cmd->cmd == CMD_CONNECT_IPV4) {
+                    xlog_debug("got CONNECT_IPV4 cmd (%s:%d) from proxy client, process.",
+                        inet_ntoa(*(struct in_addr*) cmd->i.addr), ntohs(cmd->i.port));
+
+                    /* stop reading from server until remote connected.
+                     * so we can't know this connection is closed (by server) or not
+                     * before remote connected, TODO.
+                     */
+                    uv_read_stop(stream);
+
+                    if (connect_remote(ctx, cmd->i.addr, cmd->i.port) != 0) {
+                        /* connect failed immediately, just close this connection. */
+                        uv_close((uv_handle_t*) stream, on_io_closed);
+                    }
+
+                    if (nread > sizeof(cmd_t) + MAX_NONCE_LEN) {
+                        xlog_debug("pending the remaining iob.");
+
+                        iob->idx = sizeof(cmd_t) + MAX_NONCE_LEN;
+                        iob->len = nread - sizeof(cmd_t) - MAX_NONCE_LEN;
+                        /* 'iob' free later. */
+                        ctx->pending_iob = iob;
+                        return;
+                    }
+
+                } else {
+                    xlog_warn("got an error command from proxy client.");
                     uv_close((uv_handle_t*) stream, on_io_closed);
                 }
 
-                if (nread > sizeof(cmd_t)) {
-                    xlog_debug("pending the remaining iob.");
-
-                    iob->idx = sizeof(cmd_t);
-                    iob->len = nread - sizeof(cmd_t);
-                    /* 'iob' free later. */
-                    ctx->pending_iob = iob;
-                    return;
-                }
-
             } else {
-                xlog_warn("got an error command from server.");
+                xlog_warn("got an error packet (length) from server.");
                 uv_close((uv_handle_t*) stream, on_io_closed);
             }
 
@@ -350,9 +375,17 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
 
 static void report_device_id(client_ctx_t* ctx)
 {
-    uv_buf_t buf;
     io_buf_t* iob = xlist_alloc_back(&io_buffers);
-    cmd_t* cmd = (cmd_t*) iob->buffer;
+    cmd_t* cmd = (cmd_t*) (iob->buffer + MAX_NONCE_LEN);
+    uv_buf_t buf;
+
+    iob->wreq.data = ctx;
+
+    buf.base = iob->buffer;
+    buf.len = sizeof(cmd_t) + MAX_NONCE_LEN;
+
+    /* generate and prepend iv in the first packet */
+    rand_bytes((u8_t*) iob->buffer, MAX_NONCE_LEN);
 
     cmd->tag = CMD_TAG;
     cmd->major = VERSION_MAJOR;
@@ -361,10 +394,8 @@ static void report_device_id(client_ctx_t* ctx)
 
     memcpy(cmd->d.devid, device_id, DEVICE_ID_SIZE);
 
-    buf.base = iob->buffer;
-    buf.len = sizeof(cmd_t);
-
-    iob->wreq.data = ctx;
+    crypto.init(&ctx->ectx, crypto_key, (u8_t*) iob->buffer);
+    crypto.encrypt(&ctx->ectx, (u8_t*) cmd, sizeof(cmd_t));
 
     uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_server,
         &buf, 1, on_server_write);
@@ -439,6 +470,10 @@ int main(int argc, char** argv)
 {
     const char* server_str = "127.0.0.1";
     const char* devid_str = NULL;
+    const char* passwd = NULL;
+    const char* passwdx = NULL;
+    int method = CRYPTO_CHACHA20;
+    int methodx = CRYPTO_CHACHA20;
     int verbose = 0;
     int i;
 
@@ -447,6 +482,14 @@ int main(int argc, char** argv)
             if (++i < argc) server_str = argv[i];
         } else if (!strcmp(argv[i], "-d")) {
             if (++i < argc) devid_str = argv[i];
+        } else if (!strcmp(argv[i], "-m")) {
+            if (++i < argc) method = atoi(argv[i]);
+        } else if (!strcmp(argv[i], "-M")) {
+            if (++i < argc) methodx = atoi(argv[i]);
+        } else if (!strcmp(argv[i], "-k")) {
+            if (++i < argc) passwd = argv[i];
+        } else if (!strcmp(argv[i], "-K")) {
+            if (++i < argc) passwdx = argv[i];
         } else if (!strcmp(argv[i], "-v")) {
             verbose = 1;
         } else {
@@ -458,6 +501,8 @@ int main(int argc, char** argv)
 
     loop = uv_default_loop();
 
+    seed_rand((u32_t) time(NULL));
+
     xlog_init(NULL);
     xlog_ctrl(verbose ? XLOG_DEBUG : XLOG_INFO, 0, 0);
 
@@ -467,6 +512,28 @@ int main(int argc, char** argv)
         // TODO, get MAC?
     } else if (str_to_devid(device_id, devid_str) != 0) {
         xlog_error("invalid device id string [%s].", devid_str);
+        goto end;
+    }
+
+    if (passwd) {
+        derive_key(crypto_key, passwd);
+    } else {
+        xlog_info("password not set, disable crypto with server.");
+        method = CRYPTO_NONE;
+    }
+    if (passwdx) {
+        derive_key(cryptox_key, passwdx);
+    } else {
+        xlog_info("PASSWORD (-K) not set, disable crypto with proxy client.");
+        methodx = CRYPTO_NONE;
+    }
+
+    if (crypto_init(&crypto, method) != 0) {
+        xlog_error("invalid crypto method: %d.", method);
+        goto end;
+    }
+    if (crypto_init(&cryptox, methodx) != 0) {
+        xlog_error("invalid crypto METHOD: %d.", methodx);
         goto end;
     }
 
