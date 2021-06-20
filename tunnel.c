@@ -7,6 +7,10 @@
 #include <string.h>
 #include <time.h>
 #include <uv.h>
+#ifndef _WIN32
+#include <unistd.h> /* for daemon() */
+#include <signal.h> /* for signal() */
+#endif
 #ifdef __linux__
 #include <linux/netfilter_ipv4.h>
 #endif
@@ -218,13 +222,16 @@ static void on_tclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
 static void send_connect_cmd(tserver_ctx_t* ctx)
 {
     io_buf_t* iob = xlist_alloc_back(&io_buffers);
-    cmd_t* cmd = (cmd_t*) (iob->buffer + MAX_NONCE_LEN);
-    uv_buf_t buf;
-    u8_t iv[16];
+    u8_t* pbuf = (u8_t*) iob->buffer;
+    cmd_t* cmd;
+    uv_buf_t wbuf;
+    u8_t dnonce[16];
 
     if (is_valid_devid(device_id)) {
         /* generate and prepend iv in the first packet */
-        rand_bytes((u8_t*) cmd - MAX_NONCE_LEN, MAX_NONCE_LEN);
+        rand_bytes(pbuf, MAX_NONCE_LEN);
+
+        cmd = (cmd_t*) (pbuf + MAX_NONCE_LEN);
 
         cmd->tag = CMD_TAG;
         cmd->major = VERSION_MAJOR;
@@ -233,16 +240,16 @@ static void send_connect_cmd(tserver_ctx_t* ctx)
 
         memcpy(cmd->d.devid, device_id, DEVICE_ID_SIZE);
 
-        crypto.init(&ctx->ectx, crypto_key, (u8_t*) cmd - MAX_NONCE_LEN);
+        crypto.init(&ctx->ectx, crypto_key, pbuf);
         crypto.encrypt(&ctx->ectx, (u8_t*) cmd, sizeof(cmd_t));
 
-        cmd = (cmd_t*) ((u8_t*) cmd + sizeof(cmd_t) + MAX_NONCE_LEN);
+        pbuf += MAX_NONCE_LEN + sizeof(cmd_t);
     }
 
     /* generate and prepend iv in the first packet */
-    rand_bytes((u8_t*) cmd - MAX_NONCE_LEN, MAX_NONCE_LEN);
-    memcpy(iv, (u8_t*) cmd - MAX_NONCE_LEN, 16);
-    convert_nonce(iv);
+    rand_bytes(pbuf, MAX_NONCE_LEN);
+
+    cmd = (cmd_t*) (pbuf + MAX_NONCE_LEN);
 
     cmd->tag = CMD_TAG;
     cmd->major = VERSION_MAJOR;
@@ -261,17 +268,20 @@ static void send_connect_cmd(tserver_ctx_t* ctx)
     }
 #endif
 
-    cryptox.init(&ctx->ectx, cryptox_key, (u8_t*) cmd - MAX_NONCE_LEN);
-    cryptox.init(&ctx->dctx, cryptox_key, iv);
+    memcpy(dnonce, pbuf, MAX_NONCE_LEN);
+    convert_nonce(dnonce);
+
+    cryptox.init(&ctx->ectx, cryptox_key, pbuf);
+    cryptox.init(&ctx->dctx, cryptox_key, dnonce);
     cryptox.encrypt(&ctx->ectx, (u8_t*) cmd, sizeof(cmd_t));
 
-    buf.base = iob->buffer;
-    buf.len = (char*) (cmd + 1) - iob->buffer;
+    wbuf.base = iob->buffer;
+    wbuf.len = pbuf + MAX_NONCE_LEN + sizeof(cmd_t) - (u8_t*) iob->buffer;
 
     iob->wreq.data = ctx;
 
     uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_xserver,
-        &buf, 1, on_xserver_write);
+        &wbuf, 1, on_xserver_write);
 }
 
 static void on_xserver_connected(uv_connect_t* req, int status)
@@ -341,14 +351,14 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
 
     uv_tcp_init(loop, &ctx->io_tclient);
 
+    ctx->io_tclient.data = ctx;
+    ctx->io_xserver.data = ctx;
+    ctx->ref_count = 1;
+    ctx->tclient_blocked = 0;
+    ctx->xserver_blocked = 0;
+
     if (uv_accept(stream, (uv_stream_t*) &ctx->io_tclient) == 0) {
         xlog_debug("a tunnel client connected.");
-
-        ctx->io_tclient.data = ctx;
-        ctx->io_xserver.data = ctx;
-        ctx->ref_count = 1;
-        ctx->tclient_blocked = 0;
-        ctx->xserver_blocked = 0;
 
 #ifdef __linux__
         if (!tunnel_addr.sin_family) {
@@ -385,6 +395,7 @@ int main(int argc, char** argv)
     const char* tserver_str = "127.0.0.1";
     const char* tunnel_str = NULL;
     const char* devid_str = NULL;
+    const char* logfile = NULL;
     const char* passwd = NULL;
     const char* passwdx = NULL;
     int method = CRYPTO_CHACHA20;
@@ -409,6 +420,8 @@ int main(int argc, char** argv)
             if (++i < argc) passwd = argv[i];
         } else if (!strcmp(argv[i], "-K")) {
             if (++i < argc) passwdx = argv[i];
+        } else if (!strcmp(argv[i], "-L")) {
+            if (++i < argc) logfile = argv[i];
         } else if (!strcmp(argv[i], "-v")) {
             verbose = 1;
         } else {
@@ -418,11 +431,18 @@ int main(int argc, char** argv)
         }
     }
 
+#ifndef _WIN32
+    if (logfile) daemon(1, 0);
+    signal(SIGPIPE, SIG_IGN);
+#endif
+
     loop = uv_default_loop();
 
     seed_rand((u32_t) time(NULL));
 
-    xlog_init(NULL);
+    if (xlog_init(logfile) != 0) {
+        fprintf(stderr, "open logfile failed.\n");
+    }
     xlog_ctrl(verbose ? XLOG_DEBUG : XLOG_INFO, 0, 0);
 
     uv_tcp_init(loop, &io_tserver);
@@ -482,6 +502,9 @@ int main(int argc, char** argv)
     } else if (parse_ip4_str(tunnel_str, -1, &tunnel_addr) != 0) {
         xlog_error("invalid tunnel address [%s].", tunnel_str);
         goto end;
+    } else {
+        xlog_info("tunnel to [%s:%d].",
+            inet_ntoa(tunnel_addr.sin_addr), ntohs(tunnel_addr.sin_port));
     }
 
     uv_tcp_bind(&io_tserver, (struct sockaddr*) &taddr, 0);

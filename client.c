@@ -7,6 +7,10 @@
 #include <string.h>
 #include <time.h>
 #include <uv.h>
+#ifndef _WIN32
+#include <unistd.h> /* for daemon() */
+#include <signal.h> /* for signal() */
+#endif
 
 #include "common.h"
 #include "xlog.h"
@@ -184,16 +188,16 @@ static void on_remote_connected(uv_connect_t* req, int status)
         if (ctx->pending_iob) {
             /* write 'ctx->pending_iob' to remote. */
             io_buf_t* iob = ctx->pending_iob;
-            uv_buf_t buf;
+            uv_buf_t wbuf;
 
-            buf.base = iob->buffer + iob->idx;
-            buf.len = iob->len;
+            wbuf.base = iob->buffer + iob->idx;
+            wbuf.len = iob->len;
 
             iob->wreq.data = ctx;
             ctx->pending_iob = NULL;
 
             uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_remote,
-                &buf, 1, on_remote_write);
+                &wbuf, 1, on_remote_write);
         }
 
         uv_read_start((uv_stream_t*) &ctx->io_remote,
@@ -356,7 +360,7 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
         } else if (ctx->stage == STAGE_COMMAND) {
             /* delay connect */
             uv_timer_start(&reconnect_timer, new_server_connection,
-                RECONNECT_INTERVAL, RECONNECT_INTERVAL);
+                RECONNECT_INTERVAL, 0);
         } else { /* STAGE_CONNECT */
             /* should not reach here */
             xlog_error("unexpected state happen when disconnect.");
@@ -377,12 +381,12 @@ static void report_device_id(client_ctx_t* ctx)
 {
     io_buf_t* iob = xlist_alloc_back(&io_buffers);
     cmd_t* cmd = (cmd_t*) (iob->buffer + MAX_NONCE_LEN);
-    uv_buf_t buf;
+    uv_buf_t wbuf;
 
     iob->wreq.data = ctx;
 
-    buf.base = iob->buffer;
-    buf.len = sizeof(cmd_t) + MAX_NONCE_LEN;
+    wbuf.base = iob->buffer;
+    wbuf.len = sizeof(cmd_t) + MAX_NONCE_LEN;
 
     /* generate and prepend iv in the first packet */
     rand_bytes((u8_t*) iob->buffer, MAX_NONCE_LEN);
@@ -398,27 +402,36 @@ static void report_device_id(client_ctx_t* ctx)
     crypto.encrypt(&ctx->ectx, (u8_t*) cmd, sizeof(cmd_t));
 
     uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_server,
-        &buf, 1, on_server_write);
+        &wbuf, 1, on_server_write);
 }
 
 static void on_server_connected(uv_connect_t* req, int status)
 {
+    static int retry_displayed;
+
     client_ctx_t* ctx = req->data;
 
     if (status < 0) {
         uv_close((uv_handle_t*) &ctx->io_server, on_io_closed);
 
-        xlog_error("connect server failed: %s, retry after %d seconds.",
-            uv_err_name(status), RECONNECT_INTERVAL / 1000);
-
-        if (!reconnect_timer.data) {
-            xlog_debug("start reconnect timer.");
-            uv_timer_start(&reconnect_timer, new_server_connection,
-                RECONNECT_INTERVAL, RECONNECT_INTERVAL);
+        if (!retry_displayed) {
+            xlog_error("connect server failed: %s, retry every %d seconds.",
+                uv_err_name(status), RECONNECT_INTERVAL / 1000);
+            retry_displayed = 1;
         }
 
+        /* reconnect after RECONNECT_INTERVAL/1000 second. */
+        uv_timer_start(&reconnect_timer, new_server_connection,
+            RECONNECT_INTERVAL, 0);
+
     } else {
-        xlog_info("server connected.");
+
+        if (!retry_displayed) {
+            xlog_debug("server connected.");
+        } else {
+            xlog_info("server connected.");
+            retry_displayed = 0;
+        }
 
         uv_timer_stop(&reconnect_timer);
         uv_read_start((uv_stream_t*) &ctx->io_server,
@@ -452,8 +465,6 @@ static void new_server_connection(uv_timer_t* timer)
 
     req->data = ctx;
 
-    reconnect_timer.data = timer; /* mark timer is started or not */
-
     xlog_debug("connecting server [%s:%d]...",
         inet_ntoa(server_addr.sin_addr), ntohs(server_addr.sin_port));
 
@@ -463,6 +474,9 @@ static void new_server_connection(uv_timer_t* timer)
 
         uv_close((uv_handle_t*) &ctx->io_server, on_io_closed);
         xlist_erase(&conn_reqs, xlist_value_iter(req));
+        /* reconnect after RECONNECT_INTERVAL/1000 second. */
+        uv_timer_start(&reconnect_timer, new_server_connection,
+            RECONNECT_INTERVAL, 0);
     }
 }
 
@@ -470,6 +484,7 @@ int main(int argc, char** argv)
 {
     const char* server_str = "127.0.0.1";
     const char* devid_str = NULL;
+    const char* logfile = NULL;
     const char* passwd = NULL;
     const char* passwdx = NULL;
     int method = CRYPTO_CHACHA20;
@@ -490,6 +505,8 @@ int main(int argc, char** argv)
             if (++i < argc) passwd = argv[i];
         } else if (!strcmp(argv[i], "-K")) {
             if (++i < argc) passwdx = argv[i];
+        } else if (!strcmp(argv[i], "-L")) {
+            if (++i < argc) logfile = argv[i];
         } else if (!strcmp(argv[i], "-v")) {
             verbose = 1;
         } else {
@@ -499,11 +516,18 @@ int main(int argc, char** argv)
         }
     }
 
+#ifndef _WIN32
+    if (logfile) daemon(1, 0);
+    signal(SIGPIPE, SIG_IGN);
+#endif
+
     loop = uv_default_loop();
 
     seed_rand((u32_t) time(NULL));
 
-    xlog_init(NULL);
+    if (xlog_init(logfile) != 0) {
+        fprintf(stderr, "open logfile failed.\n");
+    }
     xlog_ctrl(verbose ? XLOG_DEBUG : XLOG_INFO, 0, 0);
 
     if (!devid_str) {

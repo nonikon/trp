@@ -6,9 +6,10 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#include <uv.h>
 
 #include "http_parser.h"
-#include "http_server.h"
+#include "common.h"
 #include "xlog.h"
 #include "xlist.h"
 
@@ -61,7 +62,6 @@ static xlist_t responses; /* http_resp_t */
 static void on_write(uv_write_t* req, int status)
 {
     xlist_erase(&responses, xlist_value_iter(req->data));
-    // TODO, timer_again when write many packets (ex. download file);
 }
 
 static void buf_add_printf(char* buf, unsigned* len, const char* fmt, ...)
@@ -279,9 +279,11 @@ static void on_read(uv_stream_t* client, ssize_t nread, const uv_buf_t* buf)
                 }  */else {
                     send_error_page(req, 404, "Not Found");
                 }
+                /* close connection when "Connection: Close"? TODO. */
+                /* uv_timer_stop() and uv_read_stop() when download file, TODO */
 
                 http_parser_pause(&req->parser, 0);
-                /* ignore the following datas. */
+                /* ignore the following data. */
                 req->buf_len = 0;
 
             } else if (HTTP_PARSER_ERRNO(&req->parser) != HPE_OK) {
@@ -290,11 +292,9 @@ static void on_read(uv_stream_t* client, ssize_t nread, const uv_buf_t* buf)
                 http_parser_init(&req->parser, HTTP_REQUEST);
                 req->buf_len = 0;
             }
-
 #if HTTP_SERVER_TIMEOUT > 0
             uv_timer_again(&req->timer);
 #endif
-
         } else {
             send_error_page(req, 413, "Payload Too Large");
             /* reset parser state. */
@@ -311,6 +311,7 @@ static void on_read(uv_stream_t* client, ssize_t nread, const uv_buf_t* buf)
     /* do nothing when nread == 0. */
 }
 
+#if HTTP_SERVER_TIMEOUT > 0
 static void on_timeout(uv_timer_t* timer)
 {
     http_req_t* req = timer->data;
@@ -318,6 +319,7 @@ static void on_timeout(uv_timer_t* timer)
     xlog_debug("request timeout, close.");
     uv_close((uv_handle_t*) &req->io, on_closed);
 }
+#endif
 
 static void on_connect(uv_stream_t* server, int status)
 {
@@ -334,20 +336,19 @@ static void on_connect(uv_stream_t* server, int status)
 #if HTTP_SERVER_TIMEOUT > 0
     uv_timer_init(server->data, &req->timer);
 #endif
+    http_parser_init(&req->parser, HTTP_REQUEST);
+#if HTTP_SERVER_SAVE_HDR
+    xlist_init(&req->headers, sizeof(http_hdr_t), NULL);
+#endif
+    req->io.data = req;
+#if HTTP_SERVER_TIMEOUT > 0
+    req->timer.data = req;
+#endif
+    req->parser.data = req;
+    req->buf_len = 0;
 
     if (uv_accept(server, (uv_stream_t*) &req->io) == 0) {
         xlog_debug("an http client connected.");
-
-        http_parser_init(&req->parser, HTTP_REQUEST);
-#if HTTP_SERVER_SAVE_HDR
-        xlist_init(&req->headers, sizeof(http_hdr_t), NULL);
-#endif
-        req->io.data = req;
-#if HTTP_SERVER_TIMEOUT > 0
-        req->timer.data = req;
-#endif
-        req->parser.data = req;
-        req->buf_len = 0;
 
         uv_read_start((uv_stream_t*) &req->io, on_read_alloc, on_read);
 #if HTTP_SERVER_TIMEOUT > 0
@@ -355,19 +356,19 @@ static void on_connect(uv_stream_t* server, int status)
             HTTP_SERVER_TIMEOUT, HTTP_SERVER_TIMEOUT);
 #endif
     } else {
-        xlog_warn("uv_accept http failed.");
+        xlog_warn("uv_accept failed.");
 
         uv_close((uv_handle_t*) &req->io, on_closed);
     }
 }
 
-int http_server_start(uv_loop_t* loop, const char* ip, int port)
+int http_server_start(uv_loop_t* loop, const char* str)
 {
     struct sockaddr_in addr;
     int error;
 
-    if (uv_ip4_addr(ip, port, &addr) != 0) {
-        xlog_error("invalid http server ip/port.");
+    if (parse_ip4_str(str, DEF_CONTROL_PORT, &addr) != 0) {
+        xlog_error("invalid control server address [%s].", str);
         return -1;
     }
 
@@ -378,8 +379,8 @@ int http_server_start(uv_loop_t* loop, const char* ip, int port)
 
     error = uv_listen((uv_stream_t*) &io_server, 1024, on_connect);
     if (error) {
-        xlog_error("uv_listen [%s:%d] failed: %s.",
-            ip, port, uv_strerror(error));
+        xlog_error("uv_listen [%s] failed: %s.",
+            str, uv_strerror(error));
         uv_close((uv_handle_t*) &io_server, NULL);
         return -1;
     }
@@ -387,14 +388,7 @@ int http_server_start(uv_loop_t* loop, const char* ip, int port)
     xlist_init(&requests, sizeof(http_req_t), NULL);
     xlist_init(&responses, sizeof(http_resp_t), NULL);
 
-    xlog_info("http listen at [%s:%d].", ip, port);
-    return 0;
-}
-
-int http_server_stop()
-{
-    uv_close((uv_handle_t*) &io_server, NULL);
-    xlist_destroy(&requests); // TODO, traverse and uv_close()
-    xlist_destroy(&responses);
+    xlog_info("control server (http) listen at [%s:%d].",
+        inet_ntoa(addr.sin_addr), ntohs(addr.sin_port));
     return 0;
 }

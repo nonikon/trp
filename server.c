@@ -7,12 +7,15 @@
 #include <string.h>
 #include <time.h>
 #include <uv.h>
+#ifndef _WIN32
+#include <unistd.h> /* for daemon() */
+#include <signal.h> /* for signal() */
+#endif
 
 #include "common.h"
 #include "xlog.h"
 #include "xlist.h"
 #include "xhash.h"
-#include "http_server.h"
 #include "crypto.h"
 
 #define CLIENT_CONNECT_DELAY    (2 * 1000) /* ms */
@@ -104,6 +107,9 @@ static void on_peer_closed(uv_handle_t* handle)
             xlist_size(&peers), xlist_size(&io_buffers));
     } else {
         xlist_erase(&peer->pending_ctx->clients, xlist_value_iter(peer));
+
+        xlog_debug("current %zd pending clients with this devid, %zd iobufs.",
+            xlist_size(&peer->pending_ctx->clients), xlist_size(&io_buffers));
     }
 }
 
@@ -204,7 +210,7 @@ static void on_client_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
 
                         ctx = xlist_front(&pdctx->xclients);
                         ctx->pending_ctx = NULL;
-                        /* move proxy client node from 'dctx->xclients' to 'xserver_ctxs' */
+                        /* move proxy client node from 'pdctx->xclients' to 'xserver_ctxs' */
                         xlist_paste_back(&xserver_ctxs, xlist_cut(
                             &pdctx->xclients, xlist_value_iter(ctx)));
 
@@ -256,11 +262,11 @@ static void on_client_connect(uv_stream_t* stream, int status)
 
     uv_tcp_init(loop, &client->io);
 
+    client->io.data = NULL;
+    client->pending_ctx = NULL;
+
     if (uv_accept(stream, (uv_stream_t*) &client->io) == 0) {
         xlog_debug("a client connected.");
-
-        client->io.data = NULL;
-        client->pending_ctx = NULL;
 
         uv_read_start((uv_stream_t*) &client->io,
             on_iobuf_alloc, on_client_read);
@@ -337,21 +343,21 @@ static void on_remote_connected(uv_connect_t* req, int status)
 
         xlog_debug("remote connected.");
 
-        convert_nonce(iob->buffer);
+        convert_nonce((u8_t*) iob->buffer);
         crypto.init(&ctx->peer->edctx, crypto_key, (u8_t*) iob->buffer);
 
         if (iob->len > 0) {
-            uv_buf_t buf;
+            uv_buf_t wbuf;
 
-            buf.base = iob->buffer + iob->idx;
-            buf.len = iob->len;
+            wbuf.base = iob->buffer + iob->idx;
+            wbuf.len = iob->len;
 
             iob->wreq.data = ctx;
 
-            crypto.decrypt(&ctx->dctx, (u8_t*) buf.base, buf.len);
+            crypto.decrypt(&ctx->dctx, (u8_t*) wbuf.base, wbuf.len);
             /* write 'iob' to remote, 'iob' free later. */
             uv_write(&iob->wreq, (uv_stream_t*) &ctx->peer->io,
-                &buf, 1, on_peer_write);
+                &wbuf, 1, on_peer_write);
         } else {
             /* free this 'iob' now. */
             xlist_erase(&io_buffers, xlist_value_iter(iob));
@@ -414,15 +420,15 @@ static void connect_client(xserver_ctx_t* ctx, peer_t* client)
     ctx->stage = STAGE_FORWARD;
 
     if (iob->len > 0) {
-        uv_buf_t buf;
+        uv_buf_t wbuf;
 
-        buf.base = iob->buffer + iob->idx;
-        buf.len = iob->len;
+        wbuf.base = iob->buffer + iob->idx;
+        wbuf.len = iob->len;
 
         iob->wreq.data = ctx;
         /* write this 'iob' to client, 'iob' free later. */
         uv_write(&iob->wreq, (uv_stream_t*) &client->io,
-            &buf, 1, on_peer_write);
+            &wbuf, 1, on_peer_write);
     } else {
         /* free this 'iob' now. */
         xlist_erase(&io_buffers, xlist_value_iter(iob));
@@ -547,7 +553,7 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
                     }
 
                 } else if (cmd->cmd == CMD_CONNECT_CLIENT) {
-                    /* find an online client and send CONNECT cmd. */
+                    /* find an online client. */
                     pending_ctx_t* pdctx = xhash_get_data(&pending_ctxs, cmd->d.devid);
 
                     xlog_debug("got CONNECT_CLIENT cmd (%s) from proxy client, process.",
@@ -640,17 +646,17 @@ static void on_xclient_connect(uv_stream_t* stream, int status)
 
     uv_tcp_init(loop, &ctx->io_xclient);
 
+    ctx->io_xclient.data = ctx;
+    ctx->peer = NULL;
+    ctx->pending_ctx = NULL;
+    ctx->pending_iob = NULL;
+    ctx->peer_is_client = 0;
+    ctx->xclient_blocked = 0;
+    ctx->peer_blocked = 0;
+    ctx->stage = STAGE_COMMAND;
+
     if (uv_accept(stream, (uv_stream_t*) &ctx->io_xclient) == 0) {
         xlog_debug("a proxy client connected.");
-
-        ctx->io_xclient.data = ctx;
-        ctx->peer = NULL;
-        ctx->pending_ctx = NULL;
-        ctx->pending_iob = NULL;
-        ctx->peer_is_client = 0;
-        ctx->xclient_blocked = 0;
-        ctx->peer_blocked = 0;
-        ctx->stage = STAGE_COMMAND;
 
         uv_read_start((uv_stream_t*) &ctx->io_xclient,
             on_iobuf_alloc, on_xclient_read);
@@ -683,6 +689,7 @@ int main(int argc, char** argv)
     struct sockaddr_in xaddr;
     const char* server_str = "127.0.0.1";
     const char* xserver_str = "127.0.0.1";
+    const char* logfile = NULL;
     const char* passwd = NULL;
     int method = CRYPTO_CHACHA20;
     int verbose = 0;
@@ -697,6 +704,8 @@ int main(int argc, char** argv)
             if (++i < argc) method = atoi(argv[i]);
         } else if (!strcmp(argv[i], "-k")) {
             if (++i < argc) passwd = argv[i];
+        } else if (!strcmp(argv[i], "-L")) {
+            if (++i < argc) logfile = argv[i];
         } else if (!strcmp(argv[i], "-v")) {
             verbose = 1;
         } else {
@@ -706,11 +715,18 @@ int main(int argc, char** argv)
         }
     }
 
+#ifndef _WIN32
+    if (logfile) daemon(1, 0);
+    signal(SIGPIPE, SIG_IGN);
+#endif
+
     loop = uv_default_loop();
 
     seed_rand((u32_t) time(NULL));
 
-    xlog_init(NULL);
+    if (xlog_init(logfile) != 0) {
+        fprintf(stderr, "open logfile failed.\n");
+    }
     xlog_ctrl(verbose ? XLOG_DEBUG : XLOG_INFO, 0, 0);
 
     uv_tcp_init(loop, &io_server);
@@ -756,7 +772,7 @@ int main(int argc, char** argv)
         goto end;
     }
 
-    // http_server_start(loop, "0.0.0.0", 8888); // TODO
+    // http_server_start(loop, "127.0.0.1"); // TODO
 
     xhash_init(&pending_ctxs, -1, sizeof(pending_ctx_t),
         _pending_ctx_hash, _pending_ctx_equal, NULL);

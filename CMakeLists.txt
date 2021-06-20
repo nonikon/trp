@@ -62,6 +62,8 @@ if(MSVC)
         _WINSOCK_DEPRECATED_NO_WARNINGS
         _CRT_SECURE_NO_WARNINGS
     )
+else()
+    add_compile_options(-Wall)
 endif()
 
 if(LIBUV_EMBEDDED)
