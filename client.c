@@ -250,7 +250,7 @@ static void on_server_write(uv_write_t* req, int status)
         xlog_debug("server write queue cleared.");
 
         /* server write queue cleared, start reading from remote. */
-        uv_read_start((uv_stream_t*) &ctx->io_server,
+        uv_read_start((uv_stream_t*) &ctx->io_remote,
             on_iobuf_alloc, on_remote_read);
         ctx->remote_blocked = 0;
     }
@@ -359,8 +359,10 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
             uv_close((uv_handle_t*) &ctx->io_remote, on_io_closed);
         } else if (ctx->stage == STAGE_COMMAND) {
             /* delay connect */
-            uv_timer_start(&reconnect_timer, new_server_connection,
-                RECONNECT_INTERVAL, 0);
+            if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
+                uv_timer_start(&reconnect_timer, new_server_connection,
+                    RECONNECT_INTERVAL, 0);
+            }
         } else { /* STAGE_CONNECT */
             /* should not reach here */
             xlog_error("unexpected state happen when disconnect.");
@@ -421,8 +423,10 @@ static void on_server_connected(uv_connect_t* req, int status)
         }
 
         /* reconnect after RECONNECT_INTERVAL/1000 second. */
-        uv_timer_start(&reconnect_timer, new_server_connection,
-            RECONNECT_INTERVAL, 0);
+        if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
+            uv_timer_start(&reconnect_timer, new_server_connection,
+                RECONNECT_INTERVAL, 0);
+        }
 
     } else {
 
@@ -433,7 +437,6 @@ static void on_server_connected(uv_connect_t* req, int status)
             retry_displayed = 0;
         }
 
-        uv_timer_stop(&reconnect_timer);
         uv_read_start((uv_stream_t*) &ctx->io_server,
             on_iobuf_alloc, on_server_read);
         /* enable tcp-keepalive. */
@@ -474,9 +477,16 @@ static void new_server_connection(uv_timer_t* timer)
 
         uv_close((uv_handle_t*) &ctx->io_server, on_io_closed);
         xlist_erase(&conn_reqs, xlist_value_iter(req));
-        /* reconnect after RECONNECT_INTERVAL/1000 second. */
-        uv_timer_start(&reconnect_timer, new_server_connection,
-            RECONNECT_INTERVAL, 0);
+
+        /* reconnect after RECONNECT_INTERVAL/1000 second.
+         * 'reconnect_timer' is inactive when 'new_server_connection'
+         * is invoked by 'reconnect_timer'. so,
+         * 'uv_timer_start' will not be called twice anyway.
+         */
+        if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
+            uv_timer_start(&reconnect_timer, new_server_connection,
+                RECONNECT_INTERVAL, 0);
+        }
     }
 }
 
