@@ -681,6 +681,30 @@ static int _pending_ctx_equal(void* l, void* r)
                    ((pending_ctx_t*) r)->devid, DEVICE_ID_SIZE);
 }
 
+static void usage(const char* s)
+{
+    fprintf(stderr, "trp v%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, s);
+    fprintf(stderr, "options:\n");
+    fprintf(stderr, "  -s <ip:port>  "
+        "server listen at. (default: 127.0.0.1:%d)\n", DEF_SERVER_PORT);
+    fprintf(stderr, "  -x <ip:port>  "
+        "proxy server listen at. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
+    fprintf(stderr, "  -m <method>   "
+        "crypto method, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
+    fprintf(stderr, "  -k <password> "
+        "crypto password. (default: none)\n");
+#ifdef _WIN32
+    fprintf(stderr, "  -L <path>     "
+        "write output to file. (default: write to STDOUT)\n");
+#else
+    fprintf(stderr, "  -L <path>     "
+        "write output to file and run as daemon. (default: write to STDOUT)\n");
+#endif
+    fprintf(stderr, "  -v            output verbosely.\n");
+    fprintf(stderr, "  -h            print this help message.\n");
+    fprintf(stderr, "\n");
+}
+
 int main(int argc, char** argv)
 {
     uv_tcp_t io_server;  /* server listen io */
@@ -696,23 +720,35 @@ int main(int argc, char** argv)
     int error, i;
 
     for (i = 1; i < argc; ++i) {
-        if (!strcmp(argv[i], "-s")) {
-            if (++i < argc) server_str = argv[i];
-        } else if (!strcmp(argv[i], "-x")) {
-            if (++i < argc) xserver_str = argv[i];
-        } else if (!strcmp(argv[i], "-m")) {
-            if (++i < argc) method = atoi(argv[i]);
-        } else if (!strcmp(argv[i], "-k")) {
-            if (++i < argc) passwd = argv[i];
-        } else if (!strcmp(argv[i], "-L")) {
-            if (++i < argc) logfile = argv[i];
-        } else if (!strcmp(argv[i], "-v")) {
-            verbose = 1;
-        } else {
-            // usage, TODO
-            fprintf(stderr, "wrong args.\n");
+        char opt;
+        char* arg;
+
+        if (argv[i][0] != '-' || argv[i][1] == '\0') {
+            fprintf(stderr, "wrong args [%s].\n", argv[i]);
             return 1;
         }
+
+        opt = argv[i][1];
+
+        switch (opt) {
+        case 'v': verbose = 1; continue;
+        case 'h':
+            usage(argv[0]);
+            return 1;
+        }
+
+        arg = argv[i][2] ? argv[i] + 2 : (++i < argc ? argv[i] : NULL);
+
+        if (arg) switch (opt) {
+        case 's': server_str  = arg; continue;
+        case 'x': xserver_str = arg; continue;
+        case 'm':      method = atoi(arg); continue;
+        case 'k':      passwd = arg; continue;
+        case 'L':     logfile = arg; continue;
+        }
+
+        fprintf(stderr, "invalid option [-%c].\n", opt);
+        return 1;
     }
 
 #ifndef _WIN32
@@ -727,10 +763,11 @@ int main(int argc, char** argv)
     if (xlog_init(logfile) != 0) {
         fprintf(stderr, "open logfile failed.\n");
     }
-    xlog_ctrl(verbose ? XLOG_DEBUG : XLOG_INFO, 0, 0);
-
-    uv_tcp_init(loop, &io_server);
-    uv_tcp_init(loop, &io_xserver);
+    if (!verbose) {
+        xlog_ctrl(XLOG_INFO, 0, 0);
+    } else {
+        xlog_info("enable verbose output.");
+    }
 
     if (passwd) {
         derive_key(crypto_key, passwd);
@@ -753,13 +790,16 @@ int main(int argc, char** argv)
         goto end;
     }
 
+    uv_tcp_init(loop, &io_server);
+    uv_tcp_init(loop, &io_xserver);
     uv_tcp_bind(&io_server, (struct sockaddr*) &addr, 0);
     uv_tcp_bind(&io_xserver, (struct sockaddr*) &xaddr, 0);
 
     error = uv_listen((uv_stream_t*) &io_server,
                 LISTEN_BACKLOG, on_client_connect);
     if (error) {
-        xlog_error("uv_listen [%s] failed: %s.", server_str,
+        xlog_error("uv_listen [%s:%d] failed: %s.",
+            inet_ntoa(addr.sin_addr), ntohs(addr.sin_port),
             uv_strerror(error));
         goto end;
     }
@@ -767,7 +807,8 @@ int main(int argc, char** argv)
     error = uv_listen((uv_stream_t*) &io_xserver,
                 LISTEN_BACKLOG, on_xclient_connect);
     if (error) {
-        xlog_error("uv_listen [%s] failed: %s.", xserver_str,
+        xlog_error("uv_listen [%s:%d] failed: %s.",
+            inet_ntoa(xaddr.sin_addr), ntohs(xaddr.sin_port),
             uv_strerror(error));
         goto end;
     }
@@ -794,8 +835,6 @@ int main(int argc, char** argv)
     xhash_destroy(&pending_ctxs);
 end:
     xlog_info("end of loop.");
-    uv_close((uv_handle_t*) &io_server, NULL);
-    uv_close((uv_handle_t*) &io_xserver, NULL);
     xlog_exit();
 
     return 0;

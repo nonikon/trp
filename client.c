@@ -19,6 +19,7 @@
 
 #define RECONNECT_INTERVAL  (10 * 1000) /* ms */
 #define KEEPIDLE_TIME       (40) /* s */
+#define DEFAULT_DEVID       "\x11\x22\x33\x44\x55\x66\x77\x88"
 
 enum {
     STAGE_INIT,    /* server connecting */
@@ -490,6 +491,34 @@ static void new_server_connection(uv_timer_t* timer)
     }
 }
 
+static void usage(const char* s)
+{
+    fprintf(stderr, "trp v%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, s);
+    fprintf(stderr, "options:\n");
+    fprintf(stderr, "  -s <ip:port>  "
+        "server connect to. (default: 127.0.0.1:%d)\n", DEF_SERVER_PORT);
+    fprintf(stderr, "  -d <devid>    "
+        "device id of this client. (default: %s)\n", devid_to_str((u8_t*) DEFAULT_DEVID));
+    fprintf(stderr, "  -m <method>   "
+        "crypto method with server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
+    fprintf(stderr, "  -M <METHOD>   "
+        "crypto method with proxy client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
+    fprintf(stderr, "  -k <password> "
+        "crypto password with server. (default: none)\n");
+    fprintf(stderr, "  -K <PASSWORD> "
+        "crypto password with proxy client. (default: none)\n");
+#ifdef _WIN32
+    fprintf(stderr, "  -L <path>     "
+        "write output to file. (default: write to STDOUT)\n");
+#else
+    fprintf(stderr, "  -L <path>     "
+        "write output to file and run as daemon. (default: write to STDOUT)\n");
+#endif
+    fprintf(stderr, "  -v            output verbosely.\n");
+    fprintf(stderr, "  -h            print this help message.\n");
+    fprintf(stderr, "\n");
+}
+
 int main(int argc, char** argv)
 {
     const char* server_str = "127.0.0.1";
@@ -503,27 +532,37 @@ int main(int argc, char** argv)
     int i;
 
     for (i = 1; i < argc; ++i) {
-        if (!strcmp(argv[i], "-s")) {
-            if (++i < argc) server_str = argv[i];
-        } else if (!strcmp(argv[i], "-d")) {
-            if (++i < argc) devid_str = argv[i];
-        } else if (!strcmp(argv[i], "-m")) {
-            if (++i < argc) method = atoi(argv[i]);
-        } else if (!strcmp(argv[i], "-M")) {
-            if (++i < argc) methodx = atoi(argv[i]);
-        } else if (!strcmp(argv[i], "-k")) {
-            if (++i < argc) passwd = argv[i];
-        } else if (!strcmp(argv[i], "-K")) {
-            if (++i < argc) passwdx = argv[i];
-        } else if (!strcmp(argv[i], "-L")) {
-            if (++i < argc) logfile = argv[i];
-        } else if (!strcmp(argv[i], "-v")) {
-            verbose = 1;
-        } else {
-            // usage, TODO
-            fprintf(stderr, "wrong args.\n");
+        char opt;
+        char* arg;
+
+        if (argv[i][0] != '-' || argv[i][1] == '\0') {
+            fprintf(stderr, "wrong args [%s].\n", argv[i]);
             return 1;
         }
+
+        opt = argv[i][1];
+
+        switch (opt) {
+        case 'v': verbose = 1; continue;
+        case 'h':
+            usage(argv[0]);
+            return 1;
+        }
+
+        arg = argv[i][2] ? argv[i] + 2 : (++i < argc ? argv[i] : NULL);
+
+        if (arg) switch (opt) {
+        case 's': server_str = arg; continue;
+        case 'd':  devid_str = arg; continue;
+        case 'm':     method = atoi(arg); continue;
+        case 'M':    methodx = atoi(arg); continue;
+        case 'k':     passwd = arg; continue;
+        case 'K':    passwdx = arg; continue;
+        case 'L':    logfile = arg; continue;
+        }
+
+        fprintf(stderr, "invalid option [-%c].\n", opt);
+        return 1;
     }
 
 #ifndef _WIN32
@@ -538,12 +577,15 @@ int main(int argc, char** argv)
     if (xlog_init(logfile) != 0) {
         fprintf(stderr, "open logfile failed.\n");
     }
-    xlog_ctrl(verbose ? XLOG_DEBUG : XLOG_INFO, 0, 0);
+    if (!verbose) {
+        xlog_ctrl(XLOG_INFO, 0, 0);
+    } else {
+        xlog_info("enable verbose output.");
+    }
 
     if (!devid_str) {
         xlog_info("device id not set, use default.");
-        memcpy(device_id, "\x11\x22\x33\x44\x55\x66\x77\x88", DEVICE_ID_SIZE);
-        // TODO, get MAC?
+        memcpy(device_id, DEFAULT_DEVID, DEVICE_ID_SIZE);
     } else if (str_to_devid(device_id, devid_str) != 0) {
         xlog_error("invalid device id string [%s].", devid_str);
         goto end;

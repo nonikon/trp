@@ -387,6 +387,41 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
     }
 }
 
+static void usage(const char* s)
+{
+    fprintf(stderr, "trp v%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, s);
+    fprintf(stderr, "options:\n");
+    fprintf(stderr, "  -x <ip:port>  "
+        "proxy server connect to. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
+    fprintf(stderr, "  -b <ip:port>  "
+        "tunnel server listen at. (default: 127.0.0.1:%d)\n", DEF_TSERVER_PORT);
+#ifdef __linux__
+    fprintf(stderr, "  -t <ip:port>  address tunnel to. (default: transparent proxy mode)\n");
+#else
+    fprintf(stderr, "  -t <ip:port>  address tunnel to.\n");
+#endif
+    fprintf(stderr, "  -d <devid>    "
+        "device id of client connect to. (default: not connect client)\n");
+    fprintf(stderr, "  -m <method>   "
+        "crypto method with proxy server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
+    fprintf(stderr, "  -M <METHOD>   "
+        "crypto method with client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
+    fprintf(stderr, "  -k <password> "
+        "crypto password with proxy server. (default: none)\n");
+    fprintf(stderr, "  -K <PASSWORD> "
+        "crypto password with client. (default: none)\n");
+#ifdef _WIN32
+    fprintf(stderr, "  -L <path>     "
+        "write output to file. (default: write to STDOUT)\n");
+#else
+    fprintf(stderr, "  -L <path>     "
+        "write output to file and run as daemon. (default: write to STDOUT)\n");
+#endif
+    fprintf(stderr, "  -v            output verbosely.\n");
+    fprintf(stderr, "  -h            print this help message.\n");
+    fprintf(stderr, "\n");
+}
+
 int main(int argc, char** argv)
 {
     uv_tcp_t io_tserver;
@@ -404,31 +439,39 @@ int main(int argc, char** argv)
     int error, i;
 
     for (i = 1; i < argc; ++i) {
-        if (!strcmp(argv[i], "-x")) {
-            if (++i < argc) xserver_str = argv[i];
-        } else if (!strcmp(argv[i], "-b")) {
-            if (++i < argc) tserver_str = argv[i];
-        } else if (!strcmp(argv[i], "-t")) {
-            if (++i < argc) tunnel_str = argv[i];
-        } else if (!strcmp(argv[i], "-d")) {
-            if (++i < argc) devid_str = argv[i];
-        } else if (!strcmp(argv[i], "-m")) {
-            if (++i < argc) method = atoi(argv[i]);
-        } else if (!strcmp(argv[i], "-M")) {
-            if (++i < argc) methodx = atoi(argv[i]);
-        } else if (!strcmp(argv[i], "-k")) {
-            if (++i < argc) passwd = argv[i];
-        } else if (!strcmp(argv[i], "-K")) {
-            if (++i < argc) passwdx = argv[i];
-        } else if (!strcmp(argv[i], "-L")) {
-            if (++i < argc) logfile = argv[i];
-        } else if (!strcmp(argv[i], "-v")) {
-            verbose = 1;
-        } else {
-            // usage, TODO
-            fprintf(stderr, "wrong args.\n");
+        char opt;
+        char* arg;
+
+        if (argv[i][0] != '-' || argv[i][1] == '\0') {
+            fprintf(stderr, "wrong args [%s].\n", argv[i]);
             return 1;
         }
+
+        opt = argv[i][1];
+
+        switch (opt) {
+        case 'v': verbose = 1; continue;
+        case 'h':
+            usage(argv[0]);
+            return 1;
+        }
+
+        arg = argv[i][2] ? argv[i] + 2 : (++i < argc ? argv[i] : NULL);
+
+        if (arg) switch (opt) {
+        case 'x': xserver_str = arg; continue;
+        case 'b': tserver_str = arg; continue;
+        case 't':  tunnel_str = arg; continue;
+        case 'd':   devid_str = arg; continue;
+        case 'm':      method = atoi(arg); continue;
+        case 'M':     methodx = atoi(arg); continue;
+        case 'k':      passwd = arg; continue;
+        case 'K':     passwdx = arg; continue;
+        case 'L':     logfile = arg; continue;
+        }
+
+        fprintf(stderr, "invalid option [-%c].\n", opt);
+        return 1;
     }
 
 #ifndef _WIN32
@@ -443,9 +486,11 @@ int main(int argc, char** argv)
     if (xlog_init(logfile) != 0) {
         fprintf(stderr, "open logfile failed.\n");
     }
-    xlog_ctrl(verbose ? XLOG_DEBUG : XLOG_INFO, 0, 0);
-
-    uv_tcp_init(loop, &io_tserver);
+    if (!verbose) {
+        xlog_ctrl(XLOG_INFO, 0, 0);
+    } else {
+        xlog_info("enable verbose output.");
+    }
 
     if (devid_str && str_to_devid(device_id, devid_str) != 0) {
         xlog_error("invalid device id string [%s].", devid_str);
@@ -488,7 +533,7 @@ int main(int argc, char** argv)
     }
 
     if (parse_ip4_str(tserver_str, DEF_TSERVER_PORT, &taddr) != 0) {
-        xlog_error("invalid tunnel server address [%s].", tserver_str);
+        xlog_error("invalid tunnel address [%s].", tserver_str);
         goto end;
     }
 
@@ -507,12 +552,14 @@ int main(int argc, char** argv)
             inet_ntoa(tunnel_addr.sin_addr), ntohs(tunnel_addr.sin_port));
     }
 
+    uv_tcp_init(loop, &io_tserver);
     uv_tcp_bind(&io_tserver, (struct sockaddr*) &taddr, 0);
 
     error = uv_listen((uv_stream_t*) &io_tserver,
                 LISTEN_BACKLOG, on_tclient_connect);
     if (error) {
-        xlog_error("uv_listen [%s] failed: %s.", xserver_str,
+        xlog_error("uv_listen [%s:%d] failed: %s.",
+            inet_ntoa(taddr.sin_addr), ntohs(taddr.sin_port),
             uv_strerror(error));
         goto end;
     }
@@ -532,7 +579,6 @@ int main(int argc, char** argv)
     xlist_destroy(&tserver_ctxs);
 end:
     xlog_info("end of loop.");
-    uv_close((uv_handle_t*) &io_tserver, NULL);
     xlog_exit();
 
     return 0;
