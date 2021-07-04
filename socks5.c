@@ -37,7 +37,7 @@ enum {
 typedef struct {
     uv_tcp_t io_sclient;    /* socks5-client */
     uv_tcp_t io_xserver;    /* proxy-server */
-    struct sockaddr_in dest_addr;
+    cmd_t dest_addr;
     crypto_ctx_t ectx;
     crypto_ctx_t dctx;
     u8_t ref_count;         /* increase when 'io_xserver' or 'io_sclient' opened, decrease when closed */
@@ -189,13 +189,7 @@ static void send_connect_cmd(sserver_ctx_t* ctx)
 
     cmd = (cmd_t*) (pbuf + MAX_NONCE_LEN);
 
-    cmd->tag = CMD_TAG;
-    cmd->major = VERSION_MAJOR;
-    cmd->minor = VERSION_MINOR;
-    cmd->cmd = CMD_CONNECT_IPV4;
-
-    cmd->i.port = ctx->dest_addr.sin_port;
-    memcpy(cmd->i.addr, &ctx->dest_addr.sin_addr, 4);
+    memcpy(cmd, &ctx->dest_addr, sizeof(cmd_t));
 
     memcpy(dnonce, pbuf, MAX_NONCE_LEN);
     convert_nonce(dnonce);
@@ -411,45 +405,75 @@ static void on_sclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
 
                     if (wbuf.base[3] == 1) { /* 'ATYP' == 0x01 (IPV4) */
 
-                        if (wbuf.len == 10) {
-                            /* stop reading from socks5 client. */
-                            uv_read_stop(stream);
+                        if (wbuf.len == 6 + 4) {
+                            ctx->dest_addr.tag = CMD_TAG;
+                            ctx->dest_addr.major = VERSION_MAJOR;
+                            ctx->dest_addr.minor = VERSION_MINOR;
+                            ctx->dest_addr.cmd = CMD_CONNECT_IPV4;
 
-                            ctx->dest_addr.sin_family = AF_INET;
-                            memcpy(&ctx->dest_addr.sin_addr, wbuf.base + 4, 4);
-                            memcpy(&ctx->dest_addr.sin_port, wbuf.base + 8, 2);
+                            memcpy(&ctx->dest_addr.i.addr, wbuf.base + 4, 4);
+                            memcpy(&ctx->dest_addr.i.port, wbuf.base + 8, 2);
 
-                            xlog_debug("got socks5 connect cmd, to [%s].",
-                                addr_to_str(&ctx->dest_addr));
-
-                            if (connect_xserver(ctx) != 0) {
-                                /* connect proxy server failed immediately. */
-                                wbuf.base[1] = 0x03;
-                            } else {
-                                struct sockaddr_in d;
-                                int l = sizeof(d);
-
-                                uv_tcp_getsockname(&ctx->io_xserver, (struct sockaddr*) &d, &l);
-
-                                // xlog_debug("local addr [%s].", addr_to_str(&d));
-
-                                /* set BND.ADDR and BND.PORT */
-                                memcpy(wbuf.base + 4, &d.sin_addr, 4);
-                                memcpy(wbuf.base + 8, &d.sin_port, 2);
-
-                                /* assume that proxy server was connected successfully. */
-                                wbuf.base[1] = 0x00;
-                            }
+                            wbuf.base[1] = 0x00;
                         } else {
-                            /* error request. */
-                            xlog_warn("error socks5 request.");
+                            xlog_warn("socks5 request packet len error .");
+                            wbuf.base[1] = 0x01;
+                        }
+
+                    } else if (wbuf.base[3] == 3) { /* 'ATYP' == 0x03 (DOMAINNAME) */
+
+                        if ((u8_t) wbuf.base[4] < MAX_DOMAIN_LEN
+                                && wbuf.len == 6 + 1 + (u8_t) wbuf.base[4]) {
+                            ctx->dest_addr.tag = CMD_TAG;
+                            ctx->dest_addr.major = VERSION_MAJOR;
+                            ctx->dest_addr.minor = VERSION_MINOR;
+                            ctx->dest_addr.cmd = CMD_CONNECT_DOMAIN;
+                            ctx->dest_addr.m.domain[(u8_t) wbuf.base[4]] = 0;
+
+                            memcpy(&ctx->dest_addr.m.domain, wbuf.base + 5, (u8_t) wbuf.base[4]);
+                            memcpy(&ctx->dest_addr.m.port, wbuf.base + (u8_t) wbuf.base[4] + 5, 2);
+
+                            wbuf.base[1] = 0x00;
+                        } else {
+                            xlog_warn("socks5 request packet len error .");
                             wbuf.base[1] = 0x01;
                         }
 
                     } else {
-                        /* connect ipv6 or domain not supported. */
+                        /* connect ipv6 not supported. */
                         xlog_warn("unsupported socks5 address type %d.", wbuf.base[3]);
                         wbuf.base[1] = 0x08;
+                    }
+
+                    if (!wbuf.base[1]) { /* no error */
+                        xlog_debug("got socks5 connect cmd, to [%s].",
+                            maddr_to_str(&ctx->dest_addr));
+
+                        /* stop reading from socks5 client. */
+                        uv_read_stop(stream);
+
+                        if (connect_xserver(ctx) == 0) {
+#if 0
+                            struct sockaddr_in d;
+                            int l = sizeof(d);
+
+                            /* get local address. */
+                            uv_tcp_getsockname(&ctx->io_xserver, (struct sockaddr*) &d, &l);
+                            /* set BND.ADDR and BND.PORT */
+                            memcpy(wbuf.base + 4, &d.sin_addr, 4);
+                            memcpy(wbuf.base + 8, &d.sin_port, 2);
+
+                            // xlog_debug("local addr [%s].", addr_to_str(&d));
+#else
+                            memset(wbuf.base + 4, 0, 6);
+#endif
+                            /* assume that proxy server was connected successfully. */
+                            wbuf.base[3] = 1;
+                            wbuf.len = 6 + 4;
+                        } else {
+                            /* connect proxy server failed immediately. */
+                            wbuf.base[1] = 0x03;
+                        }
                     }
 
                 } else {

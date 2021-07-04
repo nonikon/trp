@@ -39,7 +39,7 @@ typedef signed int      s32_t;
 enum {
     CMD_CONNECT_IPV4,
     CMD_CONNECT_IPV6,   /* current not supported */
-    CMD_CONNECT_DOMAIN, /* current not supported */
+    CMD_CONNECT_DOMAIN,
     CMD_CONNECT_CLIENT,
     CMD_REPORT_DEVID,
 
@@ -93,11 +93,11 @@ void rand_bytes(u8_t* data, u32_t len);
 int parse_ip4_str(const char* str, int defport, struct sockaddr_in* addr);
 
 /* convert 'struct sockaddr_in' or struct sockaddr_in6' to string (include port). */
-char* addr_to_str(void* addr);
+const char* addr_to_str(const void* addr);
 /* convert 'cmd_t' address to string (include port). */
-char* maddr_to_str(cmd_t* cmd);
+const char* maddr_to_str(const cmd_t* cmd);
 
-const char* devid_to_str(u8_t id[DEVICE_ID_SIZE]);
+const char* devid_to_str(const u8_t id[DEVICE_ID_SIZE]);
 int str_to_devid(u8_t id[DEVICE_ID_SIZE], const char* str);
 
 #endif // _COMMON_H_

@@ -59,12 +59,12 @@ int parse_ip4_str(const char* str, int defport, struct sockaddr_in* addr)
     return uv_ip4_addr(str, defport, addr);
 }
 
-char* addr_to_str(void* addr)
+const char* addr_to_str(const void* addr)
 {
     union {
-        struct sockaddr* d;
-        struct sockaddr_in* d4;
-        struct sockaddr_in6* d6;
+        const struct sockaddr* d;
+        const struct sockaddr_in* d4;
+        const struct sockaddr_in6* d6;
     } u;
 
     _addrbuf[0] = 0;
@@ -84,7 +84,7 @@ char* addr_to_str(void* addr)
     return _addrbuf;
 }
 
-char* maddr_to_str(cmd_t* cmd)
+const char* maddr_to_str(const cmd_t* cmd)
 {
     _addrbuf[0] = 0;
 
@@ -98,14 +98,16 @@ char* maddr_to_str(cmd_t* cmd)
         sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(cmd->i.port));
         break;
     case CMD_CONNECT_DOMAIN:
-        sprintf(_addrbuf, "%s:%d", cmd->m.domain, cmd->m.port);
+        sprintf(_addrbuf, "%s:%d", cmd->m.domain, ntohs(cmd->m.port));
         break;
+    case CMD_CONNECT_CLIENT:
+        return devid_to_str(cmd->d.devid);
     }
 
     return _addrbuf;
 }
 
-const char* devid_to_str(u8_t id[DEVICE_ID_SIZE])
+const char* devid_to_str(const u8_t id[DEVICE_ID_SIZE])
 {
     static const char tb[16] = "0123456789ABCDEF";
     static char buf[DEVICE_ID_SIZE * 2 + 1];

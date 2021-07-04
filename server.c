@@ -77,6 +77,7 @@ static xlist_t peers;           /* peer_t */
 static xlist_t xserver_ctxs;    /* xserver_ctx_t */
 static xlist_t io_buffers;      /* io_buf_t */
 static xlist_t conn_reqs;       /* uv_connect_t */
+static xlist_t addrinfo_reqs;   /* uv_getaddrinfo_t */
 
 static crypto_t crypto;
 static u8_t crypto_key[16];
@@ -375,16 +376,9 @@ static void on_remote_connected(uv_connect_t* req, int status)
     xlist_erase(&conn_reqs, xlist_value_iter(req));
 }
 
-static int connect_remote(xserver_ctx_t* ctx, u8_t* addr, u16_t port)
+static int connect_remote(xserver_ctx_t* ctx, struct sockaddr* addr)
 {
-    struct sockaddr_in remote_addr;
     uv_connect_t* req = xlist_alloc_back(&conn_reqs);
-
-    remote_addr.sin_family = AF_INET;
-    remote_addr.sin_port = port;
-
-    memcpy(&remote_addr.sin_addr, addr, 4);
-    xlog_debug("connecting remote [%s]...", addr_to_str(&remote_addr));
 
     ctx->peer = xlist_alloc_back(&peers);
     ctx->peer->io.data = ctx;
@@ -393,8 +387,7 @@ static int connect_remote(xserver_ctx_t* ctx, u8_t* addr, u16_t port)
 
     uv_tcp_init(loop, &ctx->peer->io);
 
-    if (uv_tcp_connect(req, &ctx->peer->io,
-            (struct sockaddr*) &remote_addr, on_remote_connected) != 0) {
+    if (uv_tcp_connect(req, &ctx->peer->io, addr, on_remote_connected) != 0) {
         xlog_error("connect remote failed immediately.");
 
         uv_close((uv_handle_t*) &ctx->peer->io, on_peer_closed);
@@ -404,6 +397,28 @@ static int connect_remote(xserver_ctx_t* ctx, u8_t* addr, u16_t port)
 
     ctx->stage = STAGE_CONNECT;
     return 0;
+}
+
+static void on_domain_resolved(uv_getaddrinfo_t* req, int status, struct addrinfo *res)
+{
+    xserver_ctx_t* ctx = req->data;
+
+    if (status < 0) {
+        xlog_debug("resolve domain failed: %s.", uv_err_name(status));
+        uv_close((uv_handle_t*) &ctx->io_xclient, on_xclient_closed);
+
+    } else {
+        xlog_debug("resolve result [%s], connect it.", addr_to_str(res->ai_addr));
+
+        if (connect_remote(ctx, res->ai_addr) != 0) {
+            /* connect failed immediately, just close this connection. */
+            uv_close((uv_handle_t*) &ctx->io_xclient, on_xclient_closed);
+        }
+
+        uv_freeaddrinfo(res);
+    }
+
+    xlist_erase(&addrinfo_reqs, xlist_value_iter(req));
 }
 
 static void connect_client(xserver_ctx_t* ctx, peer_t* client)
@@ -536,21 +551,6 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
                     xlog_warn("got an error packet (content) from proxy client.");
                     uv_close((uv_handle_t*) stream, on_xclient_closed);
 
-                } else if (cmd->cmd == CMD_CONNECT_IPV4) {
-                    xlog_debug("got CONNECT_IPV4 cmd (%s) from proxy client, process.",
-                        maddr_to_str(cmd));
-
-                    /* stop reading from proxy client until remote connected.
-                     * so we can't know this connection is closed (by proxy client) or not
-                     * before remote connected, TODO.
-                     */
-                    uv_read_stop(stream);
-
-                    if (connect_remote(ctx, cmd->i.addr, cmd->i.port) != 0) {
-                        /* connect failed immediately, just close this connection. */
-                        uv_close((uv_handle_t*) stream, on_xclient_closed);
-                    }
-
                 } else if (cmd->cmd == CMD_CONNECT_CLIENT) {
                     /* find an online client. */
                     pending_ctx_t* pdctx = xhash_get_data(&pending_ctxs, cmd->d.devid);
@@ -589,6 +589,50 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
                     } else {
                         xlog_warn("device_id not exist for proxy client.");
                         uv_close((uv_handle_t*) stream, on_xclient_closed);
+                    }
+
+                } else if (cmd->cmd == CMD_CONNECT_IPV4) {
+                    struct sockaddr_in remote;
+
+                    remote.sin_family = AF_INET;
+                    remote.sin_port = cmd->i.port;
+
+                    memcpy(&remote.sin_addr, &cmd->i.addr, 4);
+                    xlog_debug("got CONNECT_IPV4 cmd (%s) from proxy client, process.",
+                        addr_to_str(&remote));
+
+                    /* stop reading from proxy client until remote connected. */
+                    uv_read_stop(stream);
+
+                    if (connect_remote(ctx, (struct sockaddr*) &remote) != 0) {
+                        /* connect failed immediately, just close this connection. */
+                        uv_close((uv_handle_t*) stream, on_xclient_closed);
+                    }
+
+                } else if (cmd->cmd == CMD_CONNECT_DOMAIN) {
+                    struct addrinfo hints;
+                    char portstr[8];
+                    uv_getaddrinfo_t* req = xlist_alloc_back(&addrinfo_reqs);
+
+                    hints.ai_family = AF_INET;
+                    hints.ai_socktype = SOCK_STREAM;
+                    hints.ai_protocol = IPPROTO_TCP;
+                    hints.ai_flags = 0;
+
+                    req->data = ctx;
+                    sprintf(portstr, "%d", ntohs(cmd->m.port));
+                    xlog_debug("got CONNECT_DOMAIN cmd (%s) from proxy client, process.",
+                        maddr_to_str(cmd));
+
+                    /* stop reading from proxy client until remote connected. */
+                    uv_read_stop(stream);
+
+                    if (uv_getaddrinfo(loop, req, on_domain_resolved,
+                            (char*) cmd->m.domain, portstr, &hints) != 0) {
+                        xlog_error("uv_getaddrinfo (%s) failed immediately.", cmd->m.domain);
+
+                        uv_close((uv_handle_t*) stream, on_xclient_closed);
+                        xlist_erase(&addrinfo_reqs, xlist_value_iter(req));
                     }
 
                 } else {
@@ -818,11 +862,13 @@ int main(int argc, char** argv)
     xlist_init(&xserver_ctxs, sizeof(xserver_ctx_t), NULL);
     xlist_init(&io_buffers, sizeof(io_buf_t), NULL);
     xlist_init(&conn_reqs, sizeof(uv_connect_t), NULL);
+    xlist_init(&addrinfo_reqs, sizeof(uv_getaddrinfo_t), NULL);
 
     xlog_info("server listen at [%s]...", addr_to_str(&addr));
     xlog_info("proxy server listen at [%s]...", addr_to_str(&xaddr));
     uv_run(loop, UV_RUN_DEFAULT);
 
+    xlist_destroy(&addrinfo_reqs);
     xlist_destroy(&conn_reqs);
     xlist_destroy(&io_buffers);
     xlist_destroy(&xserver_ctxs);
