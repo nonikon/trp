@@ -25,7 +25,10 @@ typedef struct sm4_ctx {
 static void key_expand(u8_t key[32])
 {
     // TODO
-    memcpy(key + 16, key, 16);
+    int i;
+    for (i = 0; i < 16; ++i) {
+        key[i + 16] = ~key[i];
+    }
 }
 
 static int chacha20_ctx_init(crypto_ctx_t* _, const u8_t key[16], const u8_t iv[16])
@@ -173,8 +176,34 @@ int crypto_init(crypto_t* c, int method)
 void derive_key(u8_t key[16], const char* str)
 {
     // TODO, MD5?
-    memset(key, 0, 16);
-    strncpy(key, str, 16);
+    u32_t h = strlen(str);
+    u32_t i;
+
+    if (h >= 16) {
+        memcpy(key, str, 16); /* truncate if > 16 */
+        h = 16;
+    } else {
+        memcpy(key, str, h);
+        memset(key + h, 0, 16 - h);
+    }
+
+    for (i = 0; i < 16; i += 4) {
+        u32_t u = (key[i])
+                | (key[i + 1] <<  8)
+                | (key[i + 2] << 16)
+                | (key[i + 3] << 24);
+
+        h  = (u + h) * 0x41c64e6d + 0x3039;
+        h += ~(h << 9);
+        h ^= ((h >> 14) | (h << 18));
+        h += (h << 4);
+        h ^= ((h >> 10) | (h << 22));
+
+        key[i + 0] = (h      ) & 0xff;
+        key[i + 1] = (h >>  8) & 0xff;
+        key[i + 2] = (h >> 16) & 0xff;
+        key[i + 3] = (h >> 24) & 0xff;
+    }
 }
 
 void convert_nonce(u8_t nonce[16])

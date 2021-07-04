@@ -12,13 +12,13 @@
             ((type*) ((char*) (ptr) - offsetof(type, member)))
 
 #define VERSION_MAJOR       0x01
-#define VERSION_MINOR       0x01
+#define VERSION_MINOR       0x02
 
 #define DEF_SERVER_PORT     9901    /* default server port */
 #define DEF_XSERVER_PORT    9902    /* default proxy server port */
-#define DEF_CONTROL_PORT    9903    /* default control (http) port */
+#define DEF_CSERVER_PORT    9903    /* default control server (http) port */
 #define DEF_TSERVER_PORT    8800    /* default tunnel server port */
-#define DEF_SOCKS5_PORT     8801    /* default socks5 proxy port */
+#define DEF_SSERVER_PORT    8801    /* default socks5 proxy port */
 #define LISTEN_BACKLOG      1024
 
 #define MAX_NONCE_LEN       16
