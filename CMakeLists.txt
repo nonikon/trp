@@ -25,6 +25,7 @@ set(generic_sources
     chacha.c
 )
 
+# server
 set(server_sources
     ${generic_sources}
     xhash.c
@@ -39,6 +40,7 @@ set(server_defines
     XLOG_OUT_CTRL=4
 )
 
+# client
 set(client_sources
     ${generic_sources}
     client.c
@@ -48,11 +50,22 @@ set(client_defines
     XLOG_OUT_CTRL=4
 )
 
+# tunnel
 set(tunnel_sources
     ${generic_sources}
     tunnel.c
 )
 set(tunnel_defines
+    XLIST_ENABLE_CACHE=1
+    XLOG_OUT_CTRL=4
+)
+
+# socks5
+set(socks5_sources
+    ${generic_sources}
+    socks5.c
+)
+set(socks5_defines
     XLIST_ENABLE_CACHE=1
     XLOG_OUT_CTRL=4
 )
@@ -84,3 +97,7 @@ target_compile_definitions(trp-client PRIVATE ${client_defines})
 add_executable(trp-tunnel ${tunnel_sources})
 target_compile_definitions(trp-tunnel PRIVATE ${tunnel_defines})
 # target_compile_options(trp-tunnel PRIVATE ${tunnel_cflags})
+
+add_executable(trp-socks5 ${socks5_sources})
+target_compile_definitions(trp-socks5 PRIVATE ${socks5_defines})
+# target_compile_options(trp-socks5 PRIVATE ${socks5_cflags})

@@ -367,7 +367,7 @@ int http_server_start(uv_loop_t* loop, const char* str)
     struct sockaddr_in addr;
     int error;
 
-    if (parse_ip4_str(str, DEF_CONTROL_PORT, &addr) != 0) {
+    if (parse_ip4_str(str, DEF_CSERVER_PORT, &addr) != 0) {
         xlog_error("invalid control server address [%s].", str);
         return -1;
     }
