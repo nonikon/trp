@@ -22,10 +22,10 @@
 
 #define KEEPIDLE_TIME       (40) /* s */
 
-/*  --------------         ---------------         --------------
- * | proxy-server | <---> | tunnel-server | <---> | applications |
- *  --------------         ---------------         --------------
- *                         (proxy-client)
+/*  --------------         --------------         --------------
+ * | proxy-server | <---> | proxy-client | <---> | applications |
+ *  --------------         --------------         --------------
+ *                         (tunnel-server)        (tunnel-client)
  */
 
 typedef struct {
@@ -50,7 +50,7 @@ static uv_loop_t* loop;
 
 static struct sockaddr_in xserver_addr;
 static struct sockaddr_in tunnel_addr;
-static xlist_t tserver_ctxs;/* client_ctx_t */
+static xlist_t tserver_ctxs;/* tserver_ctx_t */
 static xlist_t io_buffers;  /* io_buf_t */
 static xlist_t conn_reqs;   /* uv_connect_t */
 
@@ -319,8 +319,7 @@ static int connect_xserver(tserver_ctx_t* ctx)
 {
     uv_connect_t* req = xlist_alloc_back(&conn_reqs);
 
-    xlog_debug("connecting porxy server [%s:%d]...",
-        inet_ntoa(xserver_addr.sin_addr), ntohs(xserver_addr.sin_port));
+    xlog_debug("connecting porxy server [%s]...", addr_to_str(&xserver_addr));
 
     req->data = ctx;
     /* 'io_xserver' will be opened, increase refcount. */
@@ -533,7 +532,7 @@ int main(int argc, char** argv)
     }
 
     if (parse_ip4_str(tserver_str, DEF_TSERVER_PORT, &taddr) != 0) {
-        xlog_error("invalid tunnel address [%s].", tserver_str);
+        xlog_error("invalid tunnel server address [%s].", tserver_str);
         goto end;
     }
 
@@ -548,8 +547,7 @@ int main(int argc, char** argv)
         xlog_error("invalid tunnel address [%s].", tunnel_str);
         goto end;
     } else {
-        xlog_info("tunnel to [%s:%d].",
-            inet_ntoa(tunnel_addr.sin_addr), ntohs(tunnel_addr.sin_port));
+        xlog_info("tunnel to [%s].", addr_to_str(&tunnel_addr));
     }
 
     uv_tcp_init(loop, &io_tserver);
@@ -558,9 +556,8 @@ int main(int argc, char** argv)
     error = uv_listen((uv_stream_t*) &io_tserver,
                 LISTEN_BACKLOG, on_tclient_connect);
     if (error) {
-        xlog_error("uv_listen [%s:%d] failed: %s.",
-            inet_ntoa(taddr.sin_addr), ntohs(taddr.sin_port),
-            uv_strerror(error));
+        xlog_error("uv_listen [%s] failed: %s.",
+            addr_to_str(&taddr), uv_strerror(error));
         goto end;
     }
 
@@ -568,10 +565,8 @@ int main(int argc, char** argv)
     xlist_init(&io_buffers, sizeof(io_buf_t), NULL);
     xlist_init(&conn_reqs, sizeof(uv_connect_t), NULL);
 
-    xlog_info("proxy server [%s:%d].",
-        inet_ntoa(xserver_addr.sin_addr), ntohs(xserver_addr.sin_port));
-    xlog_info("tunnel server listen at [%s:%d]...",
-        inet_ntoa(taddr.sin_addr), ntohs(taddr.sin_port));
+    xlog_info("proxy server [%s].", addr_to_str(&xserver_addr));
+    xlog_info("tunnel server listen at [%s]...", addr_to_str(&taddr));
     uv_run(loop, UV_RUN_DEFAULT);
 
     xlist_destroy(&conn_reqs);

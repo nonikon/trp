@@ -384,8 +384,7 @@ static int connect_remote(xserver_ctx_t* ctx, u8_t* addr, u16_t port)
     remote_addr.sin_port = port;
 
     memcpy(&remote_addr.sin_addr, addr, 4);
-    xlog_debug("connecting remote [%s:%d]...",
-        inet_ntoa(remote_addr.sin_addr), ntohs(port));
+    xlog_debug("connecting remote [%s]...", addr_to_str(&remote_addr));
 
     ctx->peer = xlist_alloc_back(&peers);
     ctx->peer->io.data = ctx;
@@ -538,8 +537,8 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
                     uv_close((uv_handle_t*) stream, on_xclient_closed);
 
                 } else if (cmd->cmd == CMD_CONNECT_IPV4) {
-                    xlog_debug("got CONNECT_IPV4 cmd (%s:%d) from proxy client, process.",
-                        inet_ntoa(*(struct in_addr*) cmd->i.addr), ntohs(cmd->i.port));
+                    xlog_debug("got CONNECT_IPV4 cmd (%s) from proxy client, process.",
+                        maddr_to_str(cmd));
 
                     /* stop reading from proxy client until remote connected.
                      * so we can't know this connection is closed (by proxy client) or not
@@ -798,18 +797,16 @@ int main(int argc, char** argv)
     error = uv_listen((uv_stream_t*) &io_server,
                 LISTEN_BACKLOG, on_client_connect);
     if (error) {
-        xlog_error("uv_listen [%s:%d] failed: %s.",
-            inet_ntoa(addr.sin_addr), ntohs(addr.sin_port),
-            uv_strerror(error));
+        xlog_error("uv_listen [%s] failed: %s.",
+            addr_to_str(&addr), uv_strerror(error));
         goto end;
     }
 
     error = uv_listen((uv_stream_t*) &io_xserver,
                 LISTEN_BACKLOG, on_xclient_connect);
     if (error) {
-        xlog_error("uv_listen [%s:%d] failed: %s.",
-            inet_ntoa(xaddr.sin_addr), ntohs(xaddr.sin_port),
-            uv_strerror(error));
+        xlog_error("uv_listen [%s] failed: %s.",
+            addr_to_str(&xaddr), uv_strerror(error));
         goto end;
     }
 
@@ -822,10 +819,8 @@ int main(int argc, char** argv)
     xlist_init(&io_buffers, sizeof(io_buf_t), NULL);
     xlist_init(&conn_reqs, sizeof(uv_connect_t), NULL);
 
-    xlog_info("server listen at [%s:%d]...",
-        inet_ntoa(addr.sin_addr), ntohs(addr.sin_port));
-    xlog_info("proxy server listen at [%s:%d]...",
-        inet_ntoa(xaddr.sin_addr), ntohs(xaddr.sin_port));
+    xlog_info("server listen at [%s]...", addr_to_str(&addr));
+    xlog_info("proxy server listen at [%s]...", addr_to_str(&xaddr));
     uv_run(loop, UV_RUN_DEFAULT);
 
     xlist_destroy(&conn_reqs);

@@ -250,8 +250,7 @@ static int connect_xserver(sserver_ctx_t* ctx)
 {
     uv_connect_t* req = xlist_alloc_back(&conn_reqs);
 
-    xlog_debug("connecting porxy server [%s:%d]...",
-        inet_ntoa(xserver_addr.sin_addr), ntohs(xserver_addr.sin_port));
+    xlog_debug("connecting porxy server [%s]...", addr_to_str(&xserver_addr));
 
     req->data = ctx;
     /* 'io_xserver' will be opened, increase refcount. */
@@ -420,8 +419,8 @@ static void on_sclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
                             memcpy(&ctx->dest_addr.sin_addr, wbuf.base + 4, 4);
                             memcpy(&ctx->dest_addr.sin_port, wbuf.base + 8, 2);
 
-                            xlog_debug("got socks5 connect cmd, to [%s:%d].",
-                                inet_ntoa(ctx->dest_addr.sin_addr), ntohs(ctx->dest_addr.sin_port));
+                            xlog_debug("got socks5 connect cmd, to [%s].",
+                                addr_to_str(&ctx->dest_addr));
 
                             if (connect_xserver(ctx) != 0) {
                                 /* connect proxy server failed immediately. */
@@ -432,8 +431,7 @@ static void on_sclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
 
                                 uv_tcp_getsockname(&ctx->io_xserver, (struct sockaddr*) &d, &l);
 
-                                // xlog_debug("local addr [%s:%d].",
-                                //     inet_ntoa(d.sin_addr), ntohs(d.sin_port));
+                                // xlog_debug("local addr [%s].", addr_to_str(&d));
 
                                 /* set BND.ADDR and BND.PORT */
                                 memcpy(wbuf.base + 4, &d.sin_addr, 4);
@@ -674,9 +672,8 @@ int main(int argc, char** argv)
     error = uv_listen((uv_stream_t*) &io_sserver,
                 LISTEN_BACKLOG, on_sclient_connect);
     if (error) {
-        xlog_error("uv_listen [%s:%d] failed: %s.",
-            inet_ntoa(saddr.sin_addr), ntohs(saddr.sin_port),
-            uv_strerror(error));
+        xlog_error("uv_listen [%s] failed: %s.",
+            addr_to_str(&saddr), uv_strerror(error));
         goto end;
     }
 
@@ -684,10 +681,8 @@ int main(int argc, char** argv)
     xlist_init(&io_buffers, sizeof(io_buf_t), NULL);
     xlist_init(&conn_reqs, sizeof(uv_connect_t), NULL);
 
-    xlog_info("proxy server [%s:%d].",
-        inet_ntoa(xserver_addr.sin_addr), ntohs(xserver_addr.sin_port));
-    xlog_info("socks5 server listen at [%s:%d]...",
-        inet_ntoa(saddr.sin_addr), ntohs(saddr.sin_port));
+    xlog_info("proxy server [%s].", addr_to_str(&xserver_addr));
+    xlog_info("socks5 server listen at [%s]...", addr_to_str(&saddr));
     uv_run(loop, UV_RUN_DEFAULT);
 
     xlist_destroy(&conn_reqs);

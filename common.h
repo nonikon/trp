@@ -92,6 +92,11 @@ void rand_bytes(u8_t* data, u32_t len);
  */
 int parse_ip4_str(const char* str, int defport, struct sockaddr_in* addr);
 
+/* convert 'struct sockaddr_in' or struct sockaddr_in6' to string (include port). */
+char* addr_to_str(void* addr);
+/* convert 'cmd_t' address to string (include port). */
+char* maddr_to_str(cmd_t* cmd);
+
 const char* devid_to_str(u8_t id[DEVICE_ID_SIZE]);
 int str_to_devid(u8_t id[DEVICE_ID_SIZE], const char* str);
 

@@ -388,7 +388,6 @@ int http_server_start(uv_loop_t* loop, const char* str)
     xlist_init(&requests, sizeof(http_req_t), NULL);
     xlist_init(&responses, sizeof(http_resp_t), NULL);
 
-    xlog_info("control server (http) listen at [%s:%d].",
-        inet_ntoa(addr.sin_addr), ntohs(addr.sin_port));
+    xlog_info("control server (http) listen at [%s].", addr_to_str(&addr));
     return 0;
 }

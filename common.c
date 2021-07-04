@@ -9,6 +9,7 @@
 #include "common.h"
 
 static u32_t _seed;
+static char _addrbuf[72]; /* long enough to store ipv4/ipv6/domain string and port. */
 
 void seed_rand(u32_t seed)
 {
@@ -58,18 +59,64 @@ int parse_ip4_str(const char* str, int defport, struct sockaddr_in* addr)
     return uv_ip4_addr(str, defport, addr);
 }
 
+char* addr_to_str(void* addr)
+{
+    union {
+        struct sockaddr* d;
+        struct sockaddr_in* d4;
+        struct sockaddr_in6* d6;
+    } u;
+
+    _addrbuf[0] = 0;
+    u.d = addr;
+
+    switch (u.d->sa_family) {
+    case AF_INET:
+        uv_inet_ntop(AF_INET, &u.d4->sin_addr, _addrbuf, sizeof(_addrbuf));
+        sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(u.d4->sin_port));
+        break;
+    case AF_INET6:
+        uv_inet_ntop(AF_INET6, &u.d6->sin6_addr, _addrbuf, sizeof(_addrbuf));
+        sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(u.d6->sin6_port));
+        break;
+    }
+
+    return _addrbuf;
+}
+
+char* maddr_to_str(cmd_t* cmd)
+{
+    _addrbuf[0] = 0;
+
+    switch (cmd->cmd) {
+    case CMD_CONNECT_IPV4:
+        uv_inet_ntop(AF_INET, &cmd->i.addr, _addrbuf, sizeof(_addrbuf));
+        sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(cmd->i.port));
+        break;
+    case CMD_CONNECT_IPV6:
+        uv_inet_ntop(AF_INET6, &cmd->i.addr, _addrbuf, sizeof(_addrbuf));
+        sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(cmd->i.port));
+        break;
+    case CMD_CONNECT_DOMAIN:
+        sprintf(_addrbuf, "%s:%d", cmd->m.domain, cmd->m.port);
+        break;
+    }
+
+    return _addrbuf;
+}
+
 const char* devid_to_str(u8_t id[DEVICE_ID_SIZE])
 {
-    static const char t[16] = "0123456789ABCDEF";
-    static char s[DEVICE_ID_SIZE * 2 + 1];
+    static const char tb[16] = "0123456789ABCDEF";
+    static char buf[DEVICE_ID_SIZE * 2 + 1];
     int i;
 
     for (i = 0; i < DEVICE_ID_SIZE; ++i) {
-        s[i * 2] = t[id[i] >> 4];
-        s[i * 2 + 1] = t[id[i] & 0x0F];
+        buf[i * 2] = tb[id[i] >> 4];
+        buf[i * 2 + 1] = tb[id[i] & 0x0F];
     }
 
-    return s;
+    return buf;
 }
 
 int str_to_devid(u8_t id[DEVICE_ID_SIZE], const char* str)

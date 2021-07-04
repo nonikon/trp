@@ -221,8 +221,7 @@ static int connect_remote(client_ctx_t* ctx, u8_t* addr, u16_t port)
     remote_addr.sin_port = port;
 
     memcpy(&remote_addr.sin_addr, addr, 4);
-    xlog_debug("connecting remote [%s:%d]...",
-        inet_ntoa(remote_addr.sin_addr), ntohs(port));
+    xlog_debug("connecting remote [%s]...", addr_to_str(&remote_addr));
 
     req->data = ctx;
     /* 'io_remote' will be opened, increase refcount. */
@@ -313,8 +312,8 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                     uv_close((uv_handle_t*) stream, on_io_closed);
 
                 } else if (cmd->cmd == CMD_CONNECT_IPV4) {
-                    xlog_debug("got CONNECT_IPV4 cmd (%s:%d) from proxy client, process.",
-                        inet_ntoa(*(struct in_addr*) cmd->i.addr), ntohs(cmd->i.port));
+                    xlog_debug("got CONNECT_IPV4 cmd (%s) from proxy client, process.",
+                        maddr_to_str(cmd));
 
                     /* stop reading from server until remote connected.
                      * so we can't know this connection is closed (by server) or not
@@ -469,8 +468,7 @@ static void new_server_connection(uv_timer_t* timer)
 
     req->data = ctx;
 
-    xlog_debug("connecting server [%s:%d]...",
-        inet_ntoa(server_addr.sin_addr), ntohs(server_addr.sin_port));
+    xlog_debug("connecting server [%s]...", addr_to_str(&server_addr));
 
     if (uv_tcp_connect(req, &ctx->io_server,
             (struct sockaddr*) &server_addr, on_server_connected) != 0) {
