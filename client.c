@@ -56,9 +56,10 @@ static uv_loop_t* loop;
 static uv_timer_t reconnect_timer;
 
 static struct sockaddr_in server_addr;
-static xlist_t client_ctxs; /* client_ctx_t */
-static xlist_t io_buffers;  /* io_buf_t */
-static xlist_t conn_reqs;   /* uv_connect_t */
+static xlist_t client_ctxs;     /* client_ctx_t */
+static xlist_t io_buffers;      /* io_buf_t */
+static xlist_t conn_reqs;       /* uv_connect_t */
+static xlist_t addrinfo_reqs;   /* uv_getaddrinfo_t */
 
 static crypto_t crypto;     /* crypto between client and server */
 static crypto_t cryptox;    /* crypto between client and proxy-client */
@@ -69,7 +70,7 @@ static u8_t device_id[DEVICE_ID_SIZE];
 static void on_remote_write(uv_write_t* req, int status);
 static void on_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf);
 static void on_remote_connected(uv_connect_t* req, int status);
-static int connect_remote(client_ctx_t* ctx, u8_t* addr, u16_t port);
+static int connect_remote(client_ctx_t* ctx, struct sockaddr* addr);
 
 static void on_server_write(uv_write_t* req, int status);
 static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf);
@@ -185,21 +186,24 @@ static void on_remote_connected(uv_connect_t* req, int status)
         // }
 
     } else {
+        io_buf_t* iob = ctx->pending_iob;
+
         xlog_debug("remote connected.");
 
-        if (ctx->pending_iob) {
-            /* write 'ctx->pending_iob' to remote. */
-            io_buf_t* iob = ctx->pending_iob;
+        if (iob->len > 0) {
             uv_buf_t wbuf;
 
             wbuf.base = iob->buffer + iob->idx;
             wbuf.len = iob->len;
 
             iob->wreq.data = ctx;
-            ctx->pending_iob = NULL;
 
+            /* write 'iob' to remote, 'iob' free later. */
             uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_remote,
                 &wbuf, 1, on_remote_write);
+        } else {
+            /* free this 'iob' now. */
+            xlist_erase(&io_buffers, xlist_value_iter(iob));
         }
 
         uv_read_start((uv_stream_t*) &ctx->io_remote,
@@ -207,29 +211,22 @@ static void on_remote_connected(uv_connect_t* req, int status)
         uv_read_start((uv_stream_t*) &ctx->io_server,
             on_iobuf_alloc, on_server_read);
 
+        ctx->pending_iob = NULL;
         ctx->stage = STAGE_FORWARD;
     }
 
     xlist_erase(&conn_reqs, xlist_value_iter(req));
 }
 
-static int connect_remote(client_ctx_t* ctx, u8_t* addr, u16_t port)
+static int connect_remote(client_ctx_t* ctx, struct sockaddr* addr)
 {
-    struct sockaddr_in remote_addr;
     uv_connect_t* req = xlist_alloc_back(&conn_reqs);
-
-    remote_addr.sin_family = AF_INET;
-    remote_addr.sin_port = port;
-
-    memcpy(&remote_addr.sin_addr, addr, 4);
-    xlog_debug("connecting remote [%s]...", addr_to_str(&remote_addr));
 
     req->data = ctx;
     /* 'io_remote' will be opened, increase refcount. */
     ++ctx->ref_count;
 
-    if (uv_tcp_connect(req, &ctx->io_remote,
-            (struct sockaddr*) &remote_addr, on_remote_connected) != 0) {
+    if (uv_tcp_connect(req, &ctx->io_remote, addr, on_remote_connected) != 0) {
         xlog_error("connect remote failed immediately.");
 
         uv_close((uv_handle_t*) &ctx->io_remote, on_io_closed);
@@ -239,6 +236,27 @@ static int connect_remote(client_ctx_t* ctx, u8_t* addr, u16_t port)
 
     ctx->stage = STAGE_CONNECT;
     return 0;
+}
+
+static void on_domain_resolved(uv_getaddrinfo_t* req, int status, struct addrinfo* res)
+{
+    client_ctx_t* ctx = req->data;
+
+    if (status < 0) {
+        xlog_debug("resolve domain failed: %s.", uv_err_name(status));
+        uv_close((uv_handle_t*) &ctx->io_server, on_io_closed);
+
+    } else {
+        xlog_debug("resolve result [%s], connect it.", addr_to_str(res->ai_addr));
+
+        if (connect_remote(ctx, res->ai_addr) != 0) {
+            /* connect failed immediately, just close this connection. */
+            uv_close((uv_handle_t*) &ctx->io_server, on_io_closed);
+        }
+        uv_freeaddrinfo(res);
+    }
+
+    xlist_erase(&addrinfo_reqs, xlist_value_iter(req));
 }
 
 static void on_server_write(uv_write_t* req, int status)
@@ -308,39 +326,65 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                 convert_nonce((u8_t*) buf->base);
                 cryptox.init(&ctx->ectx, cryptox_key, (u8_t*) buf->base);
 
+                /* pending this 'iob'. */
+                iob->idx = sizeof(cmd_t) + MAX_NONCE_LEN;
+                iob->len = (u32_t) (nread - sizeof(cmd_t) - MAX_NONCE_LEN);
+                ctx->pending_iob = iob;
+
                 if (!is_valid_cmd(cmd)) {
                     xlog_warn("got an error packet (content) from proxy client.");
                     uv_close((uv_handle_t*) stream, on_io_closed);
 
                 } else if (cmd->cmd == CMD_CONNECT_IPV4) {
-                    xlog_debug("got CONNECT_IPV4 cmd (%s) from proxy client, process.",
-                        maddr_to_str(cmd));
+                    struct sockaddr_in remote;
 
-                    /* stop reading from server until remote connected.
-                     * so we can't know this connection is closed (by server) or not
-                     * before remote connected, TODO.
-                     */
+                    remote.sin_family = AF_INET;
+                    remote.sin_port = cmd->i.port;
+
+                    memcpy(&remote.sin_addr, &cmd->i.addr, 4);
+                    xlog_debug("got CONNECT_IPV4 cmd (%s) from proxy client, process.",
+                        addr_to_str(&remote));
+
+                    /* stop reading from server until remote connected. */
                     uv_read_stop(stream);
 
-                    if (connect_remote(ctx, cmd->i.addr, cmd->i.port) != 0) {
+                    if (connect_remote(ctx, (struct sockaddr*) &remote) != 0) {
                         /* connect failed immediately, just close this connection. */
                         uv_close((uv_handle_t*) stream, on_io_closed);
                     }
 
-                    if (nread > sizeof(cmd_t) + MAX_NONCE_LEN) {
-                        xlog_debug("pending the remaining iob.");
+                } else if (cmd->cmd == CMD_CONNECT_DOMAIN) {
+                    struct addrinfo hints;
+                    char portstr[8];
+                    uv_getaddrinfo_t* req = xlist_alloc_back(&addrinfo_reqs);
 
-                        iob->idx = sizeof(cmd_t) + MAX_NONCE_LEN;
-                        iob->len = (u32_t) (nread - sizeof(cmd_t) - MAX_NONCE_LEN);
-                        /* 'iob' free later. */
-                        ctx->pending_iob = iob;
-                        return;
+                    hints.ai_family = AF_INET;
+                    hints.ai_socktype = SOCK_STREAM;
+                    hints.ai_protocol = IPPROTO_TCP;
+                    hints.ai_flags = 0;
+
+                    req->data = ctx;
+                    sprintf(portstr, "%d", ntohs(cmd->m.port));
+                    xlog_debug("got CONNECT_DOMAIN cmd (%s) from proxy client, process.",
+                        maddr_to_str(cmd));
+
+                    /* stop reading from server until remote connected. */
+                    uv_read_stop(stream);
+
+                    if (uv_getaddrinfo(loop, req, on_domain_resolved,
+                            (char*) cmd->m.domain, portstr, &hints) != 0) {
+                        xlog_error("uv_getaddrinfo (%s) failed immediately.", cmd->m.domain);
+
+                        uv_close((uv_handle_t*) stream, on_io_closed);
+                        xlist_erase(&addrinfo_reqs, xlist_value_iter(req));
                     }
 
                 } else {
                     xlog_warn("got an error command from proxy client.");
                     uv_close((uv_handle_t*) stream, on_io_closed);
                 }
+                /* 'iob' free later. */
+                return;
 
             } else {
                 xlog_warn("got an error packet (length) from server.");
@@ -620,12 +664,14 @@ int main(int argc, char** argv)
     xlist_init(&client_ctxs, sizeof(client_ctx_t), NULL);
     xlist_init(&io_buffers, sizeof(io_buf_t), NULL);
     xlist_init(&conn_reqs, sizeof(uv_connect_t), NULL);
+    xlist_init(&addrinfo_reqs, sizeof(uv_getaddrinfo_t), NULL);
 
     uv_timer_init(loop, &reconnect_timer);
 
     new_server_connection(NULL);
     uv_run(loop, UV_RUN_DEFAULT);
 
+    xlist_destroy(&addrinfo_reqs);
     xlist_destroy(&conn_reqs);
     xlist_destroy(&io_buffers);
     xlist_destroy(&client_ctxs);
