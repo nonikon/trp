@@ -20,7 +20,7 @@
 #define KEEPIDLE_TIME       (40) /* s */
 
 enum {
-    STAGE_MESSAGE, /* waiting for socks5-client select message */
+    STAGE_MESSAGE, /* waiting for socks5-client select message or socks4-client command */
     STAGE_COMMAND, /* waiting for socks5-client command */
     STAGE_CONNECT, /* remote connecting */
     STAGE_FORWARD, /* remote connected */
@@ -29,13 +29,13 @@ enum {
 /*  --------------         --------------         --------------
  * | proxy-server | <---> | proxy-client | <---> | applications |
  *  --------------         --------------         --------------
- *                         (socks5-server)        (socks5_client)
+ *                         (socks-server)         (socks_client)
  *
  * SOCKS5 Protocol: https://www.ietf.org/rfc/rfc1928.txt
  */
 
 typedef struct {
-    uv_tcp_t io_sclient;    /* socks5-client */
+    uv_tcp_t io_sclient;    /* SOCKS-client */
     uv_tcp_t io_xserver;    /* proxy-server */
     cmd_t dest_addr;
     crypto_ctx_t ectx;
@@ -100,7 +100,7 @@ static void on_xserver_write(uv_write_t* req, int status)
             (uv_stream_t*) &ctx->io_xserver) == 0) {
         xlog_debug("proxy server write queue cleared.");
 
-        /* proxy server write queue cleared, start reading from socks5 client. */
+        /* proxy server write queue cleared, start reading from SOCKS client. */
         uv_read_start((uv_stream_t*) &ctx->io_sclient,
             on_iobuf_alloc, on_sclient_read);
         ctx->sclient_blocked = 0;
@@ -131,9 +131,9 @@ static void on_xserver_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
 
         if (uv_stream_get_write_queue_size(
                 (uv_stream_t*) &ctx->io_sclient) > MAX_WQUEUE_SIZE) {
-            xlog_debug("socks5 client write queue pending.");
+            xlog_debug("SOCKS client write queue pending.");
 
-            /* stop reading from proxy server until socks5 client write queue cleared. */
+            /* stop reading from proxy server until SOCKS client write queue cleared. */
             uv_read_stop(stream);
             ctx->xserver_blocked = 1;
         }
@@ -271,9 +271,9 @@ static void on_sclient_write(uv_write_t* req, int status)
 
     if (ctx->xserver_blocked && uv_stream_get_write_queue_size(
             (uv_stream_t*) &ctx->io_sclient) == 0) {
-        xlog_debug("socks5 client write queue cleared.");
+        xlog_debug("SOCKS client write queue cleared.");
 
-        /* socks5 client write queue cleared, start reading from proxy server. */
+        /* SOCKS client write queue cleared, start reading from proxy server. */
         uv_read_start((uv_stream_t*) &ctx->io_xserver,
             on_iobuf_alloc, on_xserver_read);
         ctx->xserver_blocked = 0;
@@ -282,42 +282,13 @@ static void on_sclient_write(uv_write_t* req, int status)
     xlist_erase(&io_buffers, xlist_value_iter(iob));
 }
 
-static void on_sclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
+/* SOCKS4/SOCKS5 handshake */
+static int socks_handshake(sserver_ctx_t* ctx, uv_buf_t* buf)
 {
-    sserver_ctx_t* ctx = stream->data;
-    io_buf_t* iob = xcontainer_of(buf->base, io_buf_t, buffer);
+    if (ctx->stage == STAGE_MESSAGE) {
 
-    if (nread > 0) {
-        uv_buf_t wbuf;
-
-        wbuf.base = buf->base;
-        wbuf.len = nread;
-
-        iob->wreq.data = ctx;
-
-        if (ctx->stage == STAGE_FORWARD) {
-
-            xlog_debug("recved %zd bytes from socks5 client, forward.", nread);
-
-            cryptox.encrypt(&ctx->ectx, (u8_t*) wbuf.base, wbuf.len);
-
-            uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_xserver,
-                &wbuf, 1, on_xserver_write);
-
-            if (uv_stream_get_write_queue_size(
-                    (uv_stream_t*) &ctx->io_xserver) > MAX_WQUEUE_SIZE) {
-                xlog_debug("proxy server write queue pending.");
-
-                /* stop reading from socks5 client until proxy server write queue cleared. */
-                uv_read_stop(stream);
-                ctx->sclient_blocked = 1;
-            }
-
-            /* 'iob' free later. */
-            return;
-        }
-
-        if (ctx->stage == STAGE_MESSAGE) {
+        /* 'VER' == 0x05 (SOCKS5) */
+        if (buf->base[0] == 0x05) {
             /* SOCKS5 client request:
              * +-----+----------+----------+
              * | VER | NMETHODS | METHODS  |
@@ -339,166 +310,266 @@ static void on_sclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
              *   X'FF' NO ACCEPTABLE METHODS
              */
 
-            /* parse request and construct response. */
-            if (wbuf.len > 2
-                    && wbuf.base[0] == 5   /* 'VER' == 0x05 */
-                    && wbuf.base[1] > 0) { /* 'NMETHODS' > 0 */
-                xlog_debug("got select message from socks5 client,"
-                           " %d bytes, %d methods.", wbuf.len, wbuf.base[1]);
-
-                /* select METHOD X'0'. */
-                wbuf.base[1] = 0x00;
-                wbuf.len = 2;
-                /* write response to socks5 client. */
-                uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_sclient,
-                    &wbuf, 1, on_sclient_write);
-
-                ctx->stage = STAGE_COMMAND;
-                /* 'iob' free later. */
-                return;
-
-            } else {
-                xlog_warn("got an error message from socks5 client.");
-
-                uv_close((uv_handle_t*) stream, on_io_closed);
+            if (buf->len < 3 || buf->base[1] == 0) { /* 'NMETHODS' == 0 */
+                xlog_warn("invalid socks5 select message from client.");
+                return -1;
             }
 
-        } else if (ctx->stage == STAGE_COMMAND) {
-            /* SOCKS5 client request:
-             * +-----+-----+-------+------+----------+----------+
-             * | VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
-             * +-----+-----+-------+------+----------+----------+
-             * |  1  |  1  | X'00' |  1   | Variable |    2     |
-             * +-----+-----+-------+------+----------+----------+
-             * SOCKS5 server response:
-             * +-----+-----+-------+------+----------+----------+
-             * | VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
-             * +-----+-----+-------+------+----------+----------+
-             * |  1  |  1  | X'00' |  1   | Variable |    2     |
-             * +-----+-----+-------+------+----------+----------+
-             * CMD:
-             *   X'01' CONNECT
-             *   X'02' BIND
-             *   X'03' UDP ASSOCIATE
-             * ATYP:
-             *   X'01' IP V4 address
-             *   X'03' DOMAINNAME
-             *   X'04' IP V6 address
-             * REP:
-             *   X'00' succeeded
-             *   X'01' general SOCKS server failure
-             *   X'02' connection not allowed by ruleset
-             *   X'03' Network unreachable
-             *   X'04' Host unreachable
-             *   X'05' Connection refused
-             *   X'06' TTL expired
-             *   X'07' Command not supported
-             *   X'08' Address type not supported
-             *   X'09' to X'FF' unassigned
+            xlog_debug("socks5 select message from client: %d bytes, %d methods.",
+                buf->len, buf->base[1]);
+
+            buf->base[1] = 0x00; /* select 'METHOD' 0x00 */
+            buf->len = 2;
+
+            ctx->stage = STAGE_COMMAND;
+            return 0;
+        }
+
+        /* 'VER' == 0x04 (SOCKS4) */
+        if (buf->base[0] == 0x04) {
+            /* SOCKS4 client request:
+             * +----+----+---------+-------+----------+------+
+             * | VN | CD | DSTPORT | DSTIP |  USERID  | NULL |
+             * +----+----+---------+-------+----------+------+
+             * | 1  | 1  |    2    |   4   | Variable |   1  |
+             * +----+----+---------+-------+----------+------+
+             *  SOCKS4 server response:
+             * +----+----+---------+-------+
+             * | VN | CD | DSTPORT | DSTIP |
+             * +----+----+---------+-------+
+             * | 1  | 1  |    2    |   4   |
+             * +----+----+---------+-------+
              */
 
-            /* parse request and construct response. */
-            if (wbuf.len > 7
-                    && wbuf.base[0] == 5     /* 'VER' == 0x05 */
-                    && wbuf.base[2] == 0) {  /* 'RSV' == 0x00 */
+            if (buf->len < 9 || buf->base[1] != 0x01) {/* 'CD' != 0x01 (CONNECT) */
+                xlog_warn("invalid socks4 command from client.");
+                return -1;
+            }
 
-                if (wbuf.base[1] == 1) {     /* 'CMD' == 0x01 (CONNECT) */
+            ctx->dest_addr.tag = CMD_TAG;
+            ctx->dest_addr.major = VERSION_MAJOR;
+            ctx->dest_addr.minor = VERSION_MINOR;
+            ctx->dest_addr.cmd = CMD_CONNECT_IPV4;
 
-                    if (wbuf.base[3] == 1) { /* 'ATYP' == 0x01 (IPV4) */
+            memcpy(&ctx->dest_addr.i.port, buf->base + 2, 2);
+            memcpy(&ctx->dest_addr.i.addr, buf->base + 4, 4);
 
-                        if (wbuf.len == 6 + 4) {
-                            ctx->dest_addr.tag = CMD_TAG;
-                            ctx->dest_addr.major = VERSION_MAJOR;
-                            ctx->dest_addr.minor = VERSION_MINOR;
-                            ctx->dest_addr.cmd = CMD_CONNECT_IPV4;
+            xlog_debug("got socks4 connect cmd, to [%s].", maddr_to_str(&ctx->dest_addr));
 
-                            memcpy(&ctx->dest_addr.i.addr, wbuf.base + 4, 4);
-                            memcpy(&ctx->dest_addr.i.port, wbuf.base + 8, 2);
+            buf->base[0] = 0x00; /* set 'VN' to 0x00 */
+            buf->len = 8;
 
-                            wbuf.base[1] = 0x00;
-                        } else {
-                            xlog_warn("socks5 request packet len error .");
-                            wbuf.base[1] = 0x01;
-                        }
+            if (connect_xserver(ctx) == 0) {
+                /* assume that proxy server was connected successfully. */
 
-                    } else if (wbuf.base[3] == 3) { /* 'ATYP' == 0x03 (DOMAINNAME) */
+                /* stop reading from socks client until proxy server connected. */
+                uv_read_stop((uv_stream_t*) &ctx->io_sclient);
 
-                        if ((u8_t) wbuf.base[4] < MAX_DOMAIN_LEN
-                                && wbuf.len == 6 + 1 + (u8_t) wbuf.base[4]) {
-                            ctx->dest_addr.tag = CMD_TAG;
-                            ctx->dest_addr.major = VERSION_MAJOR;
-                            ctx->dest_addr.minor = VERSION_MINOR;
-                            ctx->dest_addr.cmd = CMD_CONNECT_DOMAIN;
-                            ctx->dest_addr.m.domain[(u8_t) wbuf.base[4]] = 0;
+                buf->base[1] = 90; /* set 'CD' to 90 */
+                return 0;
+            }
 
-                            memcpy(&ctx->dest_addr.m.domain, wbuf.base + 5, (u8_t) wbuf.base[4]);
-                            memcpy(&ctx->dest_addr.m.port, wbuf.base + (u8_t) wbuf.base[4] + 5, 2);
+            /* connect proxy server failed immediately. */
+            buf->base[1] = 91; /* set 'CD' to 91 */
+            return 1;
+        }
 
-                            wbuf.base[1] = 0x00;
-                        } else {
-                            xlog_warn("socks5 request packet len error .");
-                            wbuf.base[1] = 0x01;
-                        }
+        xlog_warn("invalid socks protocol version [%d].", buf->base[0]);
+        return -1;
+    }
 
-                    } else {
-                        /* connect ipv6 not supported. */
-                        xlog_warn("unsupported socks5 address type %d.", wbuf.base[3]);
-                        wbuf.base[1] = 0x08;
-                    }
+    if (ctx->stage == STAGE_COMMAND) {
+        /* SOCKS5 client request:
+         * +-----+-----+-------+------+----------+----------+
+         * | VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
+         * +-----+-----+-------+------+----------+----------+
+         * |  1  |  1  | X'00' |  1   | Variable |    2     |
+         * +-----+-----+-------+------+----------+----------+
+         * SOCKS5 server response:
+         * +-----+-----+-------+------+----------+----------+
+         * | VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
+         * +-----+-----+-------+------+----------+----------+
+         * |  1  |  1  | X'00' |  1   | Variable |    2     |
+         * +-----+-----+-------+------+----------+----------+
+         * CMD:
+         *   X'01' CONNECT
+         *   X'02' BIND
+         *   X'03' UDP ASSOCIATE
+         * ATYP:
+         *   X'01' IP V4 address
+         *   X'03' DOMAINNAME
+         *   X'04' IP V6 address
+         * REP:
+         *   X'00' succeeded
+         *   X'01' general SOCKS server failure
+         *   X'02' connection not allowed by ruleset
+         *   X'03' Network unreachable
+         *   X'04' Host unreachable
+         *   X'05' Connection refused
+         *   X'06' TTL expired
+         *   X'07' Command not supported
+         *   X'08' Address type not supported
+         *   X'09' to X'FF' unassigned
+         */
 
-                    if (!wbuf.base[1]) { /* no error */
-                        xlog_debug("got socks5 connect cmd, to [%s].",
-                            maddr_to_str(&ctx->dest_addr));
+        if (buf->len < 7
+                || buf->base[0] != 0x05    /* 'VER' != 0x05 */
+                || buf->base[2] != 0x00) { /* 'RSV' != 0x00 */
+            xlog_warn("invalid socks5 request from client.");
+            return -1;
+        }
 
-                        /* stop reading from socks5 client. */
-                        uv_read_stop(stream);
+        if (buf->base[1] == 0x01) { /* 'CMD' == 0x01 (CONNECT) */
 
-                        if (connect_xserver(ctx) == 0) {
-#if 0
-                            struct sockaddr_in d;
-                            int l = sizeof(d);
+            if (buf->base[3] == 0x01) { /* 'ATYP' == 0x01 (IPV4) */
 
-                            /* get local address. */
-                            uv_tcp_getsockname(&ctx->io_xserver, (struct sockaddr*) &d, &l);
-                            /* set BND.ADDR and BND.PORT */
-                            memcpy(wbuf.base + 4, &d.sin_addr, 4);
-                            memcpy(wbuf.base + 8, &d.sin_port, 2);
+                if (buf->len == 6 + 4) {
+                    ctx->dest_addr.tag = CMD_TAG;
+                    ctx->dest_addr.major = VERSION_MAJOR;
+                    ctx->dest_addr.minor = VERSION_MINOR;
+                    ctx->dest_addr.cmd = CMD_CONNECT_IPV4;
 
-                            // xlog_debug("local addr [%s].", addr_to_str(&d));
-#else
-                            memset(wbuf.base + 4, 0, 6);
-#endif
-                            /* assume that proxy server was connected successfully. */
-                            wbuf.base[3] = 1;
-                            wbuf.len = 6 + 4;
-                        } else {
-                            /* connect proxy server failed immediately. */
-                            wbuf.base[1] = 0x03;
-                        }
-                    }
+                    memcpy(&ctx->dest_addr.i.addr, buf->base + 4, 4);
+                    memcpy(&ctx->dest_addr.i.port, buf->base + 8, 2);
 
+                    buf->base[1] = 0x00;
                 } else {
-                    /* 'BIND' and 'UDP ASSOCIATE' not supported. */
-                    xlog_warn("unsupported socks5 command %d.", wbuf.base[1]);
-                    wbuf.base[1] = 0x07;
+                    xlog_warn("socks5 request packet len error.");
+                    buf->base[1] = 0x01;
                 }
 
-                /* write response to socks5 client. */
-                uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_sclient,
-                    &wbuf, 1, on_sclient_write);
+            } else if (buf->base[3] == 0x03) { /* 'ATYP' == 0x03 (DOMAINNAME) */
 
-                /* 'iob' free later. */
-                return;
+                if ((u8_t) buf->base[4] < MAX_DOMAIN_LEN
+                        && buf->len == 6 + 1 + (u8_t) buf->base[4]) {
+                    ctx->dest_addr.tag = CMD_TAG;
+                    ctx->dest_addr.major = VERSION_MAJOR;
+                    ctx->dest_addr.minor = VERSION_MINOR;
+                    ctx->dest_addr.cmd = CMD_CONNECT_DOMAIN;
+                    ctx->dest_addr.m.domain[(u8_t) buf->base[4]] = 0;
+
+                    memcpy(&ctx->dest_addr.m.domain, buf->base + 5, (u8_t) buf->base[4]);
+                    memcpy(&ctx->dest_addr.m.port, buf->base + (u8_t) buf->base[4] + 5, 2);
+
+                    buf->base[1] = 0x00;
+                } else {
+                    xlog_warn("socks5 request packet len error.");
+                    buf->base[1] = 0x01;
+                }
 
             } else {
-                xlog_warn("got an error request from socks5 client.");
-
-                uv_close((uv_handle_t*) stream, on_io_closed);
+                /* connect ipv6 not supported. */
+                xlog_warn("unsupported socks5 address type %d.", buf->base[3]);
+                buf->base[1] = 0x08;
             }
+
+            if (buf->base[1] == 0x00) { /* no error */
+                xlog_debug("got socks5 connect cmd, to [%s].", maddr_to_str(&ctx->dest_addr));
+
+                if (connect_xserver(ctx) == 0) {
+                    /* assume that proxy server was connected successfully. */
+#if 0
+                    struct sockaddr_in d;
+                    int l = sizeof(d);
+
+                    /* get local address. */
+                    uv_tcp_getsockname(&ctx->io_xserver, (struct sockaddr*) &d, &l);
+                    /* set BND.ADDR and BND.PORT */
+                    memcpy(buf->base + 4, &d.sin_addr, 4);
+                    memcpy(buf->base + 8, &d.sin_port, 2);
+
+                    xlog_debug("local addr [%s].", addr_to_str(&d));
+#else
+                    memset(buf->base + 4, 0, 6);
+#endif
+
+                    /* stop reading from socks client until proxy server connected. */
+                    uv_read_stop((uv_stream_t*) &ctx->io_sclient);
+
+                    buf->base[3] = 1; /* set response 'ATYP' to IPV4 */
+                    buf->len = 6 + 4;
+                    return 0;
+                }
+
+                /* connect proxy server failed immediately. */
+                buf->base[1] = 0x03;
+            }
+
+        } else {
+            /* 'BIND' and 'UDP ASSOCIATE' not supported. */
+            xlog_warn("unsupported socks5 command %d.", buf->base[1]);
+            buf->base[1] = 0x07;
+        }
+
+        return 1;
+    }
+
+    /* can't reach here. */
+    xlog_error("unexpected state happen.");
+    return -1;
+}
+
+static void on_sclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
+{
+    sserver_ctx_t* ctx = stream->data;
+    io_buf_t* iob = xcontainer_of(buf->base, io_buf_t, buffer);
+
+    if (nread > 0) {
+        uv_buf_t wbuf;
+
+        wbuf.base = buf->base;
+        wbuf.len = nread;
+
+        iob->wreq.data = ctx;
+
+        if (ctx->stage == STAGE_FORWARD) {
+
+            xlog_debug("recved %zd bytes from SOCKS client, forward.", nread);
+
+            cryptox.encrypt(&ctx->ectx, (u8_t*) wbuf.base, wbuf.len);
+
+            uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_xserver,
+                &wbuf, 1, on_xserver_write);
+
+            if (uv_stream_get_write_queue_size(
+                    (uv_stream_t*) &ctx->io_xserver) > MAX_WQUEUE_SIZE) {
+                xlog_debug("proxy server write queue pending.");
+
+                /* stop reading from SOCKS client until proxy server write queue cleared. */
+                uv_read_stop(stream);
+                ctx->sclient_blocked = 1;
+            }
+
+            /* 'iob' free later. */
+            return;
+        }
+
+        switch (socks_handshake(ctx, &wbuf)) {
+        case 0:
+            /* write response to socks client. */
+            uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_sclient,
+                &wbuf, 1, on_sclient_write);
+
+            /* 'iob' free later. */
+            return;
+        case 1:
+            /* write response to socks client. */
+            uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_sclient,
+                &wbuf, 1, on_sclient_write);
+
+            /* close this connection. */
+            uv_close((uv_handle_t*) stream, on_io_closed);
+
+            /* 'iob' free later. */
+            return;
+        case -1:
+            /* error packet from client, close connection. */
+            uv_close((uv_handle_t*) stream, on_io_closed);
+            break;
         }
 
     } else if (nread < 0) {
-        xlog_debug("disconnected from socks5 client: %s, stage %d.",
+        xlog_debug("disconnected from SOCKS client: %s, stage %d.",
             uv_err_name((int) nread), ctx->stage);
 
         if (ctx->stage == STAGE_FORWARD) {
@@ -536,7 +607,7 @@ static void on_sclient_connect(uv_stream_t* stream, int status)
     ctx->stage = STAGE_MESSAGE;
 
     if (uv_accept(stream, (uv_stream_t*) &ctx->io_sclient) == 0) {
-        xlog_debug("a socks5 client connected.");
+        xlog_debug("a SOCKS client connected.");
 
         uv_tcp_init(loop, &ctx->io_xserver);
         uv_read_start((uv_stream_t*) &ctx->io_sclient,
@@ -556,7 +627,7 @@ static void usage(const char* s)
     fprintf(stderr, "  -x <ip:port>  "
         "proxy server connect to. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
     fprintf(stderr, "  -b <ip:port>  "
-        "socks5 server listen at. (default: 127.0.0.1:%d)\n", DEF_SSERVER_PORT);
+        "SOCKS4/SOCKS5 server listen at. (default: 127.0.0.1:%d)\n", DEF_SSERVER_PORT);
     fprintf(stderr, "  -d <devid>    "
         "device id of client connect to. (default: not connect client)\n");
     fprintf(stderr, "  -m <method>   "
@@ -708,7 +779,7 @@ int main(int argc, char** argv)
     xlist_init(&conn_reqs, sizeof(uv_connect_t), NULL);
 
     xlog_info("proxy server [%s].", addr_to_str(&xserver_addr));
-    xlog_info("socks5 server listen at [%s]...", addr_to_str(&saddr));
+    xlog_info("SOCKS server listen at [%s]...", addr_to_str(&saddr));
     uv_run(loop, UV_RUN_DEFAULT);
 
     xlist_destroy(&conn_reqs);
