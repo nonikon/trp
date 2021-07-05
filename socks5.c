@@ -142,7 +142,8 @@ static void on_xserver_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
          *'on_sclient_write' callback will do it.
          */
     } else if (nread < 0) {
-        xlog_debug("disconnected from proxy server: %s.", uv_err_name(nread));
+        xlog_debug("disconnected from proxy server: %s.",
+            uv_err_name((int) nread));
 
         uv_close((uv_handle_t*) stream, on_io_closed);
         uv_close((uv_handle_t*) &ctx->io_sclient, on_io_closed);
@@ -497,7 +498,8 @@ static void on_sclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
         }
 
     } else if (nread < 0) {
-        xlog_debug("disconnected from socks5 client: %s.", uv_err_name(nread));
+        xlog_debug("disconnected from socks5 client: %s, stage %d.",
+            uv_err_name((int) nread), ctx->stage);
 
         if (ctx->stage == STAGE_FORWARD) {
             uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);

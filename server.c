@@ -174,7 +174,7 @@ static void on_client_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
             peer_t* client = xcontainer_of(stream, peer_t, io);
 
             crypto.init(&client->edctx, crypto_key, (u8_t*) buf->base);
-            crypto.decrypt(&client->edctx, (u8_t*) cmd, nread - MAX_NONCE_LEN);
+            crypto.decrypt(&client->edctx, (u8_t*) cmd, (u32_t) (nread - MAX_NONCE_LEN));
 
             if (!is_valid_cmd(cmd) || !is_valid_devid(cmd->d.devid)) {
                 xlog_warn("got an error packet (content) from client.");
@@ -234,7 +234,7 @@ static void on_client_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
         }
 
     } else if (nread < 0) {
-        xlog_debug("disconnected from peer: %s.", uv_err_name(nread));
+        xlog_debug("disconnected from peer: %s.", uv_err_name((int) nread));
 
         if (ctx != NULL) {
             uv_close((uv_handle_t*) &ctx->io_xclient, on_xclient_closed);
@@ -309,7 +309,8 @@ static void on_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
 
         /* 'iob' free later. */
     } else if (nread < 0) {
-        xlog_debug("disconnected from remote: %s.", uv_err_name(nread));
+        xlog_debug("disconnected from remote: %s.",
+            uv_err_name((int) nread));
 
         uv_close((uv_handle_t*) &ctx->io_xclient, on_xclient_closed);
         uv_close((uv_handle_t*) stream, on_peer_closed);
@@ -399,7 +400,7 @@ static int connect_remote(xserver_ctx_t* ctx, struct sockaddr* addr)
     return 0;
 }
 
-static void on_domain_resolved(uv_getaddrinfo_t* req, int status, struct addrinfo *res)
+static void on_domain_resolved(uv_getaddrinfo_t* req, int status, struct addrinfo* res)
 {
     xserver_ctx_t* ctx = req->data;
 
@@ -414,7 +415,6 @@ static void on_domain_resolved(uv_getaddrinfo_t* req, int status, struct addrinf
             /* connect failed immediately, just close this connection. */
             uv_close((uv_handle_t*) &ctx->io_xclient, on_xclient_closed);
         }
-
         uv_freeaddrinfo(res);
     }
 
@@ -544,7 +544,7 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
 
                 /* pending this 'iob' always (nonce will be used when remote connected). */
                 iob->idx = sizeof(cmd_t) + MAX_NONCE_LEN;
-                iob->len = nread - sizeof(cmd_t) - MAX_NONCE_LEN;
+                iob->len = (u32_t) (nread - sizeof(cmd_t) - MAX_NONCE_LEN);
                 ctx->pending_iob = iob;
 
                 if (!is_valid_cmd(cmd)) {
@@ -654,7 +654,7 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
 
     } else if (nread < 0) {
         xlog_debug("disconnected from proxy client: %s, stage %d.",
-            uv_err_name(nread), ctx->stage);
+            uv_err_name((int) nread), ctx->stage);
 
         if (ctx->stage == STAGE_FORWARD) {
             uv_close((uv_handle_t*) &ctx->peer->io, on_peer_closed);

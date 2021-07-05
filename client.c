@@ -153,7 +153,8 @@ static void on_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
          *'on_server_write' callback will do it.
          */
     } else if (nread < 0) {
-        xlog_debug("disconnected from remote: %s.", uv_err_name(nread));
+        xlog_debug("disconnected from remote: %s.",
+            uv_err_name((int) nread));
 
         uv_close((uv_handle_t*) stream, on_io_closed);
         uv_close((uv_handle_t*) &ctx->io_server, on_io_closed);
@@ -302,7 +303,7 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                 cmd_t* cmd = (cmd_t*) (buf->base + MAX_NONCE_LEN);
 
                 cryptox.init(&ctx->dctx, cryptox_key, (u8_t*) buf->base);
-                cryptox.decrypt(&ctx->dctx, (u8_t*) cmd, nread - MAX_NONCE_LEN);
+                cryptox.decrypt(&ctx->dctx, (u8_t*) cmd, (u32_t) (nread - MAX_NONCE_LEN));
 
                 convert_nonce((u8_t*) buf->base);
                 cryptox.init(&ctx->ectx, cryptox_key, (u8_t*) buf->base);
@@ -330,7 +331,7 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                         xlog_debug("pending the remaining iob.");
 
                         iob->idx = sizeof(cmd_t) + MAX_NONCE_LEN;
-                        iob->len = nread - sizeof(cmd_t) - MAX_NONCE_LEN;
+                        iob->len = (u32_t) (nread - sizeof(cmd_t) - MAX_NONCE_LEN);
                         /* 'iob' free later. */
                         ctx->pending_iob = iob;
                         return;
@@ -353,7 +354,7 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
 
     } else if (nread < 0) {
         xlog_debug("disconnected from server: %s, stage %d.",
-            uv_err_name(nread), ctx->stage);
+            uv_err_name((int) nread), ctx->stage);
 
         if (ctx->stage == STAGE_FORWARD) {
             uv_close((uv_handle_t*) &ctx->io_remote, on_io_closed);
@@ -409,7 +410,7 @@ static void report_device_id(client_ctx_t* ctx)
 
 static void on_server_connected(uv_connect_t* req, int status)
 {
-    static int retry_displayed;
+    static int retry_displayed = 1;
 
     client_ctx_t* ctx = req->data;
 

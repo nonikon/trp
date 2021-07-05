@@ -176,7 +176,7 @@ int crypto_init(crypto_t* c, int method)
 void derive_key(u8_t key[16], const char* str)
 {
     // TODO, MD5?
-    u32_t h = strlen(str);
+    u32_t h = (u32_t) strlen(str);
     u32_t i;
 
     if (h >= 16) {

@@ -75,7 +75,7 @@ static void buf_add_printf(char* buf, unsigned* len, const char* fmt, ...)
 
 static void buf_add_string(char* buf, unsigned* len, const char* src)
 {
-    unsigned l = strlen(src);
+    unsigned l = (unsigned) strlen(src);
 
     memcpy(buf + *len, src, l);
     *len += l;
@@ -171,7 +171,7 @@ static int on_http_url(http_parser* parser, const char* at, size_t length)
 
     if (!req->url)
         req->url = (char*) at;
-    req->url_len += length;
+    req->url_len += (unsigned) length;
     return 0;
 }
 
@@ -185,9 +185,9 @@ static int on_http_field(http_parser* parser, const char* at, size_t length)
         hdr = xlist_alloc_back(&req->headers);
         hdr->field = (char*) at;
         hdr->value = NULL;
-        hdr->field_len = length;
+        hdr->field_len = (unsigned) length;
     } else {
-        hdr->field_len += length;
+        hdr->field_len += (unsigned) length;
     }
     return 0;
 }
@@ -200,9 +200,9 @@ static int on_http_value(http_parser* parser, const char* at, size_t length)
     /* no need to check whether 'hdr' is valid. */
     if (!hdr->value) {
         hdr->value = (char*) at;
-        hdr->value_len = length;
+        hdr->value_len = (unsigned) length;
     } else {
-        hdr->value_len += length;
+        hdr->value_len += (unsigned) length;
     }
     return 0;
 }
@@ -214,7 +214,7 @@ static int on_http_body(http_parser* parser, const char* at, size_t length)
 
     if (!req->body)
         req->body = (char*) at;
-    req->body_len += length;
+    req->body_len += (unsigned) length;
     return 0;
 }
 
@@ -261,7 +261,7 @@ static void on_read(uv_stream_t* client, ssize_t nread, const uv_buf_t* buf)
     http_req_t* req = client->data;
 
     if (nread > 0) {
-        req->buf_len += nread;
+        req->buf_len += (unsigned) nread;
 
         if (req->buf_len < sizeof(req->buf)) {
             http_parser_execute(&req->parser,
@@ -303,7 +303,8 @@ static void on_read(uv_stream_t* client, ssize_t nread, const uv_buf_t* buf)
         }
 
     } else if (nread < 0) {
-        xlog_debug("an client disconnected: %s.", uv_err_name(nread));
+        xlog_debug("an client disconnected: %s.",
+            uv_err_name((int) nread));
 
         uv_close((uv_handle_t*) client, on_closed);
     }
