@@ -35,9 +35,16 @@ enum {
  */
 
 typedef struct {
+    uv_write_t wreq;
+    u32_t idx;
+    u32_t len;
+    char buffer[MAX_SOCKBUF_SIZE - sizeof(uv_write_t) - 8];
+} io_buf_t;
+
+typedef struct {
     uv_tcp_t io_sclient;    /* SOCKS-client */
     uv_tcp_t io_xserver;    /* proxy-server */
-    cmd_t dest_addr;
+    io_buf_t* pending_iob;  /* dest address (connect command) */
     crypto_ctx_t ectx;
     crypto_ctx_t dctx;
     u8_t ref_count;         /* increase when 'io_xserver' or 'io_sclient' opened, decrease when closed */
@@ -45,11 +52,6 @@ typedef struct {
     u8_t xserver_blocked;
     u8_t stage;
 } sserver_ctx_t;
-
-typedef struct {
-    uv_write_t wreq;
-    char buffer[MAX_SOCKBUF_SIZE - sizeof(uv_write_t)];
-} io_buf_t;
 
 static uv_loop_t* loop;
 
@@ -84,6 +86,9 @@ static void on_io_closed(uv_handle_t* handle)
     if (ctx->ref_count > 1) {
         --ctx->ref_count;
     } else {
+        if (ctx->pending_iob) {
+            xlist_erase(&io_buffers, xlist_value_iter(ctx->pending_iob));
+        }
         xlist_erase(&sserver_ctxs, xlist_value_iter(ctx));
 
         xlog_debug("current %zd ctxs, %zd iobufs.",
@@ -158,12 +163,12 @@ static void on_xserver_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
     }
 }
 
-static void send_connect_cmd(sserver_ctx_t* ctx)
+static void init_connect_cmd(sserver_ctx_t* ctx,
+                u8_t code, u8_t* port, u8_t* addr, unsigned addrlen)
 {
     io_buf_t* iob = xlist_alloc_back(&io_buffers);
     u8_t* pbuf = (u8_t*) iob->buffer;
     cmd_t* cmd;
-    uv_buf_t wbuf;
     u8_t dnonce[16];
 
     if (is_valid_devid(device_id)) {
@@ -190,7 +195,16 @@ static void send_connect_cmd(sserver_ctx_t* ctx)
 
     cmd = (cmd_t*) (pbuf + MAX_NONCE_LEN);
 
-    memcpy(cmd, &ctx->dest_addr, sizeof(cmd_t));
+    cmd->tag = CMD_TAG;
+    cmd->major = VERSION_MAJOR;
+    cmd->minor = VERSION_MINOR;
+    cmd->cmd = code;
+
+    cmd->t.port = *(u16_t*) port;
+    cmd->t.addr[addrlen] = 0;
+    memcpy(cmd->t.addr, addr, addrlen);
+
+    xlog_debug("proxy to [%s].", maddr_to_str(cmd));
 
     memcpy(dnonce, pbuf, MAX_NONCE_LEN);
     convert_nonce(dnonce);
@@ -199,13 +213,10 @@ static void send_connect_cmd(sserver_ctx_t* ctx)
     cryptox.init(&ctx->dctx, cryptox_key, dnonce);
     cryptox.encrypt(&ctx->ectx, (u8_t*) cmd, sizeof(cmd_t));
 
-    wbuf.base = iob->buffer;
-    wbuf.len = pbuf + MAX_NONCE_LEN + sizeof(cmd_t) - (u8_t*) iob->buffer;
-
     iob->wreq.data = ctx;
+    iob->len = pbuf + MAX_NONCE_LEN + sizeof(cmd_t) - (u8_t*) iob->buffer;
 
-    uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_xserver,
-        &wbuf, 1, on_xserver_write);
+    ctx->pending_iob = iob;
 }
 
 static void on_xserver_connected(uv_connect_t* req, int status)
@@ -224,6 +235,8 @@ static void on_xserver_connected(uv_connect_t* req, int status)
         // }
 
     } else {
+        uv_buf_t wbuf;
+
         xlog_debug("proxy server connected.");
 
         uv_read_start((uv_stream_t*) &ctx->io_sclient,
@@ -233,8 +246,14 @@ static void on_xserver_connected(uv_connect_t* req, int status)
         /* enable tcp-keepalive. */
         uv_tcp_keepalive(&ctx->io_xserver, 1, KEEPIDLE_TIME);
 
-        send_connect_cmd(ctx);
+        /* send connect command. */
+        wbuf.base = ctx->pending_iob->buffer;
+        wbuf.len = ctx->pending_iob->len;
 
+        uv_write(&ctx->pending_iob->wreq, (uv_stream_t*) &ctx->io_xserver,
+            &wbuf, 1, on_xserver_write);
+
+        ctx->pending_iob = NULL;
         ctx->stage = STAGE_FORWARD;
     }
 
@@ -346,15 +365,8 @@ static int socks_handshake(sserver_ctx_t* ctx, uv_buf_t* buf)
                 return -1;
             }
 
-            ctx->dest_addr.tag = CMD_TAG;
-            ctx->dest_addr.major = VERSION_MAJOR;
-            ctx->dest_addr.minor = VERSION_MINOR;
-            ctx->dest_addr.cmd = CMD_CONNECT_IPV4;
-
-            memcpy(&ctx->dest_addr.t.port, buf->base + 2, 2);
-            memcpy(&ctx->dest_addr.t.addr, buf->base + 4, 4);
-
-            xlog_debug("got socks4 connect cmd, to [%s].", maddr_to_str(&ctx->dest_addr));
+            init_connect_cmd(ctx, CMD_CONNECT_IPV4,
+                (u8_t*) (buf->base + 2), (u8_t*) (buf->base + 4), 4);
 
             buf->base[0] = 0x00; /* set 'VN' to 0x00 */
             buf->len = 8;
@@ -424,14 +436,8 @@ static int socks_handshake(sserver_ctx_t* ctx, uv_buf_t* buf)
             if (buf->base[3] == 0x01) { /* 'ATYP' == 0x01 (IPV4) */
 
                 if (buf->len == 6 + 4) {
-                    ctx->dest_addr.tag = CMD_TAG;
-                    ctx->dest_addr.major = VERSION_MAJOR;
-                    ctx->dest_addr.minor = VERSION_MINOR;
-                    ctx->dest_addr.cmd = CMD_CONNECT_IPV4;
-
-                    memcpy(&ctx->dest_addr.t.addr, buf->base + 4, 4);
-                    memcpy(&ctx->dest_addr.t.port, buf->base + 8, 2);
-
+                    init_connect_cmd(ctx, CMD_CONNECT_IPV4,
+                        (u8_t*) (buf->base + 8), (u8_t*) (buf->base + 4), 4);
                     buf->base[1] = 0x00;
                 } else {
                     xlog_warn("socks5 request packet len error.");
@@ -439,18 +445,11 @@ static int socks_handshake(sserver_ctx_t* ctx, uv_buf_t* buf)
                 }
 
             } else if (buf->base[3] == 0x03) { /* 'ATYP' == 0x03 (DOMAINNAME) */
+                unsigned l = (unsigned) buf->base[4];
 
-                if ((u8_t) buf->base[4] < MAX_DOMAIN_LEN
-                        && buf->len == 6 + 1 + (u8_t) buf->base[4]) {
-                    ctx->dest_addr.tag = CMD_TAG;
-                    ctx->dest_addr.major = VERSION_MAJOR;
-                    ctx->dest_addr.minor = VERSION_MINOR;
-                    ctx->dest_addr.cmd = CMD_CONNECT_DOMAIN;
-                    ctx->dest_addr.t.addr[(u8_t) buf->base[4]] = 0;
-
-                    memcpy(&ctx->dest_addr.t.addr, buf->base + 5, (u8_t) buf->base[4]);
-                    memcpy(&ctx->dest_addr.t.port, buf->base + (u8_t) buf->base[4] + 5, 2);
-
+                if (l < MAX_DOMAIN_LEN && buf->len == 6 + 1 + l) {
+                    init_connect_cmd(ctx, CMD_CONNECT_DOMAIN,
+                        (u8_t*) (buf->base + l + 5), (u8_t*) (buf->base + 5), l);
                     buf->base[1] = 0x00;
                 } else {
                     xlog_warn("socks5 request packet len error.");
@@ -464,7 +463,6 @@ static int socks_handshake(sserver_ctx_t* ctx, uv_buf_t* buf)
             }
 
             if (buf->base[1] == 0x00) { /* no error */
-                xlog_debug("got socks5 connect cmd, to [%s].", maddr_to_str(&ctx->dest_addr));
 
                 if (connect_xserver(ctx) == 0) {
                     /* assume that proxy server was connected successfully. */
