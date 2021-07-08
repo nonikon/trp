@@ -326,7 +326,7 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                 convert_nonce((u8_t*) buf->base);
                 cryptox.init(&ctx->ectx, cryptox_key, (u8_t*) buf->base);
 
-                /* pending this 'iob'. */
+                /* pending this 'iob' always. */
                 iob->idx = sizeof(cmd_t) + MAX_NONCE_LEN;
                 iob->len = (u32_t) (nread - sizeof(cmd_t) - MAX_NONCE_LEN);
                 ctx->pending_iob = iob;
@@ -339,9 +339,9 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                     struct sockaddr_in remote;
 
                     remote.sin_family = AF_INET;
-                    remote.sin_port = cmd->i.port;
+                    remote.sin_port = cmd->t.port;
 
-                    memcpy(&remote.sin_addr, &cmd->i.addr, 4);
+                    memcpy(&remote.sin_addr, &cmd->t.addr, 4);
                     xlog_debug("got CONNECT_IPV4 cmd (%s) from proxy client, process.",
                         addr_to_str(&remote));
 
@@ -364,7 +364,8 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                     hints.ai_flags = 0;
 
                     req->data = ctx;
-                    sprintf(portstr, "%d", ntohs(cmd->m.port));
+
+                    sprintf(portstr, "%d", ntohs(cmd->t.port));
                     xlog_debug("got CONNECT_DOMAIN cmd (%s) from proxy client, process.",
                         maddr_to_str(cmd));
 
@@ -372,8 +373,8 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                     uv_read_stop(stream);
 
                     if (uv_getaddrinfo(loop, req, on_domain_resolved,
-                            (char*) cmd->m.domain, portstr, &hints) != 0) {
-                        xlog_error("uv_getaddrinfo (%s) failed immediately.", cmd->m.domain);
+                            (char*) cmd->t.addr, portstr, &hints) != 0) {
+                        xlog_error("uv_getaddrinfo (%s) failed immediately.", cmd->t.addr);
 
                         uv_close((uv_handle_t*) stream, on_io_closed);
                         xlist_erase(&addrinfo_reqs, xlist_value_iter(req));
@@ -383,13 +384,13 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                     xlog_warn("got an error command from proxy client.");
                     uv_close((uv_handle_t*) stream, on_io_closed);
                 }
+
                 /* 'iob' free later. */
                 return;
-
-            } else {
-                xlog_warn("got an error packet (length) from server.");
-                uv_close((uv_handle_t*) stream, on_io_closed);
             }
+
+            xlog_warn("got an error packet (length) from server.");
+            uv_close((uv_handle_t*) stream, on_io_closed);
 
         } else {
             /* should not reach here */
@@ -538,24 +539,16 @@ static void usage(const char* s)
 {
     fprintf(stderr, "trp v%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, s);
     fprintf(stderr, "options:\n");
-    fprintf(stderr, "  -s <ip:port>  "
-        "server connect to. (default: 127.0.0.1:%d)\n", DEF_SERVER_PORT);
-    fprintf(stderr, "  -d <devid>    "
-        "device id of this client. (default: %s)\n", devid_to_str((u8_t*) DEFAULT_DEVID));
-    fprintf(stderr, "  -m <method>   "
-        "crypto method with server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
-    fprintf(stderr, "  -M <METHOD>   "
-        "crypto method with proxy client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
-    fprintf(stderr, "  -k <password> "
-        "crypto password with server. (default: none)\n");
-    fprintf(stderr, "  -K <PASSWORD> "
-        "crypto password with proxy client. (default: none)\n");
+    fprintf(stderr, "  -s <ip:port>  server connect to. (default: 127.0.0.1:%d)\n", DEF_SERVER_PORT);
+    fprintf(stderr, "  -d <devid>    device id of this client. (default: %s)\n", devid_to_str((u8_t*) DEFAULT_DEVID));
+    fprintf(stderr, "  -m <method>   crypto method with server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
+    fprintf(stderr, "  -M <METHOD>   crypto method with proxy client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
+    fprintf(stderr, "  -k <password> crypto password with server. (default: none)\n");
+    fprintf(stderr, "  -K <PASSWORD> crypto password with proxy client. (default: none)\n");
 #ifdef _WIN32
-    fprintf(stderr, "  -L <path>     "
-        "write output to file. (default: write to STDOUT)\n");
+    fprintf(stderr, "  -L <path>     write output to file. (default: write to STDOUT)\n");
 #else
-    fprintf(stderr, "  -L <path>     "
-        "write output to file and run as daemon. (default: write to STDOUT)\n");
+    fprintf(stderr, "  -L <path>     write output to file and run as daemon. (default: write to STDOUT)\n");
 #endif
     fprintf(stderr, "  -v            output verbosely.\n");
     fprintf(stderr, "  -h            print this help message.\n");

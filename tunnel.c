@@ -263,8 +263,8 @@ static void send_connect_cmd(tserver_ctx_t* ctx)
         memcpy(cmd->i.addr, &ctx->dest_addr.sin_addr, 4);
     } else {
 #endif
-        cmd->i.port = tunnel_addr.sin_port;
-        memcpy(cmd->i.addr, &tunnel_addr.sin_addr, 4);
+        cmd->t.port = tunnel_addr.sin_port;
+        memcpy(cmd->t.addr, &tunnel_addr.sin_addr, 4);
 #ifdef __linux__
     }
 #endif
@@ -391,31 +391,22 @@ static void usage(const char* s)
 {
     fprintf(stderr, "trp v%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, s);
     fprintf(stderr, "options:\n");
-    fprintf(stderr, "  -x <ip:port>  "
-        "proxy server connect to. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
-    fprintf(stderr, "  -b <ip:port>  "
-        "tunnel server listen at. (default: 127.0.0.1:%d)\n", DEF_TSERVER_PORT);
+    fprintf(stderr, "  -x <ip:port>  proxy server connect to. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
+    fprintf(stderr, "  -b <ip:port>  tunnel server listen at. (default: 127.0.0.1:%d)\n", DEF_TSERVER_PORT);
 #ifdef __linux__
     fprintf(stderr, "  -t <ip:port>  address tunnel to. (default: transparent proxy mode)\n");
 #else
     fprintf(stderr, "  -t <ip:port>  address tunnel to.\n");
 #endif
-    fprintf(stderr, "  -d <devid>    "
-        "device id of client connect to. (default: not connect client)\n");
-    fprintf(stderr, "  -m <method>   "
-        "crypto method with proxy server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
-    fprintf(stderr, "  -M <METHOD>   "
-        "crypto method with client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
-    fprintf(stderr, "  -k <password> "
-        "crypto password with proxy server. (default: none)\n");
-    fprintf(stderr, "  -K <PASSWORD> "
-        "crypto password with client. (default: none)\n");
+    fprintf(stderr, "  -d <devid>    device id of client connect to. (default: not connect client)\n");
+    fprintf(stderr, "  -m <method>   crypto method with proxy server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
+    fprintf(stderr, "  -M <METHOD>   crypto method with client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
+    fprintf(stderr, "  -k <password> crypto password with proxy server. (default: none)\n");
+    fprintf(stderr, "  -K <PASSWORD> crypto password with client. (default: none)\n");
 #ifdef _WIN32
-    fprintf(stderr, "  -L <path>     "
-        "write output to file. (default: write to STDOUT)\n");
+    fprintf(stderr, "  -L <path>     write output to file. (default: write to STDOUT)\n");
 #else
-    fprintf(stderr, "  -L <path>     "
-        "write output to file and run as daemon. (default: write to STDOUT)\n");
+    fprintf(stderr, "  -L <path>     write output to file and run as daemon. (default: write to STDOUT)\n");
 #endif
     fprintf(stderr, "  -v            output verbosely.\n");
     fprintf(stderr, "  -h            print this help message.\n");

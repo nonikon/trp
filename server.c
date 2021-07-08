@@ -595,9 +595,10 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
                     struct sockaddr_in remote;
 
                     remote.sin_family = AF_INET;
-                    remote.sin_port = cmd->i.port;
+                    remote.sin_port = cmd->t.port;
 
-                    memcpy(&remote.sin_addr, &cmd->i.addr, 4);
+                    memcpy(&remote.sin_addr, &cmd->t.addr, 4);
+
                     xlog_debug("got CONNECT_IPV4 cmd (%s) from proxy client, process.",
                         addr_to_str(&remote));
 
@@ -620,7 +621,8 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
                     hints.ai_flags = 0;
 
                     req->data = ctx;
-                    sprintf(portstr, "%d", ntohs(cmd->m.port));
+
+                    sprintf(portstr, "%d", ntohs(cmd->t.port));
                     xlog_debug("got CONNECT_DOMAIN cmd (%s) from proxy client, process.",
                         maddr_to_str(cmd));
 
@@ -628,8 +630,8 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
                     uv_read_stop(stream);
 
                     if (uv_getaddrinfo(loop, req, on_domain_resolved,
-                            (char*) cmd->m.domain, portstr, &hints) != 0) {
-                        xlog_error("uv_getaddrinfo (%s) failed immediately.", cmd->m.domain);
+                            (char*) cmd->t.addr, portstr, &hints) != 0) {
+                        xlog_error("uv_getaddrinfo (%s) failed immediately.", cmd->t.addr);
 
                         uv_close((uv_handle_t*) stream, on_xclient_closed);
                         xlist_erase(&addrinfo_reqs, xlist_value_iter(req));
@@ -639,13 +641,13 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
                     xlog_warn("got an error command from proxy client.");
                     uv_close((uv_handle_t*) stream, on_xclient_closed);
                 }
+
                 /* 'iob' free later. */
                 return;
-
-            } else {
-                xlog_warn("got an error packet (length) from proxy client.");
-                uv_close((uv_handle_t*) stream, on_xclient_closed);
             }
+
+            xlog_warn("got an error packet (length) from proxy client.");
+            uv_close((uv_handle_t*) stream, on_xclient_closed);
 
         } else {
             /* should not reach here */
@@ -658,13 +660,7 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
 
         if (ctx->stage == STAGE_FORWARD) {
             uv_close((uv_handle_t*) &ctx->peer->io, on_peer_closed);
-        } else if (ctx->stage == STAGE_COMMAND) {
-            /* do nothing */
-        } else { /* STAGE_CONNECT */
-            /* should not reach here */
-            xlog_error("unexpected state happen when disconnect.");
         }
-
         uv_close((uv_handle_t*) stream, on_xclient_closed);
 
         /* 'buf->base' may be 'NULL' when 'nread' < 0.
@@ -728,20 +724,14 @@ static void usage(const char* s)
 {
     fprintf(stderr, "trp v%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, s);
     fprintf(stderr, "options:\n");
-    fprintf(stderr, "  -s <ip:port>  "
-        "server listen at. (default: 127.0.0.1:%d)\n", DEF_SERVER_PORT);
-    fprintf(stderr, "  -x <ip:port>  "
-        "proxy server listen at. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
-    fprintf(stderr, "  -m <method>   "
-        "crypto method, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
-    fprintf(stderr, "  -k <password> "
-        "crypto password. (default: none)\n");
+    fprintf(stderr, "  -s <ip:port>  server listen at. (default: 127.0.0.1:%d)\n", DEF_SERVER_PORT);
+    fprintf(stderr, "  -x <ip:port>  proxy server listen at. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
+    fprintf(stderr, "  -m <method>   crypto method, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
+    fprintf(stderr, "  -k <password> crypto password. (default: none)\n");
 #ifdef _WIN32
-    fprintf(stderr, "  -L <path>     "
-        "write output to file. (default: write to STDOUT)\n");
+    fprintf(stderr, "  -L <path>     write output to file. (default: write to STDOUT)\n");
 #else
-    fprintf(stderr, "  -L <path>     "
-        "write output to file and run as daemon. (default: write to STDOUT)\n");
+    fprintf(stderr, "  -L <path>     write output to file and run as daemon. (default: write to STDOUT)\n");
 #endif
     fprintf(stderr, "  -v            output verbosely.\n");
     fprintf(stderr, "  -h            print this help message.\n");

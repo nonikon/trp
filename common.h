@@ -22,7 +22,6 @@
 #define LISTEN_BACKLOG      1024
 
 #define MAX_NONCE_LEN       16
-#define MAX_IPADDR_LEN      16
 #define MAX_DOMAIN_LEN      64
 #define MAX_SOCKBUF_SIZE    4096
 #define MAX_WQUEUE_SIZE     0 /* bytes */
@@ -42,8 +41,6 @@ enum {
     CMD_CONNECT_DOMAIN,
     CMD_CONNECT_CLIENT,
     CMD_REPORT_DEVID,
-
-    CMD_LIMIT_MAX,
 };
 
 #define CMD_TAG         0x7E
@@ -55,21 +52,16 @@ typedef struct {
     u8_t cmd;
 
     union {
-        /* CMD_CONNECT_IPV4 | CMD_CONNECT_IPV6 */
+        /* CMD_CONNECT_IPV4 | CMD_CONNECT_IPV6 | CMD_CONNECT_DOMAIN */
         struct {
             u16_t resv; /* reserved */
-            u16_t port; /* big endian */
-            u8_t addr[MAX_IPADDR_LEN];
-        } i;
-        /* CMD_CONNECT_DOMAIN */
-        struct {
-            u16_t resv; /* reserved */
-            u16_t port; /* big endian */
-            u8_t domain[MAX_DOMAIN_LEN];
-        } m;
+            u16_t port; /* big endian port */
+             u8_t addr[MAX_DOMAIN_LEN];
+        } t;
         /* CMD_CONNECT_CLIENT | CMD_REPORT_DEVID */
         struct {
-            u8_t devid[DEVICE_ID_SIZE];
+            // u32_t resv;
+             u8_t devid[DEVICE_ID_SIZE];
         } d;
     };
 } cmd_t;
@@ -77,10 +69,9 @@ typedef struct {
 #define is_valid_devid(s)   (*(u32_t*) (s))
 
 #define is_valid_cmd(c)     ( \
-            (c)->tag == CMD_TAG && \
             (c)->major == VERSION_MAJOR && \
             (c)->minor == VERSION_MINOR && \
-            (c)->cmd < CMD_LIMIT_MAX)
+            (c)->tag == CMD_TAG)
 
 void seed_rand(u32_t seed);
 void rand_bytes(u8_t* data, u32_t len);

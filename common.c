@@ -9,7 +9,7 @@
 #include "common.h"
 
 static u32_t _seed;
-static char _addrbuf[72]; /* long enough to store ipv4/ipv6/domain string and port. */
+static char _addrbuf[MAX_DOMAIN_LEN + 8]; /* long enough to store ipv4/ipv6/domain string and port. */
 
 void seed_rand(u32_t seed)
 {
@@ -62,8 +62,8 @@ int parse_ip4_str(const char* str, int defport, struct sockaddr_in* addr)
 const char* addr_to_str(const void* addr)
 {
     union {
-        const struct sockaddr* d;
-        const struct sockaddr_in* d4;
+        const struct sockaddr*     d;
+        const struct sockaddr_in*  d4;
         const struct sockaddr_in6* d6;
     } u;
 
@@ -75,6 +75,7 @@ const char* addr_to_str(const void* addr)
         uv_inet_ntop(AF_INET, &u.d4->sin_addr, _addrbuf, sizeof(_addrbuf));
         sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(u.d4->sin_port));
         break;
+
     case AF_INET6:
         uv_inet_ntop(AF_INET6, &u.d6->sin6_addr, _addrbuf, sizeof(_addrbuf));
         sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(u.d6->sin6_port));
@@ -90,16 +91,19 @@ const char* maddr_to_str(const cmd_t* cmd)
 
     switch (cmd->cmd) {
     case CMD_CONNECT_IPV4:
-        uv_inet_ntop(AF_INET, &cmd->i.addr, _addrbuf, sizeof(_addrbuf));
-        sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(cmd->i.port));
+        uv_inet_ntop(AF_INET, &cmd->t.addr, _addrbuf, sizeof(_addrbuf));
+        sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(cmd->t.port));
         break;
+
     case CMD_CONNECT_IPV6:
-        uv_inet_ntop(AF_INET6, &cmd->i.addr, _addrbuf, sizeof(_addrbuf));
-        sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(cmd->i.port));
+        uv_inet_ntop(AF_INET6, &cmd->t.addr, _addrbuf, sizeof(_addrbuf));
+        sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(cmd->t.port));
         break;
+
     case CMD_CONNECT_DOMAIN:
-        sprintf(_addrbuf, "%s:%d", cmd->m.domain, ntohs(cmd->m.port));
+        sprintf(_addrbuf, "%s:%d", cmd->t.addr, ntohs(cmd->t.port));
         break;
+
     case CMD_CONNECT_CLIENT:
         return devid_to_str(cmd->d.devid);
     }

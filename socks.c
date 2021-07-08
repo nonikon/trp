@@ -351,8 +351,8 @@ static int socks_handshake(sserver_ctx_t* ctx, uv_buf_t* buf)
             ctx->dest_addr.minor = VERSION_MINOR;
             ctx->dest_addr.cmd = CMD_CONNECT_IPV4;
 
-            memcpy(&ctx->dest_addr.i.port, buf->base + 2, 2);
-            memcpy(&ctx->dest_addr.i.addr, buf->base + 4, 4);
+            memcpy(&ctx->dest_addr.t.port, buf->base + 2, 2);
+            memcpy(&ctx->dest_addr.t.addr, buf->base + 4, 4);
 
             xlog_debug("got socks4 connect cmd, to [%s].", maddr_to_str(&ctx->dest_addr));
 
@@ -429,8 +429,8 @@ static int socks_handshake(sserver_ctx_t* ctx, uv_buf_t* buf)
                     ctx->dest_addr.minor = VERSION_MINOR;
                     ctx->dest_addr.cmd = CMD_CONNECT_IPV4;
 
-                    memcpy(&ctx->dest_addr.i.addr, buf->base + 4, 4);
-                    memcpy(&ctx->dest_addr.i.port, buf->base + 8, 2);
+                    memcpy(&ctx->dest_addr.t.addr, buf->base + 4, 4);
+                    memcpy(&ctx->dest_addr.t.port, buf->base + 8, 2);
 
                     buf->base[1] = 0x00;
                 } else {
@@ -446,10 +446,10 @@ static int socks_handshake(sserver_ctx_t* ctx, uv_buf_t* buf)
                     ctx->dest_addr.major = VERSION_MAJOR;
                     ctx->dest_addr.minor = VERSION_MINOR;
                     ctx->dest_addr.cmd = CMD_CONNECT_DOMAIN;
-                    ctx->dest_addr.m.domain[(u8_t) buf->base[4]] = 0;
+                    ctx->dest_addr.t.addr[(u8_t) buf->base[4]] = 0;
 
-                    memcpy(&ctx->dest_addr.m.domain, buf->base + 5, (u8_t) buf->base[4]);
-                    memcpy(&ctx->dest_addr.m.port, buf->base + (u8_t) buf->base[4] + 5, 2);
+                    memcpy(&ctx->dest_addr.t.addr, buf->base + 5, (u8_t) buf->base[4]);
+                    memcpy(&ctx->dest_addr.t.port, buf->base + (u8_t) buf->base[4] + 5, 2);
 
                     buf->base[1] = 0x00;
                 } else {
@@ -624,26 +624,17 @@ static void usage(const char* s)
 {
     fprintf(stderr, "trp v%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, s);
     fprintf(stderr, "options:\n");
-    fprintf(stderr, "  -x <ip:port>  "
-        "proxy server connect to. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
-    fprintf(stderr, "  -b <ip:port>  "
-        "SOCKS4/SOCKS5 server listen at. (default: 127.0.0.1:%d)\n", DEF_SSERVER_PORT);
-    fprintf(stderr, "  -d <devid>    "
-        "device id of client connect to. (default: not connect client)\n");
-    fprintf(stderr, "  -m <method>   "
-        "crypto method with proxy server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
-    fprintf(stderr, "  -M <METHOD>   "
-        "crypto method with client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
-    fprintf(stderr, "  -k <password> "
-        "crypto password with proxy server. (default: none)\n");
-    fprintf(stderr, "  -K <PASSWORD> "
-        "crypto password with client. (default: none)\n");
+    fprintf(stderr, "  -x <ip:port>  proxy server connect to. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
+    fprintf(stderr, "  -b <ip:port>  SOCKS4/SOCKS5 server listen at. (default: 127.0.0.1:%d)\n", DEF_SSERVER_PORT);
+    fprintf(stderr, "  -d <devid>    device id of client connect to. (default: not connect client)\n");
+    fprintf(stderr, "  -m <method>   crypto method with proxy server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
+    fprintf(stderr, "  -M <METHOD>   crypto method with client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
+    fprintf(stderr, "  -k <password> crypto password with proxy server. (default: none)\n");
+    fprintf(stderr, "  -K <PASSWORD> crypto password with client. (default: none)\n");
 #ifdef _WIN32
-    fprintf(stderr, "  -L <path>     "
-        "write output to file. (default: write to STDOUT)\n");
+    fprintf(stderr, "  -L <path>     write output to file. (default: write to STDOUT)\n");
 #else
-    fprintf(stderr, "  -L <path>     "
-        "write output to file and run as daemon. (default: write to STDOUT)\n");
+    fprintf(stderr, "  -L <path>     write output to file and run as daemon. (default: write to STDOUT)\n");
 #endif
     fprintf(stderr, "  -v            output verbosely.\n");
     fprintf(stderr, "  -h            print this help message.\n");
@@ -779,7 +770,7 @@ int main(int argc, char** argv)
     xlist_init(&conn_reqs, sizeof(uv_connect_t), NULL);
 
     xlog_info("proxy server [%s].", addr_to_str(&xserver_addr));
-    xlog_info("SOCKS server listen at [%s]...", addr_to_str(&saddr));
+    xlog_info("SOCKS4/SOCKS5 server listen at [%s]...", addr_to_str(&saddr));
     uv_run(loop, UV_RUN_DEFAULT);
 
     xlist_destroy(&conn_reqs);
