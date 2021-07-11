@@ -29,22 +29,22 @@
  */
 
 typedef struct {
+    uv_write_t wreq;
+    u32_t idx;
+    u32_t len;
+    char buffer[MAX_SOCKBUF_SIZE - sizeof(uv_write_t) - 8];
+} io_buf_t;
+
+typedef struct {
     uv_tcp_t io_tclient;    /* tunnel-client */
     uv_tcp_t io_xserver;    /* proxy-server */
-#ifdef __linux__
-    struct sockaddr_in dest_addr;
-#endif
+    io_buf_t* pending_iob;
     crypto_ctx_t ectx;
     crypto_ctx_t dctx;
     u8_t ref_count;         /* increase when 'io_xserver' or 'io_tclient' opened, decrease when closed */
     u8_t tclient_blocked;
     u8_t xserver_blocked;
 } tserver_ctx_t;
-
-typedef struct {
-    uv_write_t wreq;
-    char buffer[MAX_SOCKBUF_SIZE - sizeof(uv_write_t)];
-} io_buf_t;
 
 static uv_loop_t* loop;
 
@@ -80,6 +80,9 @@ static void on_io_closed(uv_handle_t* handle)
     if (ctx->ref_count > 1) {
         --ctx->ref_count;
     } else {
+        if (ctx->pending_iob) {
+            xlist_erase(&io_buffers, xlist_value_iter(ctx->pending_iob));
+        }
         xlist_erase(&tserver_ctxs, xlist_value_iter(ctx));
 
         xlog_debug("current %zd ctxs, %zd iobufs.",
@@ -220,12 +223,12 @@ static void on_tclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
     }
 }
 
-static void send_connect_cmd(tserver_ctx_t* ctx)
+static void init_connect_cmd(tserver_ctx_t* ctx,
+                u8_t code, u16_t port, u8_t* addr, u32_t addrlen)
 {
     io_buf_t* iob = xlist_alloc_back(&io_buffers);
     u8_t* pbuf = (u8_t*) iob->buffer;
     cmd_t* cmd;
-    uv_buf_t wbuf;
     u8_t dnonce[16];
 
     if (is_valid_devid(device_id)) {
@@ -255,19 +258,10 @@ static void send_connect_cmd(tserver_ctx_t* ctx)
     cmd->tag = CMD_TAG;
     cmd->major = VERSION_MAJOR;
     cmd->minor = VERSION_MINOR;
-    cmd->cmd = CMD_CONNECT_IPV4;
+    cmd->cmd = code;
 
-#ifdef __linux__
-    if (!tunnel_addr.sin_family) {
-        cmd->i.port = ctx->dest_addr.sin_port;
-        memcpy(cmd->i.addr, &ctx->dest_addr.sin_addr, 4);
-    } else {
-#endif
-        cmd->t.port = tunnel_addr.sin_port;
-        memcpy(cmd->t.addr, &tunnel_addr.sin_addr, 4);
-#ifdef __linux__
-    }
-#endif
+    cmd->t.port = port;
+    memcpy(cmd->t.addr, addr, addrlen);
 
     memcpy(dnonce, pbuf, MAX_NONCE_LEN);
     convert_nonce(dnonce);
@@ -276,13 +270,10 @@ static void send_connect_cmd(tserver_ctx_t* ctx)
     cryptox.init(&ctx->dctx, cryptox_key, dnonce);
     cryptox.encrypt(&ctx->ectx, (u8_t*) cmd, sizeof(cmd_t));
 
-    wbuf.base = iob->buffer;
-    wbuf.len = pbuf + MAX_NONCE_LEN + sizeof(cmd_t) - (u8_t*) iob->buffer;
-
     iob->wreq.data = ctx;
+    iob->len = pbuf + MAX_NONCE_LEN + sizeof(cmd_t) - (u8_t*) iob->buffer;
 
-    uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_xserver,
-        &wbuf, 1, on_xserver_write);
+    ctx->pending_iob = iob;
 }
 
 static void on_xserver_connected(uv_connect_t* req, int status)
@@ -301,6 +292,8 @@ static void on_xserver_connected(uv_connect_t* req, int status)
         // }
 
     } else {
+        uv_buf_t wbuf;
+
         xlog_debug("proxy server connected.");
 
         uv_read_start((uv_stream_t*) &ctx->io_tclient,
@@ -310,7 +303,14 @@ static void on_xserver_connected(uv_connect_t* req, int status)
         /* enable tcp-keepalive. */
         uv_tcp_keepalive(&ctx->io_xserver, 1, KEEPIDLE_TIME);
 
-        send_connect_cmd(ctx);
+        /* send connect command. */
+        wbuf.base = ctx->pending_iob->buffer;
+        wbuf.len = ctx->pending_iob->len;
+
+        uv_write(&ctx->pending_iob->wreq, (uv_stream_t*) &ctx->io_xserver,
+            &wbuf, 1, on_xserver_write);
+
+        ctx->pending_iob = NULL;
     }
 
     xlist_erase(&conn_reqs, xlist_value_iter(req));
@@ -362,15 +362,24 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
 
 #ifdef __linux__
         if (!tunnel_addr.sin_family) {
-            socklen_t socklen = sizeof(ctx->dest_addr);
+            struct sockaddr_in dest;
+            socklen_t len = sizeof(dest);
 
             if (getsockopt(ctx->io_tclient.io_watcher.fd, SOL_IP, SO_ORIGINAL_DST,
-                    &ctx->dest_addr, &socklen) != 0) {
+                    &dest, &len) != 0) {
                 xlog_warn("getsockopt SO_ORIGINAL_DST failed.");
 
                 uv_close((uv_handle_t*) &ctx->io_tclient, on_io_closed);
                 return;
             }
+
+            init_connect_cmd(ctx, CMD_CONNECT_IPV4,
+                dest.sin_port, (u8_t*) &dest.sin_addr, 4);
+        } else {
+#endif
+            init_connect_cmd(ctx, CMD_CONNECT_IPV4,
+                tunnel_addr.sin_port, (u8_t*) &tunnel_addr.sin_addr, 4);
+#ifdef __linux__
         }
 #endif
         uv_tcp_init(loop, &ctx->io_xserver);

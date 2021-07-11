@@ -164,7 +164,7 @@ static void on_xserver_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
 }
 
 static void init_connect_cmd(sserver_ctx_t* ctx,
-                u8_t code, u8_t* port, u8_t* addr, unsigned addrlen)
+                u8_t code, u16_t port, u8_t* addr, u32_t addrlen)
 {
     io_buf_t* iob = xlist_alloc_back(&io_buffers);
     u8_t* pbuf = (u8_t*) iob->buffer;
@@ -200,8 +200,7 @@ static void init_connect_cmd(sserver_ctx_t* ctx,
     cmd->minor = VERSION_MINOR;
     cmd->cmd = code;
 
-    cmd->t.port = *(u16_t*) port;
-    cmd->t.addr[addrlen] = 0;
+    cmd->t.port = port;
     memcpy(cmd->t.addr, addr, addrlen);
 
     xlog_debug("proxy to [%s].", maddr_to_str(cmd));
@@ -366,7 +365,7 @@ static int socks_handshake(sserver_ctx_t* ctx, uv_buf_t* buf)
             }
 
             init_connect_cmd(ctx, CMD_CONNECT_IPV4,
-                (u8_t*) (buf->base + 2), (u8_t*) (buf->base + 4), 4);
+                *(u16_t*) (buf->base + 2), (u8_t*) (buf->base + 4), 4);
 
             buf->base[0] = 0x00; /* set 'VN' to 0x00 */
             buf->len = 8;
@@ -437,7 +436,7 @@ static int socks_handshake(sserver_ctx_t* ctx, uv_buf_t* buf)
 
                 if (buf->len == 6 + 4) {
                     init_connect_cmd(ctx, CMD_CONNECT_IPV4,
-                        (u8_t*) (buf->base + 8), (u8_t*) (buf->base + 4), 4);
+                        *(u16_t*) (buf->base + 8), (u8_t*) (buf->base + 4), 4);
                     buf->base[1] = 0x00;
                 } else {
                     xlog_warn("socks5 request packet len error.");
@@ -445,11 +444,14 @@ static int socks_handshake(sserver_ctx_t* ctx, uv_buf_t* buf)
                 }
 
             } else if (buf->base[3] == 0x03) { /* 'ATYP' == 0x03 (DOMAINNAME) */
-                unsigned l = (unsigned) buf->base[4];
+                u32_t l = buf->base[4] & 0xff;
 
                 if (l < MAX_DOMAIN_LEN && buf->len == 6 + 1 + l) {
+                    u16_t port = *(u16_t*) (buf->base + l + 5);
+
+                    buf->base[5 + l] = 0; /* make domain name null-terminated. */
                     init_connect_cmd(ctx, CMD_CONNECT_DOMAIN,
-                        (u8_t*) (buf->base + l + 5), (u8_t*) (buf->base + 5), l);
+                        port, (u8_t*) (buf->base + 5), l + 1);
                     buf->base[1] = 0x00;
                 } else {
                     xlog_warn("socks5 request packet len error.");
@@ -472,12 +474,13 @@ static int socks_handshake(sserver_ctx_t* ctx, uv_buf_t* buf)
 
                     /* get local address. */
                     uv_tcp_getsockname(&ctx->io_xserver, (struct sockaddr*) &d, &l);
-                    /* set BND.ADDR and BND.PORT */
+                    /* set BND.ADDR and BND.PORT. */
                     memcpy(buf->base + 4, &d.sin_addr, 4);
                     memcpy(buf->base + 8, &d.sin_port, 2);
 
                     xlog_debug("local addr [%s].", addr_to_str(&d));
 #else
+                    /* zero BIND.ADDR and BIND.PORT. */
                     memset(buf->base + 4, 0, 6);
 #endif
 
