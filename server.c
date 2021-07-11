@@ -19,6 +19,7 @@
 #include "crypto.h"
 
 #define CLIENT_CONNECT_DELAY    (2 * 1000) /* ms */
+#define KEEPIDLE_TIME           (35) /* s */
 
 enum {
     STAGE_INIT,
@@ -215,11 +216,11 @@ static void on_client_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                         xlist_paste_back(&xserver_ctxs, xlist_cut(
                             &pdctx->xclients, xlist_value_iter(ctx)));
 
-                        connect_client(ctx, client);
-
                         uv_timer_stop(&ctx->timer);
                         uv_read_start((uv_stream_t*) &ctx->io_xclient,
                             on_iobuf_alloc, on_xclient_read);
+
+                        connect_client(ctx, client);
                     }
                 }
 
@@ -271,6 +272,8 @@ static void on_client_connect(uv_stream_t* stream, int status)
 
         uv_read_start((uv_stream_t*) &client->io,
             on_iobuf_alloc, on_client_read);
+        /* enable tcp-keepalive with client. */
+        uv_tcp_keepalive(&client->io, 1, KEEPIDLE_TIME);
     } else {
         xlog_error("uv_accept failed.");
 
@@ -369,6 +372,7 @@ static void on_remote_connected(uv_connect_t* req, int status)
             on_iobuf_alloc, on_remote_read);
         uv_read_start((uv_stream_t*) &ctx->io_xclient,
             on_iobuf_alloc, on_xclient_read);
+        // start 'ctx->timer' to check timeout of proxy client? TODO
 
         ctx->pending_iob = NULL;
         ctx->stage = STAGE_FORWARD;
@@ -447,6 +451,11 @@ static void connect_client(xserver_ctx_t* ctx, peer_t* client)
         /* free this 'iob' now. */
         xlist_erase(&io_buffers, xlist_value_iter(iob));
     }
+
+    /* disable tcp-keepalive with client. */
+    // uv_tcp_keepalive(&client->io, 0, 0);
+
+    // start 'ctx->timer' to check timeout of proxy client? TODO
 }
 
 static void on_connect_client_timeout(uv_timer_t* timer)
