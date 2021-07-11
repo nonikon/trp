@@ -136,10 +136,10 @@ int str_to_devid(u8_t id[DEVICE_ID_SIZE], const char* str)
 
         if (str[i] >= '0' && str[i] <= '9')
             c = str[i] - '0';
-        else if (str[i] >= 'a' && str[i] <= 'z')
-            c = str[i] - 'a';
-        else if (str[i] >= 'A' && str[i] <= 'Z')
-            c = str[i] - 'A';
+        else if (str[i] >= 'a' && str[i] <= 'f')
+            c = str[i] - 'a' + 10;
+        else if (str[i] >= 'A' && str[i] <= 'F')
+            c = str[i] - 'A' + 10;
         else
             return -1;
 
