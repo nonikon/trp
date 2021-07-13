@@ -10,6 +10,7 @@
 #ifndef _WIN32
 #include <unistd.h> /* for daemon() */
 #include <signal.h> /* for signal() */
+#include <sys/resource.h> /* for setrlimit() */
 #endif
 
 #include "common.h"
@@ -740,6 +741,7 @@ static void usage(const char* s)
 #ifdef _WIN32
     fprintf(stderr, "  -L <path>     write output to file. (default: write to STDOUT)\n");
 #else
+    fprintf(stderr, "  -n <number>   set max number of open files.\n");
     fprintf(stderr, "  -L <path>     write output to file and run as daemon. (default: write to STDOUT)\n");
 #endif
     fprintf(stderr, "  -v            output verbosely.\n");
@@ -758,6 +760,9 @@ int main(int argc, char** argv)
     const char* logfile = NULL;
     const char* passwd = NULL;
     int method = CRYPTO_CHACHA20;
+#ifndef _WIN32
+    int nofile = 0;
+#endif
     int verbose = 0;
     int error, i;
 
@@ -767,6 +772,7 @@ int main(int argc, char** argv)
 
         if (argv[i][0] != '-' || argv[i][1] == '\0') {
             fprintf(stderr, "wrong args [%s].\n", argv[i]);
+            usage(argv[0]);
             return 1;
         }
 
@@ -786,16 +792,32 @@ int main(int argc, char** argv)
         case 'x': xserver_str = arg; continue;
         case 'm':      method = atoi(arg); continue;
         case 'k':      passwd = arg; continue;
+#ifndef _WIN32
+        case 'n':      nofile = atoi(arg); continue;
+#endif
         case 'L':     logfile = arg; continue;
         }
 
         fprintf(stderr, "invalid option [-%c].\n", opt);
+        usage(argv[0]);
         return 1;
     }
 
 #ifndef _WIN32
-    if (logfile) daemon(1, 0);
+    if (logfile && daemon(1, 0) != 0) {
+        xlog_error("run as daemon failed: %s.", strerror(errno));
+    }
+
     signal(SIGPIPE, SIG_IGN);
+
+    if (nofile > 1024) {
+        struct rlimit limit = { nofile, nofile };
+
+        if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
+            xlog_warn("set NOFILE limit to %d failed: %s.",
+                nofile, strerror(errno));
+        }
+    }
 #endif
 
     loop = uv_default_loop();
