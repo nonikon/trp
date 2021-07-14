@@ -209,16 +209,17 @@ void xlog_println(const char* tag, const char* fmt, ...)
     out_buf[off++] = '\r';
     out_buf[off++] = '\n';
 
-    WriteFile(out_fd, out_buf, off, &nw, NULL);
-    out_bytes += nw;
+    if (WriteFile(out_fd, out_buf, off, &nw, NULL)) {
+        out_bytes += nw;
 
-    if (out_file_path) {
+        if (out_file_path) {
 #if XLOG_SYNC_WRITE
-        FlushFileBuffers(out_fd);
+            FlushFileBuffers(out_fd);
 #endif
-        if (out_bytes > out_max_bytes) {
-            logfile_rotate();
-            out_bytes = 0;
+            if (out_bytes > out_max_bytes) {
+                logfile_rotate();
+                out_bytes = 0;
+            }
         }
     }
 
@@ -234,7 +235,7 @@ void xlog_printhex(const unsigned char* data, unsigned int len)
     unsigned int i = 0;
     unsigned int j = 0;
 
-    DWORD nw = 0;
+    DWORD nw;
 
 #if XLOG_MULTITHREAD
     EnterCriticalSection(&lock);
@@ -249,8 +250,8 @@ void xlog_printhex(const unsigned char* data, unsigned int len)
             out_buf[j++] = '\r';
             out_buf[j++] = '\n';
 
-            WriteFile(out_fd, out_buf, j, &nw, NULL);
-            out_bytes += nw;
+            if (WriteFile(out_fd, out_buf, j, &nw, NULL))
+                out_bytes += nw;
 
             j = 0;
         }
@@ -260,8 +261,8 @@ void xlog_printhex(const unsigned char* data, unsigned int len)
         out_buf[j++] = '\r';
         out_buf[j++] = '\n';
 
-        WriteFile(out_fd, out_buf, j, &nw, NULL);
-        out_bytes += nw;
+        if (WriteFile(out_fd, out_buf, j, &nw, NULL))
+            out_bytes += nw;
     }
 
     if (out_file_path) {
@@ -435,6 +436,7 @@ void xlog_println(const char* tag, const char* fmt, ...)
     struct tm t;
     time_t s;
     int off;
+    int nw;
     va_list ap;
 
 #if XLOG_MULTITHREAD
@@ -455,15 +457,20 @@ void xlog_println(const char* tag, const char* fmt, ...)
     va_end(ap);
 
     out_buf[off++] = '\n';
-    out_bytes += write(out_fd, out_buf, off);
 
-    if (out_file_path) {
+    nw = (int) write(out_fd, out_buf, off);
+
+    if (nw > 0) {
+        out_bytes += nw;
+
+        if (out_file_path) {
 #if XLOG_SYNC_WRITE
-        fdatasync(out_fd);
+            fdatasync(out_fd);
 #endif
-        if (out_bytes > out_max_bytes) {
-            logfile_rotate();
-            out_bytes = 0;
+            if (out_bytes > out_max_bytes) {
+                logfile_rotate();
+                out_bytes = 0;
+            }
         }
     }
 
@@ -479,6 +486,8 @@ void xlog_printhex(const unsigned char* data, unsigned int len)
     unsigned int i = 0;
     unsigned int j = 0;
 
+    int nw;
+
 #if XLOG_MULTITHREAD
     pthread_mutex_lock(&lock);
 #endif
@@ -490,7 +499,10 @@ void xlog_printhex(const unsigned char* data, unsigned int len)
 
         if (j == 3 * XLOG_HEX_MAX) {
             out_buf[j++] = '\n';
-            out_bytes += write(out_fd, out_buf, j);
+
+            nw = (int) write(out_fd, out_buf, j);
+            if (nw > 0)
+                out_bytes += nw;
 
             j = 0;
         }
@@ -498,7 +510,10 @@ void xlog_printhex(const unsigned char* data, unsigned int len)
 
     if (j) {
         out_buf[j++] = '\n';
-        out_bytes += write(out_fd, out_buf, j);
+
+        nw = (int) write(out_fd, out_buf, j);
+        if (nw > 0)
+            out_bytes += nw;
     }
 
     if (out_file_path) {
