@@ -404,12 +404,16 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
 
         if (ctx->stage == STAGE_FORWARD) {
             uv_close((uv_handle_t*) &ctx->io_remote, on_io_closed);
+
         } else if (ctx->stage == STAGE_COMMAND) {
+            xlog_warn("connection closed by server at COMMAND stage.");
+
             /* delay connect */
             if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
                 uv_timer_start(&reconnect_timer, new_server_connection,
                     RECONNECT_INTERVAL, 0);
             }
+
         } else { /* STAGE_CONNECT */
             /* should not reach here */
             xlog_error("unexpected state happen when disconnect.");
@@ -548,8 +552,8 @@ static void usage(const char* s)
     fprintf(stderr, "  -K <PASSWORD> crypto password with proxy client. (default: none)\n");
 #ifdef _WIN32
     fprintf(stderr, "  -L <path>     write output to file. (default: write to STDOUT)\n");
-    fprintf(stderr, "  -n <number>   set max number of open files.\n");
 #else
+    fprintf(stderr, "  -n <number>   set max number of open files.\n");
     fprintf(stderr, "  -L <path>     write output to file and run as daemon. (default: write to STDOUT)\n");
 #endif
     fprintf(stderr, "  -v            output verbosely.\n");
@@ -601,7 +605,7 @@ int main(int argc, char** argv)
         case 'k':     passwd = arg; continue;
         case 'K':    passwdx = arg; continue;
 #ifndef _WIN32
-        case 'n':      nofile = atoi(arg); continue;
+        case 'n':     nofile = atoi(arg); continue;
 #endif
         case 'L':    logfile = arg; continue;
         }
@@ -683,6 +687,7 @@ int main(int argc, char** argv)
 
     uv_timer_init(loop, &reconnect_timer);
 
+    xlog_info("server address [%s].", addr_to_str(&server_addr));
     new_server_connection(NULL);
     uv_run(loop, UV_RUN_DEFAULT);
 
