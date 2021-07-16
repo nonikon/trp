@@ -19,7 +19,7 @@
 #include "xhash.h"
 #include "crypto.h"
 
-#define CLIENT_CONNECT_DELAY    (2 * 1000) /* ms */
+#define CONNECT_CLIENT_TIMEOUT  (10 * 1000) /* ms */
 #define KEEPIDLE_TIME           (35) /* s */
 
 enum {
@@ -49,6 +49,7 @@ typedef struct {
     u8_t devid[DEVICE_ID_SIZE]; /* (must be the first member) */
     xlist_t clients;    /* peer_t, the clients which at COMMAND stage */
     xlist_t xclients;   /* xserver_ctx_t, the xclients which is connecting to a client */
+    uv_timer_t timer;   /* xclients connect timeout timer */
 } pending_ctx_t;
 
 /* remote or client */
@@ -61,7 +62,6 @@ typedef struct {
 /* proxy-server context */
 typedef struct {
     uv_tcp_t io_xclient;        /* proxy-client */
-    uv_timer_t timer;
     peer_t* peer;               /* remote or client */
     pending_ctx_t* pending_ctx; /* the 'pending_ctx_t' belonging to */
     io_buf_t* pending_iob;      /* the pending 'io_buf_t' before 'remote' connected */
@@ -187,7 +187,8 @@ static void on_client_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                 if (!client->pending_ctx) {
                     pending_ctx_t* pdctx = xhash_get_data(&pending_ctxs, cmd->d.devid);
 
-                    xlog_debug("got REPORT_DEVID cmd from client, process.");
+                    xlog_debug("got REPORT_DEVID (%s) cmd from client, process.",
+                        devid_to_str(cmd->d.devid));
 
                     if (pdctx == XHASH_INVALID_DATA) {
                         xlog_info("device_id [%s] not exist, insert.", devid_to_str(cmd->d.devid));
@@ -198,6 +199,8 @@ static void on_client_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
 
                         xlist_init(&pdctx->clients, sizeof(peer_t), NULL);
                         xlist_init(&pdctx->xclients, sizeof(xserver_ctx_t), NULL);
+
+                        uv_timer_init(loop, &pdctx->timer);
                     }
 
                     if (xlist_empty(&pdctx->xclients)) {
@@ -217,9 +220,16 @@ static void on_client_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                         xlist_paste_back(&xserver_ctxs, xlist_cut(
                             &pdctx->xclients, xlist_value_iter(ctx)));
 
-                        uv_timer_stop(&ctx->timer);
                         uv_read_start((uv_stream_t*) &ctx->io_xclient,
                             on_iobuf_alloc, on_xclient_read);
+
+                        if (!xlist_empty(&pdctx->xclients)) {
+                            /* still have some pending xclients, reset timer. */
+                            uv_timer_again(&pdctx->timer);
+                        } else {
+                            /* no pending xclient exist, stop timer. */
+                            uv_timer_stop(&pdctx->timer);
+                        }
 
                         connect_client(ctx, client);
                     }
@@ -461,18 +471,23 @@ static void connect_client(xserver_ctx_t* ctx, peer_t* client)
 
 static void on_connect_client_timeout(uv_timer_t* timer)
 {
-    xserver_ctx_t* ctx = xcontainer_of(timer, xserver_ctx_t, timer);
+    pending_ctx_t* ctx = xcontainer_of(timer, pending_ctx_t, timer);
 
-    xlog_debug("still no available client after %d seconds.",
-        CLIENT_CONNECT_DELAY / 1000);
+    xlog_debug("still no available client after %d seconds, close %zd pending xclient(s).",
+        CONNECT_CLIENT_TIMEOUT / 1000, xlist_size(&ctx->xclients));
 
-    /* move proxy client node from 'pending_ctx->xclients' to 'xserver_ctxs'. */
-    xlist_paste_back(&xserver_ctxs, xlist_cut(
-        &ctx->pending_ctx->xclients, xlist_value_iter(ctx)));
+    do {
+        xserver_ctx_t* x = xlist_cut_front(&ctx->xclients);
 
-    /* close this connection. */
-    uv_timer_stop(timer);
-    uv_close((uv_handle_t*) &ctx->io_xclient, on_xclient_closed);
+        /* move this proxy client node from 'ctx->xclients' to 'xserver_ctxs'. */
+        xlist_paste_back(&xserver_ctxs, x);
+        /* close this proxy client. */
+        uv_close((uv_handle_t*) &x->io_xclient, on_xclient_closed);
+    }
+    while (!xlist_empty(&ctx->xclients));
+
+    /* timer is already stopped. */
+    // uv_timer_stop(timer);
 }
 
 static void on_xclient_closed(uv_handle_t* handle)
@@ -587,9 +602,11 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
                             ctx->pending_ctx = pdctx;
 
                             uv_read_stop(stream);
-                            uv_timer_init(loop, &ctx->timer);
-                            uv_timer_start(&ctx->timer, on_connect_client_timeout,
-                                CLIENT_CONNECT_DELAY, 0);
+
+                            if (!uv_is_active((uv_handle_t*) &pdctx->timer)) {
+                                uv_timer_start(&pdctx->timer, on_connect_client_timeout,
+                                    CONNECT_CLIENT_TIMEOUT, 0);
+                            }
 
                             /* move proxy client node from 'xserver_ctxs' to 'pdctx->xclients' */
                             xlist_paste_back(&pdctx->xclients, xlist_cut(
