@@ -56,7 +56,8 @@ typedef struct {
 static uv_loop_t* loop;
 static uv_timer_t reconnect_timer;
 
-static struct sockaddr_in server_addr;
+static struct sockaddr_dm server_addr;
+
 static xlist_t client_ctxs;     /* client_ctx_t */
 static xlist_t io_buffers;      /* io_buf_t */
 static xlist_t conn_reqs;       /* uv_connect_t */
@@ -467,27 +468,19 @@ static void on_server_connected(uv_connect_t* req, int status)
     if (status < 0) {
         uv_close((uv_handle_t*) &ctx->io_server, on_io_closed);
 
+        /* reconnect after RECONNECT_INTERVAL ms. */
+        if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
+            uv_timer_start(&reconnect_timer, new_server_connection,
+                RECONNECT_INTERVAL, 0);
+        }
+
         if (!retry_displayed) {
             xlog_error("connect server failed: %s, retry every %d seconds.",
                 uv_err_name(status), RECONNECT_INTERVAL / 1000);
             retry_displayed = 1;
         }
 
-        /* reconnect after RECONNECT_INTERVAL/1000 second. */
-        if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
-            uv_timer_start(&reconnect_timer, new_server_connection,
-                RECONNECT_INTERVAL, 0);
-        }
-
     } else {
-
-        if (!retry_displayed) {
-            xlog_debug("server connected.");
-        } else {
-            xlog_info("server connected.");
-            retry_displayed = 0;
-        }
-
         uv_read_start((uv_stream_t*) &ctx->io_server,
             on_iobuf_alloc, on_server_read);
         /* enable tcp-keepalive. */
@@ -496,12 +489,19 @@ static void on_server_connected(uv_connect_t* req, int status)
         report_device_id(ctx);
 
         ctx->stage = STAGE_COMMAND;
+
+        if (!retry_displayed) {
+            xlog_debug("server connected.");
+        } else {
+            xlog_info("server connected.");
+            retry_displayed = 0;
+        }
     }
 
     xlist_erase(&conn_reqs, xlist_value_iter(req));
 }
 
-static void new_server_connection(uv_timer_t* timer)
+static void connect_server(struct sockaddr* addr)
 {
     client_ctx_t* ctx = xlist_alloc_back(&client_ctxs);
     uv_connect_t* req = xlist_alloc_back(&conn_reqs);
@@ -519,23 +519,78 @@ static void new_server_connection(uv_timer_t* timer)
 
     req->data = ctx;
 
-    xlog_debug("connecting server [%s]...", addr_to_str(&server_addr));
+    xlog_debug("connecting server [%s]...", addr_to_str(addr));
 
-    if (uv_tcp_connect(req, &ctx->io_server,
-            (struct sockaddr*) &server_addr, on_server_connected) != 0) {
+    if (uv_tcp_connect(req, &ctx->io_server, addr, on_server_connected) != 0) {
         xlog_error("connect server failed immediately.");
 
-        uv_close((uv_handle_t*) &ctx->io_server, on_io_closed);
-        xlist_erase(&conn_reqs, xlist_value_iter(req));
-
-        /* reconnect after RECONNECT_INTERVAL/1000 second.
-         * 'reconnect_timer' is inactive when 'new_server_connection'
-         * is invoked by 'reconnect_timer'. so,
-         * 'uv_timer_start' will not be called twice anyway.
-         */
+        /* reconnect after RECONNECT_INTERVAL ms. */
         if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
             uv_timer_start(&reconnect_timer, new_server_connection,
                 RECONNECT_INTERVAL, 0);
+        }
+
+        uv_close((uv_handle_t*) &ctx->io_server, on_io_closed);
+        xlist_erase(&conn_reqs, xlist_value_iter(req));
+    }
+}
+
+static void on_server_domain_resolved(
+        uv_getaddrinfo_t* req, int status, struct addrinfo* res)
+{
+    if (status < 0) {
+        xlog_warn("resolve server domain failed: %s.", uv_err_name(status));
+
+        if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
+            uv_timer_start(&reconnect_timer, new_server_connection,
+                RECONNECT_INTERVAL, 0);
+        }
+
+    } else {
+        xlog_debug("resolve server domain result [%s], connect it.",
+            addr_to_str(res->ai_addr));
+
+        connect_server(res->ai_addr);
+        uv_freeaddrinfo(res);
+    }
+
+    xlist_erase(&addrinfo_reqs, xlist_value_iter(req));
+}
+
+static void new_server_connection(uv_timer_t* timer)
+{
+    if (server_addr.sdm_family) {
+        /* server address is ipv4/ipv6, connect it directly. */
+        connect_server((struct sockaddr*) &server_addr);
+
+    } else {
+        /* server address is domain, resolve it. */
+        struct addrinfo hints;
+        char portstr[8];
+        uv_getaddrinfo_t* req = xlist_alloc_back(&addrinfo_reqs);
+
+        hints.ai_family = AF_UNSPEC; /* ipv4 and ipv6 */
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_protocol = IPPROTO_TCP;
+        hints.ai_flags = 0;
+
+        sprintf(portstr, "%d", ntohs(server_addr.sdm_port));
+
+        if (uv_getaddrinfo(loop, req, on_server_domain_resolved,
+                server_addr.sdm_addr, portstr, &hints) != 0) {
+            xlog_error("uv_getaddrinfo (%s) failed immediately.", server_addr.sdm_addr);
+
+            /* reconnect after RECONNECT_INTERVAL ms.
+             * 'reconnect_timer' is inactive when 'new_server_connection'
+             * is invoked by 'reconnect_timer'. so,
+             * 'uv_timer_start' will not be called twice anyway.
+             */
+            if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
+                uv_timer_start(&reconnect_timer, new_server_connection,
+                    RECONNECT_INTERVAL, 0);
+            }
+
+            xlist_erase(&addrinfo_reqs, xlist_value_iter(req));
         }
     }
 }
@@ -543,8 +598,8 @@ static void new_server_connection(uv_timer_t* timer)
 static void usage(const char* s)
 {
     fprintf(stderr, "trp v%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, s);
-    fprintf(stderr, "options:\n");
-    fprintf(stderr, "  -s <ip:port>  server connect to. (default: 127.0.0.1:%d)\n", DEF_SERVER_PORT);
+    fprintf(stderr, "[options]:\n");
+    fprintf(stderr, "  -s <address>  server connect to. (default: 127.0.0.1:%d)\n", DEF_SERVER_PORT);
     fprintf(stderr, "  -d <devid>    device id of this client. (default: %s)\n", devid_to_str((u8_t*) DEFAULT_DEVID));
     fprintf(stderr, "  -m <method>   crypto method with server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
     fprintf(stderr, "  -M <METHOD>   crypto method with proxy client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
@@ -558,6 +613,15 @@ static void usage(const char* s)
 #endif
     fprintf(stderr, "  -v            output verbosely.\n");
     fprintf(stderr, "  -h            print this help message.\n");
+    fprintf(stderr, "[address]:\n");
+    fprintf(stderr, "  1.2.3.4:8080  IPV4 string with port.\n");
+    fprintf(stderr, "  1.2.3.4       IPV4 string with default port.\n");
+    fprintf(stderr, "  :8080         IPV4 string with default address.\n");
+    fprintf(stderr, "  [::1]:8080    IPV6 string with port.\n");
+    fprintf(stderr, "  [::1]         IPV6 string with default port.\n");
+    fprintf(stderr, "  []:8080       IPV6 string with default address.\n");
+    fprintf(stderr, "  abc.com:8080  DOMAIN string with port.\n");
+    fprintf(stderr, "  abc.com       DOMAIN string with default port.\n");
     fprintf(stderr, "\n");
 }
 
@@ -675,7 +739,8 @@ int main(int argc, char** argv)
         goto end;
     }
 
-    if (parse_ip4_str(server_str, DEF_SERVER_PORT, &server_addr) != 0) {
+    if (parse_ip_str(server_str, DEF_SERVER_PORT, (struct sockaddr*) &server_addr) != 0
+            && parse_domain_str(server_str, DEF_SERVER_PORT, &server_addr) != 0) {
         xlog_error("invalid server address [%s].", server_str);
         goto end;
     }
@@ -687,7 +752,7 @@ int main(int argc, char** argv)
 
     uv_timer_init(loop, &reconnect_timer);
 
-    xlog_info("server address [%s].", addr_to_str(&server_addr));
+    xlog_info("server address [%s], connecting...", addr_to_str(&server_addr));
     new_server_connection(NULL);
     uv_run(loop, UV_RUN_DEFAULT);
 

@@ -59,12 +59,107 @@ int parse_ip4_str(const char* str, int defport, struct sockaddr_in* addr)
     return uv_ip4_addr(str, defport, addr);
 }
 
+int parse_ip_str(const char* str, int port, struct sockaddr* addr)
+{
+    const char* p;
+    int len;
+
+    if (str[0] != '[') {
+        /* "ipv4addr:port". */
+        char tmp[16];
+
+        p = strchr(str, ':');
+
+        if (p) {
+            /* with 'port'. */
+            port = atoi(p + 1);
+            len = p - str;
+        } else {
+            /* without 'port. */
+            len = strlen(str);
+        }
+
+        if (port <= 0 || len > sizeof(tmp) - 1)
+            return -1;
+
+        if (len) {
+            /* with 'ipv4addr'. */
+            memcpy(tmp, str, len);
+            tmp[len] = 0;
+        } else {
+            /* without 'ipv4addr'. */
+            strcpy(tmp, "127.0.0.1");
+        }
+
+        return uv_ip4_addr(tmp, port, (struct sockaddr_in*) addr);
+
+    } else {
+        /* "[ipv6addr]:port". */
+        char tmp[46];
+
+        p = strchr(str, ']');
+
+        if (!p) return -1;
+
+        if (p[1] == ':') {
+            /* with 'port'. */
+            port = atoi(p + 2);
+        }
+
+        len = p - str - 1; /* 'ipv6addr' length */
+
+        if (port <= 0 || len > sizeof(tmp) - 1)
+            return -1;
+
+        if (len > 0) {
+            /* with 'ipv6addr'. */
+            memcpy(tmp, str + 1, len);
+            tmp[len] = 0;
+        } else {
+            /* without 'ipv6addr'. */
+            strcpy(tmp, "::1");
+        }
+
+        return uv_ip6_addr(tmp, port, (struct sockaddr_in6*) addr);
+    }
+}
+
+int parse_domain_str(const char* str, int port, struct sockaddr_dm* addr)
+{
+    /* validate domain, TODO. */
+    const char* p = strchr(str, ':');
+    int len;
+
+    if (p) {
+        port = atoi(p + 1);
+        len = p - str;
+    } else {
+        len = strlen(str);
+    }
+
+    if (port <= 0 || len > MAX_DOMAIN_LEN - 1)
+        return -1;
+
+    addr->sdm_family = 0;
+    addr->sdm_port = htons(port);
+
+    if (len) {
+        memcpy(addr->sdm_addr, str, len);
+        addr->sdm_addr[len] = 0;
+    } else {
+        strcpy(addr->sdm_addr, "localhost");
+    }
+
+    return 0;
+}
+
 const char* addr_to_str(const void* addr)
 {
     union {
         const struct sockaddr*     d;
         const struct sockaddr_in*  d4;
         const struct sockaddr_in6* d6;
+        const struct sockaddr_dm*  dm;
     } u;
 
     _addrbuf[0] = 0;
@@ -79,6 +174,10 @@ const char* addr_to_str(const void* addr)
     case AF_INET6:
         uv_inet_ntop(AF_INET6, &u.d6->sin6_addr, _addrbuf, sizeof(_addrbuf));
         sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(u.d6->sin6_port));
+        break;
+
+    case 0: /* domain */
+        sprintf(_addrbuf, "%s:%d", u.dm->sdm_addr, ntohs(u.dm->sdm_port));
         break;
     }
 

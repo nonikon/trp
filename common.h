@@ -66,6 +66,13 @@ typedef struct {
     };
 } cmd_t;
 
+/* domain struct which compatible with 'struct sockaddr' */
+struct sockaddr_dm {
+    u16_t sdm_family; /* (always '0') */
+    u16_t sdm_port;   /* big endian port */
+     char sdm_addr[MAX_DOMAIN_LEN]; /* null-terminated domain */
+};
+
 #define is_valid_devid(s)   (*(u32_t*) (s))
 
 #define is_valid_cmd(c)     ( \
@@ -83,7 +90,24 @@ void rand_bytes(u8_t* data, u32_t len);
  */
 int parse_ip4_str(const char* str, int defport, struct sockaddr_in* addr);
 
-/* convert 'struct sockaddr_in' or struct sockaddr_in6' to string (include port). */
+/* parse ipv4/ipv6 address string to 'struct sockaddr'. Eg:
+ * - "1.2.3.4:8080" -> [1.2.3.4], [8080]
+ * - ":8080" -> [127.0.0.1], [8080]
+ * - "1.2.3.4" -> [1.2.3.4], [port]
+ * - "[::]:8080" -> [::], [8080]
+ * - "[]:8080" -> [::1], [8080]
+ * - "[::]" -> [::], [port]
+ */
+int parse_ip_str(const char* str, int port, struct sockaddr* addr);
+
+/* parse domain address string to 'struct sockaddr_dm'. Eg:
+ * - "www.example.com:8080" -> [www.example.com], [8080]
+ * - ":8080" -> [localhost], [8080]
+ * - "www.example.com" -> [www.example.com], [port]
+ */
+int parse_domain_str(const char* str, int port, struct sockaddr_dm* addr);
+
+/* convert 'struct sockaddr' to string (include port). */
 const char* addr_to_str(const void* addr);
 /* convert 'cmd_t' address to string (include port). */
 const char* maddr_to_str(const cmd_t* cmd);
