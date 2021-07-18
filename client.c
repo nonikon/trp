@@ -56,7 +56,15 @@ typedef struct {
 static uv_loop_t* loop;
 static uv_timer_t reconnect_timer;
 
-static struct sockaddr_dm server_addr;
+static union {
+    struct sockaddr x;
+    struct sockaddr_dm d;
+} server_addr;
+
+static union {
+    struct sockaddr x;
+    struct sockaddr_in6 d;
+} server_addr_r; /* store resolved server domain */
 
 static xlist_t client_ctxs;     /* client_ctx_t */
 static xlist_t io_buffers;      /* io_buf_t */
@@ -468,6 +476,9 @@ static void on_server_connected(uv_connect_t* req, int status)
     if (status < 0) {
         uv_close((uv_handle_t*) &ctx->io_server, on_io_closed);
 
+        /* mark server domain need to be resolved again. */
+        server_addr_r.x.sa_family = 0;
+
         /* reconnect after RECONNECT_INTERVAL ms. */
         if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
             uv_timer_start(&reconnect_timer, new_server_connection,
@@ -550,6 +561,9 @@ static void on_server_domain_resolved(
         xlog_debug("resolve server domain result [%s], connect it.",
             addr_to_str(res->ai_addr));
 
+        /* save resolved server domain. */
+        memcpy(&server_addr_r, res->ai_addr, res->ai_addrlen);
+
         connect_server(res->ai_addr);
         uv_freeaddrinfo(res);
     }
@@ -559,9 +573,13 @@ static void on_server_domain_resolved(
 
 static void new_server_connection(uv_timer_t* timer)
 {
-    if (server_addr.sdm_family) {
+    if (server_addr.x.sa_family) {
         /* server address is ipv4/ipv6, connect it directly. */
-        connect_server((struct sockaddr*) &server_addr);
+        connect_server(&server_addr.x);
+
+    } else if (server_addr_r.x.sa_family) {
+        /* use cached resolve result. */
+        connect_server(&server_addr_r.x);
 
     } else {
         /* server address is domain, resolve it. */
@@ -574,11 +592,11 @@ static void new_server_connection(uv_timer_t* timer)
         hints.ai_protocol = IPPROTO_TCP;
         hints.ai_flags = 0;
 
-        sprintf(portstr, "%d", ntohs(server_addr.sdm_port));
+        sprintf(portstr, "%d", ntohs(server_addr.d.sdm_port));
 
         if (uv_getaddrinfo(loop, req, on_server_domain_resolved,
-                server_addr.sdm_addr, portstr, &hints) != 0) {
-            xlog_error("uv_getaddrinfo (%s) failed immediately.", server_addr.sdm_addr);
+                server_addr.d.sdm_addr, portstr, &hints) != 0) {
+            xlog_error("uv_getaddrinfo (%s) failed immediately.", server_addr.d.sdm_addr);
 
             /* reconnect after RECONNECT_INTERVAL ms.
              * 'reconnect_timer' is inactive when 'new_server_connection'
@@ -739,8 +757,8 @@ int main(int argc, char** argv)
         goto end;
     }
 
-    if (parse_ip_str(server_str, DEF_SERVER_PORT, (struct sockaddr*) &server_addr) != 0
-            && parse_domain_str(server_str, DEF_SERVER_PORT, &server_addr) != 0) {
+    if (parse_ip_str(server_str, DEF_SERVER_PORT, &server_addr.x) != 0
+            && parse_domain_str(server_str, DEF_SERVER_PORT, &server_addr.d) != 0) {
         xlog_error("invalid server address [%s].", server_str);
         goto end;
     }
