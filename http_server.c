@@ -365,16 +365,16 @@ static void on_connect(uv_stream_t* server, int status)
 
 int http_server_start(uv_loop_t* loop, const char* str)
 {
-    struct sockaddr_in addr;
+    union { struct sockaddr x; struct sockaddr_in6 d; } addr;
     int error;
 
-    if (parse_ip4_str(str, DEF_CSERVER_PORT, &addr) != 0) {
+    if (parse_ip_str(str, DEF_CSERVER_PORT, &addr.x) != 0) {
         xlog_error("invalid control server address [%s].", str);
         return -1;
     }
 
     uv_tcp_init(loop, &io_server);
-    uv_tcp_bind(&io_server, (struct sockaddr*) &addr, 0);
+    uv_tcp_bind(&io_server, &addr.x, 0);
 
     io_server.data = loop;
 

@@ -56,7 +56,8 @@ typedef struct {
 
 static uv_loop_t* loop;
 
-static struct sockaddr_in xserver_addr;
+static union { struct sockaddr x; struct sockaddr_in6 d; } xserver_addr;
+
 static xlist_t sserver_ctxs;/* sserver_ctx_t */
 static xlist_t io_buffers;  /* io_buf_t */
 static xlist_t conn_reqs;   /* uv_connect_t */
@@ -271,7 +272,7 @@ static int connect_xserver(sserver_ctx_t* ctx)
     ++ctx->ref_count;
 
     if (uv_tcp_connect(req, &ctx->io_xserver,
-            (struct sockaddr*) &xserver_addr, on_xserver_connected) != 0) {
+            &xserver_addr.x, on_xserver_connected) != 0) {
         xlog_error("connect proxy server failed immediately.");
 
         uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
@@ -440,7 +441,7 @@ static int socks_handshake(sserver_ctx_t* ctx, uv_buf_t* buf)
                         *(u16_t*) (buf->base + 8), (u8_t*) (buf->base + 4), 4);
                     buf->base[1] = 0x00;
                 } else {
-                    xlog_warn("socks5 request packet len error.");
+                    xlog_warn("socks5 IPV4 request packet len (%d) error.", buf->len);
                     buf->base[1] = 0x01;
                 }
 
@@ -455,12 +456,22 @@ static int socks_handshake(sserver_ctx_t* ctx, uv_buf_t* buf)
                         port, (u8_t*) (buf->base + 5), l + 1);
                     buf->base[1] = 0x00;
                 } else {
-                    xlog_warn("socks5 request packet len error.");
+                    xlog_warn("socks5 request packet len error, domain len %d.", l);
+                    buf->base[1] = 0x01;
+                }
+
+            } else if (buf->base[3] == 0x04) { /* 'ATYP' == 0x04 (IPV6) */
+
+                if (buf->len == 6 + 16) {
+                    init_connect_cmd(ctx, CMD_CONNECT_IPV6,
+                        *(u16_t*) (buf->base + 20), (u8_t*) (buf->base + 4), 16);
+                    buf->base[1] = 0x00;
+                } else {
+                    xlog_warn("socks5 IPV6 request packet len (%d) error.", buf->len);
                     buf->base[1] = 0x01;
                 }
 
             } else {
-                /* connect ipv6 not supported. */
                 xlog_warn("unsupported socks5 address type %d.", buf->base[3]);
                 buf->base[1] = 0x08;
             }
@@ -469,21 +480,9 @@ static int socks_handshake(sserver_ctx_t* ctx, uv_buf_t* buf)
 
                 if (connect_xserver(ctx) == 0) {
                     /* assume that proxy server was connected successfully. */
-#if 0
-                    struct sockaddr_in d;
-                    int l = sizeof(d);
 
-                    /* get local address. */
-                    uv_tcp_getsockname(&ctx->io_xserver, (struct sockaddr*) &d, &l);
-                    /* set BND.ADDR and BND.PORT. */
-                    memcpy(buf->base + 4, &d.sin_addr, 4);
-                    memcpy(buf->base + 8, &d.sin_port, 2);
-
-                    xlog_debug("local addr [%s].", addr_to_str(&d));
-#else
-                    /* zero BIND.ADDR and BIND.PORT. */
+                    /* zero BIND.ADDR and BIND.PORT. uv_tcp_getsockname() maybe better. */
                     memset(buf->base + 4, 0, 6);
-#endif
 
                     /* stop reading from socks client until proxy server connected. */
                     uv_read_stop((uv_stream_t*) &ctx->io_sclient);
@@ -624,10 +623,10 @@ static void on_sclient_connect(uv_stream_t* stream, int status)
 
 static void usage(const char* s)
 {
-    fprintf(stderr, "trp v%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, s);
+    fprintf(stderr, "trp v%d.%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, s);
     fprintf(stderr, "options:\n");
-    fprintf(stderr, "  -x <ip:port>  proxy server connect to. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
-    fprintf(stderr, "  -b <ip:port>  SOCKS4/SOCKS5 server listen at. (default: 127.0.0.1:%d)\n", DEF_SSERVER_PORT);
+    fprintf(stderr, "  -x <address>  proxy server connect to. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
+    fprintf(stderr, "  -b <address>  SOCKS4/SOCKS5 server listen at. (default: 127.0.0.1:%d)\n", DEF_SSERVER_PORT);
     fprintf(stderr, "  -d <devid>    device id of client connect to. (default: not connect client)\n");
     fprintf(stderr, "  -m <method>   crypto method with proxy server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
     fprintf(stderr, "  -M <METHOD>   crypto method with client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
@@ -641,13 +640,21 @@ static void usage(const char* s)
 #endif
     fprintf(stderr, "  -v            output verbosely.\n");
     fprintf(stderr, "  -h            print this help message.\n");
+    fprintf(stderr, "[address]:\n");
+    fprintf(stderr, "  1.2.3.4:8080  IPV4 string with port.\n");
+    fprintf(stderr, "  1.2.3.4       IPV4 string with default port.\n");
+    fprintf(stderr, "  :8080         IPV4 string with default address.\n");
+    fprintf(stderr, "  [::1]:8080    IPV6 string with port.\n");
+    fprintf(stderr, "  [::1]         IPV6 string with default port.\n");
+    fprintf(stderr, "  []:8080       IPV6 string with default address.\n");
+    fprintf(stderr, "  []            IPV6 string with default address and port.\n");
     fprintf(stderr, "\n");
 }
 
 int main(int argc, char** argv)
 {
-    uv_tcp_t io_sserver;
-    struct sockaddr_in saddr;
+    uv_tcp_t io_sserver; /* socks server listen io */
+    union { struct sockaddr x; struct sockaddr_in6 d; } saddr;
     const char* xserver_str = "127.0.0.1";
     const char* sserver_str = "127.0.0.1";
     const char* devid_str = NULL;
@@ -767,18 +774,18 @@ int main(int argc, char** argv)
         goto end;
     }
 
-    if (parse_ip4_str(xserver_str, DEF_XSERVER_PORT, &xserver_addr) != 0) {
+    if (parse_ip_str(xserver_str, DEF_XSERVER_PORT, &xserver_addr.x) != 0) {
         xlog_error("invalid proxy server address [%s].", xserver_str);
         goto end;
     }
 
-    if (parse_ip4_str(sserver_str, DEF_SSERVER_PORT, &saddr) != 0) {
+    if (parse_ip_str(sserver_str, DEF_SSERVER_PORT, &saddr.x) != 0) {
         xlog_error("invalid socks5 server address [%s].", sserver_str);
         goto end;
     }
 
     uv_tcp_init(loop, &io_sserver);
-    uv_tcp_bind(&io_sserver, (struct sockaddr*) &saddr, 0);
+    uv_tcp_bind(&io_sserver, &saddr.x, 0);
 
     error = uv_listen((uv_stream_t*) &io_sserver,
                 LISTEN_BACKLOG, on_sclient_connect);

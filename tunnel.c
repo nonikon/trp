@@ -14,6 +14,7 @@
 #endif
 #ifdef __linux__
 #include <linux/netfilter_ipv4.h>
+#include <linux/netfilter_ipv6/ip6_tables.h>
 #endif
 
 #include "common.h"
@@ -49,8 +50,9 @@ typedef struct {
 
 static uv_loop_t* loop;
 
-static struct sockaddr_in xserver_addr;
-static struct sockaddr_in tunnel_addr;
+static union { struct sockaddr x; struct sockaddr_in6 d; } xserver_addr;
+static cmd_t tunnel_maddr;
+
 static xlist_t tserver_ctxs;/* tserver_ctx_t */
 static xlist_t io_buffers;  /* io_buf_t */
 static xlist_t conn_reqs;   /* uv_connect_t */
@@ -362,24 +364,35 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
         xlog_debug("a tunnel client connected.");
 
 #ifdef __linux__
-        if (!tunnel_addr.sin_family) {
-            struct sockaddr_in dest;
+        if (!tunnel_maddr.tag) {
+            union {
+                struct sockaddr     vx;
+                struct sockaddr_in  v4;
+                struct sockaddr_in6 v6;
+            } dest;
             socklen_t len = sizeof(dest);
 
-            if (getsockopt(ctx->io_tclient.io_watcher.fd, SOL_IP, SO_ORIGINAL_DST,
-                    &dest, &len) != 0) {
+            if (getsockopt(ctx->io_tclient.io_watcher.fd,
+                    SOL_IPV6, IP6T_SO_ORIGINAL_DST, &dest, &len) != 0 &&
+                getsockopt(ctx->io_tclient.io_watcher.fd,
+                    SOL_IP, SO_ORIGINAL_DST, &dest, &len) != 0) {
                 xlog_warn("getsockopt SO_ORIGINAL_DST failed.");
 
                 uv_close((uv_handle_t*) &ctx->io_tclient, on_io_closed);
                 return;
             }
 
-            init_connect_cmd(ctx, CMD_CONNECT_IPV4,
-                dest.sin_port, (u8_t*) &dest.sin_addr, 4);
+            if (dest.vx.sa_family == AF_INET) {
+                init_connect_cmd(ctx, CMD_CONNECT_IPV4,
+                    dest.v4.sin_port, (u8_t*) &dest.v4.sin_addr, 4);
+            } else {
+                init_connect_cmd(ctx, CMD_CONNECT_IPV6,
+                    dest.v6.sin6_port, (u8_t*) &dest.v6.sin6_addr, 16);
+            }
         } else {
 #endif
-            init_connect_cmd(ctx, CMD_CONNECT_IPV4,
-                tunnel_addr.sin_port, (u8_t*) &tunnel_addr.sin_addr, 4);
+            init_connect_cmd(ctx, tunnel_maddr.cmd,
+                tunnel_maddr.t.port, tunnel_maddr.t.addr, tunnel_maddr.tag);
 #ifdef __linux__
         }
 #endif
@@ -397,16 +410,60 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
     }
 }
 
+static int init_tunnel_maddr(const char* addrstr)
+{
+    union {
+        struct sockaddr     dx;
+        struct sockaddr_in  d4;
+        struct sockaddr_in6 d6;
+        struct sockaddr_dm  dm;
+    } _;
+
+    if (parse_ip_str(addrstr, -1, &_.dx) == 0) {
+
+        if (_.dx.sa_family == AF_INET) {
+            tunnel_maddr.tag = 4;
+            tunnel_maddr.cmd = CMD_CONNECT_IPV4;
+            tunnel_maddr.t.port = _.d4.sin_port;
+
+            memcpy(tunnel_maddr.t.addr, &_.d4.sin_addr, 4);
+
+        } else {
+            tunnel_maddr.tag = 16;
+            tunnel_maddr.cmd = CMD_CONNECT_IPV6;
+            tunnel_maddr.t.port = _.d6.sin6_port;
+
+            memcpy(tunnel_maddr.t.addr, &_.d6.sin6_addr, 16);
+        }
+
+    } else if (parse_domain_str(addrstr, -1, &_.dm) == 0) {
+
+        tunnel_maddr.tag = (u8_t) (strlen(_.dm.sdm_addr) + 1);
+        tunnel_maddr.cmd = CMD_CONNECT_DOMAIN;
+        tunnel_maddr.t.port = _.dm.sdm_port;
+
+        memcpy((char*) tunnel_maddr.t.addr, _.dm.sdm_addr,
+            tunnel_maddr.tag);
+
+    } else {
+        return -1;
+    }
+
+    tunnel_maddr.major = VERSION_MAJOR;
+    tunnel_maddr.minor = VERSION_MINOR;
+    return 0;
+}
+
 static void usage(const char* s)
 {
-    fprintf(stderr, "trp v%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, s);
+    fprintf(stderr, "trp v%d.%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, s);
     fprintf(stderr, "options:\n");
-    fprintf(stderr, "  -x <ip:port>  proxy server connect to. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
-    fprintf(stderr, "  -b <ip:port>  tunnel server listen at. (default: 127.0.0.1:%d)\n", DEF_TSERVER_PORT);
+    fprintf(stderr, "  -x <address>  proxy server connect to. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
+    fprintf(stderr, "  -b <address>  tunnel server listen at. (default: 127.0.0.1:%d)\n", DEF_TSERVER_PORT);
 #ifdef __linux__
-    fprintf(stderr, "  -t <ip:port>  address tunnel to. (default: transparent proxy mode)\n");
+    fprintf(stderr, "  -t <address>  target tunnel to. (default: transparent proxy mode)\n");
 #else
-    fprintf(stderr, "  -t <ip:port>  address tunnel to.\n");
+    fprintf(stderr, "  -t <address>  target tunnel to.\n");
 #endif
     fprintf(stderr, "  -d <devid>    device id of client connect to. (default: not connect client)\n");
     fprintf(stderr, "  -m <method>   crypto method with proxy server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
@@ -421,13 +478,23 @@ static void usage(const char* s)
 #endif
     fprintf(stderr, "  -v            output verbosely.\n");
     fprintf(stderr, "  -h            print this help message.\n");
+    fprintf(stderr, "[address]:\n");
+    fprintf(stderr, "  1.2.3.4:8080  IPV4 string with port.\n");
+    fprintf(stderr, "  1.2.3.4       IPV4 string with default port.\n");
+    fprintf(stderr, "  :8080         IPV4 string with default address.\n");
+    fprintf(stderr, "  [::1]:8080    IPV6 string with port.\n");
+    fprintf(stderr, "  [::1]         IPV6 string with default port.\n");
+    fprintf(stderr, "  []:8080       IPV6 string with default address.\n");
+    fprintf(stderr, "  []            IPV6 string with default address and port.\n");
+    fprintf(stderr, "  abc.com:8080  DOMAIN string with port (tunnel target only).\n");
+    fprintf(stderr, "  abc.com       DOMAIN string with default port (tunnel target only).\n");
     fprintf(stderr, "\n");
 }
 
 int main(int argc, char** argv)
 {
-    uv_tcp_t io_tserver;
-    struct sockaddr_in taddr;
+    uv_tcp_t io_tserver; /* tunnel server listen io */
+    union { struct sockaddr x; struct sockaddr_in6 d; } taddr;
     const char* xserver_str = "127.0.0.1";
     const char* tserver_str = "127.0.0.1";
     const char* tunnel_str = NULL;
@@ -549,12 +616,12 @@ int main(int argc, char** argv)
         goto end;
     }
 
-    if (parse_ip4_str(xserver_str, DEF_XSERVER_PORT, &xserver_addr) != 0) {
+    if (parse_ip_str(xserver_str, DEF_XSERVER_PORT, &xserver_addr.x) != 0) {
         xlog_error("invalid proxy server address [%s].", xserver_str);
         goto end;
     }
 
-    if (parse_ip4_str(tserver_str, DEF_TSERVER_PORT, &taddr) != 0) {
+    if (parse_ip_str(tserver_str, DEF_TSERVER_PORT, &taddr.x) != 0) {
         xlog_error("invalid tunnel server address [%s].", tserver_str);
         goto end;
     }
@@ -566,15 +633,13 @@ int main(int argc, char** argv)
         xlog_error("tunnel address must be specified on !linux.");
         goto end;
 #endif
-    } else if (parse_ip4_str(tunnel_str, -1, &tunnel_addr) != 0) {
+    } else if (init_tunnel_maddr(tunnel_str) != 0) {
         xlog_error("invalid tunnel address [%s].", tunnel_str);
         goto end;
-    } else {
-        xlog_info("tunnel to [%s].", addr_to_str(&tunnel_addr));
     }
 
     uv_tcp_init(loop, &io_tserver);
-    uv_tcp_bind(&io_tserver, (struct sockaddr*) &taddr, 0);
+    uv_tcp_bind(&io_tserver, &taddr.x, 0);
 
     error = uv_listen((uv_stream_t*) &io_tserver,
                 LISTEN_BACKLOG, on_tclient_connect);
@@ -590,6 +655,7 @@ int main(int argc, char** argv)
 
     xlog_info("proxy server [%s].", addr_to_str(&xserver_addr));
     xlog_info("tunnel server listen at [%s]...", addr_to_str(&taddr));
+    xlog_info("tunnel to [%s].", maddr_to_str(&tunnel_maddr));
     uv_run(loop, UV_RUN_DEFAULT);
 
     xlist_destroy(&conn_reqs);

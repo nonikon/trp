@@ -35,30 +35,6 @@ void rand_bytes(u8_t* data, u32_t len)
     }
 }
 
-int parse_ip4_str(const char* str, int defport, struct sockaddr_in* addr)
-{
-    char* p = strchr(str, ':');
-
-    if (p) {
-        char ip[16];
-
-        if (p - str > 15)
-            return -1;
-
-        if (p == str)
-            return uv_ip4_addr("127.0.0.1", atoi(p + 1), addr);
-
-        memcpy(ip, str, p - str);
-        ip[p - str] = 0;
-
-        return uv_ip4_addr(ip, atoi(p + 1), addr);
-    }
-
-    if (defport < 0) return -1;
-
-    return uv_ip4_addr(str, defport, addr);
-}
-
 int parse_ip_str(const char* str, int port, struct sockaddr* addr)
 {
     const char* p;
@@ -73,10 +49,10 @@ int parse_ip_str(const char* str, int port, struct sockaddr* addr)
         if (p) {
             /* with 'port'. */
             port = atoi(p + 1);
-            len = p - str;
+            len = (int) (p - str);
         } else {
             /* without 'port. */
-            len = strlen(str);
+            len = (int) strlen(str);
         }
 
         if (port <= 0 || len > sizeof(tmp) - 1)
@@ -106,7 +82,7 @@ int parse_ip_str(const char* str, int port, struct sockaddr* addr)
             port = atoi(p + 2);
         }
 
-        len = p - str - 1; /* 'ipv6addr' length */
+        len = (int) (p - str - 1); /* 'ipv6addr' length */
 
         if (port <= 0 || len > sizeof(tmp) - 1)
             return -1;
@@ -132,9 +108,9 @@ int parse_domain_str(const char* str, int port, struct sockaddr_dm* addr)
 
     if (p) {
         port = atoi(p + 1);
-        len = p - str;
+        len = (int) (p - str);
     } else {
-        len = strlen(str);
+        len = (int) strlen(str);
     }
 
     if (port <= 0 || len > MAX_DOMAIN_LEN - 1)
@@ -156,16 +132,16 @@ int parse_domain_str(const char* str, int port, struct sockaddr_dm* addr)
 const char* addr_to_str(const void* addr)
 {
     union {
-        const struct sockaddr*     d;
+        const struct sockaddr*     dx;
         const struct sockaddr_in*  d4;
         const struct sockaddr_in6* d6;
         const struct sockaddr_dm*  dm;
     } u;
 
     _addrbuf[0] = 0;
-    u.d = addr;
+    u.dx = addr;
 
-    switch (u.d->sa_family) {
+    switch (u.dx->sa_family) {
     case AF_INET:
         uv_inet_ntop(AF_INET, &u.d4->sin_addr, _addrbuf, sizeof(_addrbuf));
         sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(u.d4->sin_port));

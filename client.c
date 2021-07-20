@@ -56,15 +56,8 @@ typedef struct {
 static uv_loop_t* loop;
 static uv_timer_t reconnect_timer;
 
-static union {
-    struct sockaddr x;
-    struct sockaddr_dm d;
-} server_addr;
-
-static union {
-    struct sockaddr x;
-    struct sockaddr_in6 d;
-} server_addr_r; /* store resolved server domain */
+static union { struct sockaddr x; struct sockaddr_dm  d; } server_addr;
+static union { struct sockaddr x; struct sockaddr_in6 d; } server_addr_r; /* store resolved server domain */
 
 static xlist_t client_ctxs;     /* client_ctx_t */
 static xlist_t io_buffers;      /* io_buf_t */
@@ -368,7 +361,7 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                     char portstr[8];
                     uv_getaddrinfo_t* req = xlist_alloc_back(&addrinfo_reqs);
 
-                    hints.ai_family = AF_INET;
+                    hints.ai_family = AF_UNSPEC; /* ipv4 and ipv6 */
                     hints.ai_socktype = SOCK_STREAM;
                     hints.ai_protocol = IPPROTO_TCP;
                     hints.ai_flags = 0;
@@ -390,8 +383,26 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                         xlist_erase(&addrinfo_reqs, xlist_value_iter(req));
                     }
 
+                } else if (cmd->cmd == CMD_CONNECT_IPV6) {
+                    struct sockaddr_in6 remote;
+
+                    remote.sin6_family = AF_INET6;
+                    remote.sin6_port = cmd->t.port;
+
+                    memcpy(&remote.sin6_addr, &cmd->t.addr, 16);
+                    xlog_debug("got CONNECT_IPV6 cmd (%s) from proxy client, process.",
+                        addr_to_str(&remote));                                                                               
+
+                    /* stop reading from server until remote connected. */
+                    uv_read_stop(stream);
+
+                    if (connect_remote(ctx, (struct sockaddr*) &remote) != 0) {
+                        /* connect failed immediately, just close this connection. */
+                        uv_close((uv_handle_t*) stream, on_io_closed);
+                    }
+
                 } else {
-                    xlog_warn("got an error command from proxy client.");
+                    xlog_warn("got an error command (%d) from proxy client.", cmd->cmd);
                     uv_close((uv_handle_t*) stream, on_io_closed);
                 }
 
@@ -615,7 +626,7 @@ static void new_server_connection(uv_timer_t* timer)
 
 static void usage(const char* s)
 {
-    fprintf(stderr, "trp v%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, s);
+    fprintf(stderr, "trp v%d.%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, s);
     fprintf(stderr, "[options]:\n");
     fprintf(stderr, "  -s <address>  server connect to. (default: 127.0.0.1:%d)\n", DEF_SERVER_PORT);
     fprintf(stderr, "  -d <devid>    device id of this client. (default: %s)\n", devid_to_str((u8_t*) DEFAULT_DEVID));
@@ -638,6 +649,7 @@ static void usage(const char* s)
     fprintf(stderr, "  [::1]:8080    IPV6 string with port.\n");
     fprintf(stderr, "  [::1]         IPV6 string with default port.\n");
     fprintf(stderr, "  []:8080       IPV6 string with default address.\n");
+    fprintf(stderr, "  []            IPV6 string with default address and port.\n");
     fprintf(stderr, "  abc.com:8080  DOMAIN string with port.\n");
     fprintf(stderr, "  abc.com       DOMAIN string with default port.\n");
     fprintf(stderr, "\n");

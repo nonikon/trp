@@ -13,6 +13,7 @@
 
 #define VERSION_MAJOR       0x01
 #define VERSION_MINOR       0x02
+#define VERSION_PATCH       0x00
 
 #define DEF_SERVER_PORT     9901    /* default server port */
 #define DEF_XSERVER_PORT    9902    /* default proxy server port */
@@ -37,7 +38,7 @@ typedef signed int      s32_t;
 
 enum {
     CMD_CONNECT_IPV4,
-    CMD_CONNECT_IPV6,   /* current not supported */
+    CMD_CONNECT_IPV6,
     CMD_CONNECT_DOMAIN,
     CMD_CONNECT_CLIENT,
     CMD_REPORT_DEVID,
@@ -82,13 +83,6 @@ struct sockaddr_dm {
 
 void seed_rand(u32_t seed);
 void rand_bytes(u8_t* data, u32_t len);
-
-/* parse ipv4 string to sockaddr_in. Eg:
- * - [1.2.3.4:8080] -> [1.2.3.4], [8080]
- * - [:8080] -> [127.0.0.1], [8080]
- * - [1.2.3.4] -> [1.2.3.4], [defport]
- */
-int parse_ip4_str(const char* str, int defport, struct sockaddr_in* addr);
 
 /* parse ipv4/ipv6 address string to 'struct sockaddr'. Eg:
  * - "1.2.3.4:8080" -> [1.2.3.4], [8080]

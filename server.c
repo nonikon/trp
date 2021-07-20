@@ -217,8 +217,8 @@ static void on_client_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                         ctx = xlist_front(&pdctx->xclients);
                         ctx->pending_ctx = NULL;
                         /* move proxy client node from 'pdctx->xclients' to 'xserver_ctxs' */
-                        xlist_paste_back(&xserver_ctxs, xlist_cut(
-                            &pdctx->xclients, xlist_value_iter(ctx)));
+                        xlist_paste_back(&xserver_ctxs,
+                            xlist_cut(&pdctx->xclients, xlist_value_iter(ctx)));
 
                         uv_read_start((uv_stream_t*) &ctx->io_xclient,
                             on_iobuf_alloc, on_xclient_read);
@@ -236,7 +236,7 @@ static void on_client_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                 }
 
             } else {
-                xlog_warn("got an error command from client.");
+                xlog_warn("got an error command (%d) from client.", cmd->cmd);
                 uv_close((uv_handle_t*) stream, on_peer_closed);
             }
 
@@ -323,8 +323,7 @@ static void on_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
 
         /* 'iob' free later. */
     } else if (nread < 0) {
-        xlog_debug("disconnected from remote: %s.",
-            uv_err_name((int) nread));
+        xlog_debug("disconnected from remote: %s.", uv_err_name((int) nread));
 
         uv_close((uv_handle_t*) &ctx->io_xclient, on_xclient_closed);
         uv_close((uv_handle_t*) stream, on_peer_closed);
@@ -609,8 +608,8 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
                             }
 
                             /* move proxy client node from 'xserver_ctxs' to 'pdctx->xclients' */
-                            xlist_paste_back(&pdctx->xclients, xlist_cut(
-                                &xserver_ctxs, xlist_value_iter(ctx)));
+                            xlist_paste_back(&pdctx->xclients,
+                                xlist_cut(&xserver_ctxs, xlist_value_iter(ctx)));
                         }
 
                     } else {
@@ -642,7 +641,7 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
                     char portstr[8];
                     uv_getaddrinfo_t* req = xlist_alloc_back(&addrinfo_reqs);
 
-                    hints.ai_family = AF_INET;
+                    hints.ai_family = AF_UNSPEC; /* ipv4 and ipv6 */
                     hints.ai_socktype = SOCK_STREAM;
                     hints.ai_protocol = IPPROTO_TCP;
                     hints.ai_flags = 0;
@@ -664,8 +663,27 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
                         xlist_erase(&addrinfo_reqs, xlist_value_iter(req));
                     }
 
+                } else if (cmd->cmd == CMD_CONNECT_IPV6) {
+                    struct sockaddr_in6 remote;
+
+                    remote.sin6_family = AF_INET6;
+                    remote.sin6_port = cmd->t.port;
+
+                    memcpy(&remote.sin6_addr, &cmd->t.addr, 16);
+
+                    xlog_debug("got CONNECT_IPV6 cmd (%s) from proxy client, process.",
+                        addr_to_str(&remote));
+
+                    /* stop reading from proxy client until remote connected. */
+                    uv_read_stop(stream);
+
+                    if (connect_remote(ctx, (struct sockaddr*) &remote) != 0) {
+                        /* connect failed immediately, just close this connection. */
+                        uv_close((uv_handle_t*) stream, on_xclient_closed);
+                    }
+
                 } else {
-                    xlog_warn("got an error command from proxy client.");
+                    xlog_warn("got an error command (%d) from proxy client.", cmd->cmd);
                     uv_close((uv_handle_t*) stream, on_xclient_closed);
                 }
 
@@ -749,10 +767,10 @@ static int _pending_ctx_equal(void* l, void* r)
 
 static void usage(const char* s)
 {
-    fprintf(stderr, "trp v%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, s);
+    fprintf(stderr, "trp v%d.%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, s);
     fprintf(stderr, "options:\n");
-    fprintf(stderr, "  -s <ip:port>  server listen at. (default: 127.0.0.1:%d)\n", DEF_SERVER_PORT);
-    fprintf(stderr, "  -x <ip:port>  proxy server listen at. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
+    fprintf(stderr, "  -s <address>  server listen at. (default: 127.0.0.1:%d)\n", DEF_SERVER_PORT);
+    fprintf(stderr, "  -x <address>  proxy server listen at. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
     fprintf(stderr, "  -m <method>   crypto method, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
     fprintf(stderr, "  -k <password> crypto password. (default: none)\n");
 #ifdef _WIN32
@@ -763,6 +781,14 @@ static void usage(const char* s)
 #endif
     fprintf(stderr, "  -v            output verbosely.\n");
     fprintf(stderr, "  -h            print this help message.\n");
+    fprintf(stderr, "[address]:\n");
+    fprintf(stderr, "  1.2.3.4:8080  IPV4 string with port.\n");
+    fprintf(stderr, "  1.2.3.4       IPV4 string with default port.\n");
+    fprintf(stderr, "  :8080         IPV4 string with default address.\n");
+    fprintf(stderr, "  [::1]:8080    IPV6 string with port.\n");
+    fprintf(stderr, "  [::1]         IPV6 string with default port.\n");
+    fprintf(stderr, "  []:8080       IPV6 string with default address.\n");
+    fprintf(stderr, "  []            IPV6 string with default address and port.\n");
     fprintf(stderr, "\n");
 }
 
@@ -770,8 +796,8 @@ int main(int argc, char** argv)
 {
     uv_tcp_t io_server;  /* server listen io */
     uv_tcp_t io_xserver; /* proxy-server listen io */
-    struct sockaddr_in addr;
-    struct sockaddr_in xaddr;
+    union { struct sockaddr x; struct sockaddr_in6 d; } addr;
+    union { struct sockaddr x; struct sockaddr_in6 d; } xaddr;
     const char* server_str = "127.0.0.1";
     const char* xserver_str = "127.0.0.1";
     const char* logfile = NULL;
@@ -862,19 +888,19 @@ int main(int argc, char** argv)
         goto end;
     }
 
-    if (parse_ip4_str(server_str, DEF_SERVER_PORT, &addr) != 0) {
+    if (parse_ip_str(server_str, DEF_SERVER_PORT, &addr.x) != 0) {
         xlog_error("invalid server address [%s].", server_str);
         goto end;
     }
-    if (parse_ip4_str(xserver_str, DEF_XSERVER_PORT, &xaddr) != 0) {
+    if (parse_ip_str(xserver_str, DEF_XSERVER_PORT, &xaddr.x) != 0) {
         xlog_error("invalid proxy server address [%s].", xserver_str);
         goto end;
     }
 
     uv_tcp_init(loop, &io_server);
     uv_tcp_init(loop, &io_xserver);
-    uv_tcp_bind(&io_server, (struct sockaddr*) &addr, 0);
-    uv_tcp_bind(&io_xserver, (struct sockaddr*) &xaddr, 0);
+    uv_tcp_bind(&io_server, &addr.x, 0);
+    uv_tcp_bind(&io_xserver, &xaddr.x, 0);
 
     error = uv_listen((uv_stream_t*) &io_server,
                 LISTEN_BACKLOG, on_client_connect);
