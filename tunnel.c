@@ -13,6 +13,7 @@
 #include <sys/resource.h> /* for setrlimit() */
 #endif
 #ifdef __linux__
+#include <linux/if.h>
 #include <linux/netfilter_ipv4.h>
 #include <linux/netfilter_ipv6/ip6_tables.h>
 #endif
@@ -364,7 +365,12 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
         xlog_debug("a tunnel client connected.");
 
 #ifdef __linux__
-        if (!tunnel_maddr.tag) {
+        if (tunnel_maddr.tag) {
+#endif
+            init_connect_cmd(ctx, tunnel_maddr.cmd,
+                tunnel_maddr.t.port, tunnel_maddr.t.addr, tunnel_maddr.tag);
+#ifdef __linux__
+        } else {
             union {
                 struct sockaddr     vx;
                 struct sockaddr_in  v4;
@@ -373,27 +379,20 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
             socklen_t len = sizeof(dest);
 
             if (getsockopt(ctx->io_tclient.io_watcher.fd,
-                    SOL_IPV6, IP6T_SO_ORIGINAL_DST, &dest, &len) != 0 &&
-                getsockopt(ctx->io_tclient.io_watcher.fd,
-                    SOL_IP, SO_ORIGINAL_DST, &dest, &len) != 0) {
-                xlog_warn("getsockopt SO_ORIGINAL_DST failed.");
+                    SOL_IP, SO_ORIGINAL_DST, &dest, &len) == 0) {
+                init_connect_cmd(ctx, CMD_CONNECT_IPV4,
+                    dest.v4.sin_port, (u8_t*) &dest.v4.sin_addr, 4);
 
+            } else if (getsockopt(ctx->io_tclient.io_watcher.fd,
+                    SOL_IPV6, IP6T_SO_ORIGINAL_DST, &dest, &len) == 0) {
+                init_connect_cmd(ctx, CMD_CONNECT_IPV6,
+                    dest.v6.sin6_port, (u8_t*) &dest.v6.sin6_addr, 16);
+
+            } else {
+                xlog_warn("getsockopt IP6T_SO_ORIGINAL_DST failed: %s.", strerror(errno));
                 uv_close((uv_handle_t*) &ctx->io_tclient, on_io_closed);
                 return;
             }
-
-            if (dest.vx.sa_family == AF_INET) {
-                init_connect_cmd(ctx, CMD_CONNECT_IPV4,
-                    dest.v4.sin_port, (u8_t*) &dest.v4.sin_addr, 4);
-            } else {
-                init_connect_cmd(ctx, CMD_CONNECT_IPV6,
-                    dest.v6.sin6_port, (u8_t*) &dest.v6.sin6_addr, 16);
-            }
-        } else {
-#endif
-            init_connect_cmd(ctx, tunnel_maddr.cmd,
-                tunnel_maddr.t.port, tunnel_maddr.t.addr, tunnel_maddr.tag);
-#ifdef __linux__
         }
 #endif
         uv_tcp_init(loop, &ctx->io_xserver);
@@ -636,6 +635,8 @@ int main(int argc, char** argv)
     } else if (init_tunnel_maddr(tunnel_str) != 0) {
         xlog_error("invalid tunnel address [%s].", tunnel_str);
         goto end;
+    } else {
+        xlog_info("tunnel to [%s].", maddr_to_str(&tunnel_maddr));
     }
 
     uv_tcp_init(loop, &io_tserver);
@@ -655,7 +656,6 @@ int main(int argc, char** argv)
 
     xlog_info("proxy server [%s].", addr_to_str(&xserver_addr));
     xlog_info("tunnel server listen at [%s]...", addr_to_str(&taddr));
-    xlog_info("tunnel to [%s].", maddr_to_str(&tunnel_maddr));
     uv_run(loop, UV_RUN_DEFAULT);
 
     xlist_destroy(&conn_reqs);
