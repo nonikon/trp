@@ -70,6 +70,8 @@ static u8_t crypto_key[16]; /* crypto key between client and server */
 static u8_t cryptox_key[16];/* crypto key between client and proxy-client */
 static u8_t device_id[DEVICE_ID_SIZE];
 
+static int nconnect = 1;
+
 static void on_remote_write(uv_write_t* req, int status);
 static void on_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf);
 static void on_remote_connected(uv_connect_t* req, int status);
@@ -317,6 +319,7 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
         }
 
         if (ctx->stage == STAGE_COMMAND) {
+            ++nconnect;
             /* start a new server connection always. */
             new_server_connection(NULL);
 
@@ -428,8 +431,9 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
         } else if (ctx->stage == STAGE_COMMAND) {
             xlog_warn("connection closed by server at COMMAND stage.");
 
-            /* delay connect */
+            ++nconnect;
             if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
+                /* reconnect after RECONNECT_INTERVAL ms. */
                 uv_timer_start(&reconnect_timer, new_server_connection,
                     RECONNECT_INTERVAL, 0);
             }
@@ -490,8 +494,9 @@ static void on_server_connected(uv_connect_t* req, int status)
         /* mark server domain need to be resolved again. */
         server_addr_r.x.sa_family = 0;
 
-        /* reconnect after RECONNECT_INTERVAL ms. */
+        ++nconnect;
         if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
+            /* reconnect after RECONNECT_INTERVAL ms. */
             uv_timer_start(&reconnect_timer, new_server_connection,
                 RECONNECT_INTERVAL, 0);
         }
@@ -503,10 +508,10 @@ static void on_server_connected(uv_connect_t* req, int status)
         }
 
     } else {
-        uv_read_start((uv_stream_t*) &ctx->io_server,
-            on_iobuf_alloc, on_server_read);
         /* enable tcp-keepalive. */
         uv_tcp_keepalive(&ctx->io_server, 1, KEEPIDLE_TIME);
+        uv_read_start((uv_stream_t*) &ctx->io_server,
+            on_iobuf_alloc, on_server_read);
 
         report_device_id(ctx);
 
@@ -517,6 +522,10 @@ static void on_server_connected(uv_connect_t* req, int status)
         } else {
             xlog_info("server connected.");
             retry_displayed = 0;
+        }
+
+        if (nconnect > 0) {
+            new_server_connection(NULL);
         }
     }
 
@@ -546,8 +555,9 @@ static void connect_server(struct sockaddr* addr)
     if (uv_tcp_connect(req, &ctx->io_server, addr, on_server_connected) != 0) {
         xlog_error("connect server failed immediately.");
 
-        /* reconnect after RECONNECT_INTERVAL ms. */
+        ++nconnect;
         if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
+            /* reconnect after RECONNECT_INTERVAL ms. */
             uv_timer_start(&reconnect_timer, new_server_connection,
                 RECONNECT_INTERVAL, 0);
         }
@@ -563,7 +573,9 @@ static void on_server_domain_resolved(
     if (status < 0) {
         xlog_warn("resolve server domain failed: %s.", uv_err_name(status));
 
+        ++nconnect;
         if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
+            /* reconnect after RECONNECT_INTERVAL ms. */
             uv_timer_start(&reconnect_timer, new_server_connection,
                 RECONNECT_INTERVAL, 0);
         }
@@ -584,6 +596,8 @@ static void on_server_domain_resolved(
 
 static void new_server_connection(uv_timer_t* timer)
 {
+    --nconnect;
+
     if (server_addr.x.sa_family) {
         /* server address is ipv4/ipv6, connect it directly. */
         connect_server(&server_addr.x);
@@ -609,12 +623,13 @@ static void new_server_connection(uv_timer_t* timer)
                 server_addr.d.sdm_addr, portstr, &hints) != 0) {
             xlog_error("uv_getaddrinfo (%s) failed immediately.", server_addr.d.sdm_addr);
 
-            /* reconnect after RECONNECT_INTERVAL ms.
-             * 'reconnect_timer' is inactive when 'new_server_connection'
-             * is invoked by 'reconnect_timer'. so,
-             * 'uv_timer_start' will not be called twice anyway.
-             */
+            ++nconnect;
             if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
+                /* reconnect after RECONNECT_INTERVAL ms.
+                 * 'reconnect_timer' is inactive when 'new_server_connection'
+                 * is invoked by 'reconnect_timer'. so,
+                 * 'uv_timer_start' will not be called twice anyway.
+                 */
                 uv_timer_start(&reconnect_timer, new_server_connection,
                     RECONNECT_INTERVAL, 0);
             }
@@ -634,6 +649,7 @@ static void usage(const char* s)
     fprintf(stderr, "  -M <METHOD>   crypto method with proxy client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
     fprintf(stderr, "  -k <password> crypto password with server. (default: none)\n");
     fprintf(stderr, "  -K <PASSWORD> crypto password with proxy client. (default: none)\n");
+    fprintf(stderr, "  -c <number>   set the number of connection pools. (default: 1)\n");
 #ifdef _WIN32
     fprintf(stderr, "  -L <path>     write output to file. (default: write to STDOUT)\n");
 #else
@@ -698,6 +714,7 @@ int main(int argc, char** argv)
         case 'M':    methodx = atoi(arg); continue;
         case 'k':     passwd = arg; continue;
         case 'K':    passwdx = arg; continue;
+        case 'c':   nconnect = atoi(arg); continue;
 #ifndef _WIN32
         case 'n':     nofile = atoi(arg); continue;
 #endif
@@ -737,6 +754,10 @@ int main(int argc, char** argv)
         xlog_ctrl(XLOG_INFO, 0, 0);
     } else {
         xlog_info("enable verbose output.");
+    }
+
+    if (nconnect <= 0 || nconnect > 1024) {
+        xlog_warn("invalid connection pool size [%d], ignore it.", nconnect);
     }
 
     if (!devid_str) {
