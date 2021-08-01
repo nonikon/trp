@@ -456,7 +456,7 @@ static int init_tunnel_maddr(const char* addrstr)
 static void usage(const char* s)
 {
     fprintf(stderr, "trp v%d.%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, s);
-    fprintf(stderr, "options:\n");
+    fprintf(stderr, "[options]:\n");
     fprintf(stderr, "  -x <address>  proxy server connect to. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
     fprintf(stderr, "  -b <address>  tunnel server listen at. (default: 127.0.0.1:%d)\n", DEF_TSERVER_PORT);
 #ifdef __linux__
@@ -485,8 +485,8 @@ static void usage(const char* s)
     fprintf(stderr, "  [::1]         IPV6 string with default port.\n");
     fprintf(stderr, "  []:8080       IPV6 string with default address.\n");
     fprintf(stderr, "  []            IPV6 string with default address and port.\n");
-    fprintf(stderr, "  abc.com:8080  DOMAIN string with port (tunnel target only).\n");
-    fprintf(stderr, "  abc.com       DOMAIN string with default port (tunnel target only).\n");
+    fprintf(stderr, "  abc.com:8080  DOMAIN string with port.\n");
+    fprintf(stderr, "  abc.com       DOMAIN string with default port.\n");
     fprintf(stderr, "\n");
 }
 
@@ -616,8 +616,13 @@ int main(int argc, char** argv)
     }
 
     if (parse_ip_str(xserver_str, DEF_XSERVER_PORT, &xserver_addr.x) != 0) {
-        xlog_error("invalid proxy server address [%s].", xserver_str);
-        goto end;
+        struct sockaddr_dm dm;
+
+        if (parse_domain_str(xserver_str, DEF_XSERVER_PORT, &dm) != 0
+                || resolve_domain_sync(loop, &dm, &xserver_addr.x) != 0) {
+            xlog_error("invalid proxy server address [%s].", xserver_str);
+            goto end;
+        }
     }
 
     if (parse_ip_str(tserver_str, DEF_TSERVER_PORT, &taddr.x) != 0) {

@@ -101,6 +101,10 @@ int parse_ip_str(const char* str, int port, struct sockaddr* addr);
  */
 int parse_domain_str(const char* str, int port, struct sockaddr_dm* addr);
 
+/* resolve domain synchronously. */
+int resolve_domain_sync(uv_loop_t* loop,
+        const struct sockaddr_dm* dm, struct sockaddr* addr);
+
 /* convert 'struct sockaddr' to string (include port). */
 const char* addr_to_str(const void* addr);
 /* convert 'cmd_t' address to string (include port). */

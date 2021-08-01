@@ -129,6 +129,31 @@ int parse_domain_str(const char* str, int port, struct sockaddr_dm* addr)
     return 0;
 }
 
+int resolve_domain_sync(uv_loop_t* loop,
+        const struct sockaddr_dm* dm, struct sockaddr* addr)
+{
+    struct addrinfo hints;
+    char portstr[8];
+    uv_getaddrinfo_t req;
+
+    hints.ai_family = AF_UNSPEC; /* ipv4 and ipv6 */
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    hints.ai_flags = 0;
+
+    sprintf(portstr, "%d", ntohs(dm->sdm_port));
+
+    if (uv_getaddrinfo(loop, &req, NULL,
+            (char*) dm->sdm_addr, portstr, &hints) != 0)
+        return -1;
+
+    /* get first result only. */
+    memcpy(addr, req.addrinfo->ai_addr, req.addrinfo->ai_addrlen);
+
+    uv_freeaddrinfo(req.addrinfo);
+    return 0;
+}
+
 const char* addr_to_str(const void* addr)
 {
     union {
