@@ -524,7 +524,7 @@ static void on_server_connected(uv_connect_t* req, int status)
             retry_displayed = 0;
         }
 
-        if (nconnect > 0) {
+        if (nconnect > 0 && !uv_is_active((uv_handle_t*) &reconnect_timer)) {
             new_server_connection(NULL);
         }
     }
@@ -739,6 +739,8 @@ int main(int argc, char** argv)
         if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
             xlog_warn("set NOFILE limit to %d failed: %s.",
                 nofile, strerror(errno));
+        } else {
+            xlog_info("set NOFILE limit to %d done.", nofile);
         }
     }
 #endif
@@ -757,7 +759,8 @@ int main(int argc, char** argv)
     }
 
     if (nconnect <= 0 || nconnect > 1024) {
-        xlog_warn("invalid connection pool size [%d], ignore it.", nconnect);
+        xlog_warn("invalid connection pool size [%d], reset to [1].", nconnect);
+        nconnect = 1;
     }
 
     if (!devid_str) {
