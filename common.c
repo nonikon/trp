@@ -30,8 +30,15 @@ void rand_bytes(u8_t* data, u32_t len)
         len -= 4;
     }
 
-    while (len--) {
-        *data++ = (u8_t) rand_int();
+    if (len) {
+        u32_t r = rand_int();
+
+        switch (len) {
+        case 3: *data++ = (r >> 16) & 0xff;
+        case 2: *data++ = (r >>  8) & 0xff;
+        case 1: *data++ = (r >>  0) & 0xff;
+            break;
+        }
     }
 }
 
