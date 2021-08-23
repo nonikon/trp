@@ -198,21 +198,21 @@ const char* maddr_to_str(const cmd_t* cmd)
 
     switch (cmd->cmd) {
     case CMD_CONNECT_IPV4:
-        uv_inet_ntop(AF_INET, &cmd->t.addr, _addrbuf, sizeof(_addrbuf));
-        sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(cmd->t.port));
+        uv_inet_ntop(AF_INET, &cmd->data, _addrbuf, sizeof(_addrbuf));
+        sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(cmd->port));
         break;
 
     case CMD_CONNECT_IPV6:
-        uv_inet_ntop(AF_INET6, &cmd->t.addr, _addrbuf, sizeof(_addrbuf));
-        sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(cmd->t.port));
+        uv_inet_ntop(AF_INET6, &cmd->data, _addrbuf, sizeof(_addrbuf));
+        sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(cmd->port));
         break;
 
     case CMD_CONNECT_DOMAIN:
-        sprintf(_addrbuf, "%s:%d", cmd->t.addr, ntohs(cmd->t.port));
+        sprintf(_addrbuf, "%s:%d", cmd->data, ntohs(cmd->port));
         break;
 
     case CMD_CONNECT_CLIENT:
-        return devid_to_str(cmd->d.devid);
+        return devid_to_str(cmd->data);
     }
 
     return _addrbuf;

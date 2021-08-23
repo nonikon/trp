@@ -183,13 +183,14 @@ static void init_connect_cmd(sserver_ctx_t* ctx,
         cmd->major = VERSION_MAJOR;
         cmd->minor = VERSION_MINOR;
         cmd->cmd = CMD_CONNECT_CLIENT;
+        cmd->len = DEVICE_ID_SIZE;
 
-        memcpy(cmd->d.devid, device_id, DEVICE_ID_SIZE);
+        memcpy(cmd->data, device_id, DEVICE_ID_SIZE);
 
         crypto.init(&ctx->ectx, crypto_key, pbuf);
-        crypto.encrypt(&ctx->ectx, (u8_t*) cmd, sizeof(cmd_t));
+        crypto.encrypt(&ctx->ectx, (u8_t*) cmd, CMD_MAX_SIZE);
 
-        pbuf += MAX_NONCE_LEN + sizeof(cmd_t);
+        pbuf += MAX_NONCE_LEN + CMD_MAX_SIZE;
     }
 
     /* generate and prepend iv in the first packet */
@@ -201,9 +202,10 @@ static void init_connect_cmd(sserver_ctx_t* ctx,
     cmd->major = VERSION_MAJOR;
     cmd->minor = VERSION_MINOR;
     cmd->cmd = code;
+    cmd->len = (u8_t) addrlen;
+    cmd->port = port;
 
-    cmd->t.port = port;
-    memcpy(cmd->t.addr, addr, addrlen);
+    memcpy(cmd->data, addr, addrlen);
 
     xlog_debug("proxy to [%s].", maddr_to_str(cmd));
 
@@ -212,10 +214,10 @@ static void init_connect_cmd(sserver_ctx_t* ctx,
 
     cryptox.init(&ctx->ectx, cryptox_key, pbuf);
     cryptox.init(&ctx->dctx, cryptox_key, dnonce);
-    cryptox.encrypt(&ctx->ectx, (u8_t*) cmd, sizeof(cmd_t));
+    cryptox.encrypt(&ctx->ectx, (u8_t*) cmd, CMD_MAX_SIZE);
 
     iob->wreq.data = ctx;
-    iob->len = pbuf + MAX_NONCE_LEN + sizeof(cmd_t) - (u8_t*) iob->buffer;
+    iob->len = pbuf + MAX_NONCE_LEN + CMD_MAX_SIZE - (u8_t*) iob->buffer;
 
     ctx->pending_iob = iob;
 }
@@ -724,6 +726,8 @@ int main(int argc, char** argv)
         if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
             xlog_warn("set NOFILE limit to %d failed: %s.",
                 nofile, strerror(errno));
+        } else {
+            xlog_info("set NOFILE limit to %d.", nofile);
         }
     }
 #endif

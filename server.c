@@ -170,7 +170,7 @@ static void on_client_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
         }
 
         /* ctx == NULL */
-        if (nread == sizeof(cmd_t) + MAX_NONCE_LEN) {
+        if (nread == CMD_MAX_SIZE + MAX_NONCE_LEN) {
             /* process command from client */
             cmd_t* cmd = (cmd_t*) (buf->base + MAX_NONCE_LEN);
             peer_t* client = xcontainer_of(stream, peer_t, io);
@@ -178,24 +178,24 @@ static void on_client_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
             crypto.init(&client->edctx, crypto_key, (u8_t*) buf->base);
             crypto.decrypt(&client->edctx, (u8_t*) cmd, (u32_t) (nread - MAX_NONCE_LEN));
 
-            if (!is_valid_cmd(cmd) || !is_valid_devid(cmd->d.devid)) {
+            if (!is_valid_cmd(cmd)) {
                 xlog_warn("got an error packet (content) from client.");
                 uv_close((uv_handle_t*) stream, on_peer_closed);
 
             } else if (cmd->cmd == CMD_REPORT_DEVID) {
 
-                if (!client->pending_ctx) {
-                    pending_ctx_t* pdctx = xhash_get_data(&pending_ctxs, cmd->d.devid);
+                if (is_valid_devid(cmd->data) && !client->pending_ctx) {
+                    pending_ctx_t* pdctx = xhash_get_data(&pending_ctxs, cmd->data);
 
                     xlog_debug("got REPORT_DEVID (%s) cmd from client, process.",
-                        devid_to_str(cmd->d.devid));
+                        devid_to_str(cmd->data));
 
                     if (pdctx == XHASH_INVALID_DATA) {
-                        xlog_info("device_id [%s] not exist, insert.", devid_to_str(cmd->d.devid));
+                        xlog_info("device_id [%s] not exist, insert.", devid_to_str(cmd->data));
 
                         /* create if not exist maybe unsafe, TODO */
                         pdctx = xhash_iter_data(xhash_put_ex(&pending_ctxs,
-                                    cmd->d.devid, DEVICE_ID_SIZE));
+                                    cmd->data, DEVICE_ID_SIZE));
 
                         xlist_init(&pdctx->clients, sizeof(peer_t), NULL);
                         xlist_init(&pdctx->xclients, sizeof(xserver_ctx_t), NULL);
@@ -233,6 +233,8 @@ static void on_client_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
 
                         connect_client(ctx, client);
                     }
+                } else {
+                    xlog_warn("invalid device id from client, ignore.");
                 }
 
             } else {
@@ -382,7 +384,6 @@ static void on_remote_connected(uv_connect_t* req, int status)
             on_iobuf_alloc, on_remote_read);
         uv_read_start((uv_stream_t*) &ctx->io_xclient,
             on_iobuf_alloc, on_xclient_read);
-        // start 'ctx->timer' to check timeout of proxy client? TODO
 
         ctx->pending_iob = NULL;
         ctx->stage = STAGE_FORWARD;
@@ -464,8 +465,6 @@ static void connect_client(xserver_ctx_t* ctx, peer_t* client)
 
     /* disable tcp-keepalive with client. */
     // uv_tcp_keepalive(&client->io, 0, 0);
-
-    // start 'ctx->timer' to check timeout of proxy client? TODO
 }
 
 static void on_connect_client_timeout(uv_timer_t* timer)
@@ -560,15 +559,15 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
 
         if (ctx->stage == STAGE_COMMAND) {
 
-            if (nread >= sizeof(cmd_t) + MAX_NONCE_LEN) {
+            if (nread >= CMD_MAX_SIZE + MAX_NONCE_LEN) {
                 cmd_t* cmd = (cmd_t*) (buf->base + MAX_NONCE_LEN);
 
                 crypto.init(&ctx->dctx, crypto_key, (u8_t*) buf->base);
-                crypto.decrypt(&ctx->dctx, (u8_t*) cmd, sizeof(cmd_t));
+                crypto.decrypt(&ctx->dctx, (u8_t*) cmd, CMD_MAX_SIZE);
 
                 /* pending this 'iob' always (nonce will be used when remote connected). */
-                iob->idx = sizeof(cmd_t) + MAX_NONCE_LEN;
-                iob->len = (u32_t) (nread - sizeof(cmd_t) - MAX_NONCE_LEN);
+                iob->idx = CMD_MAX_SIZE + MAX_NONCE_LEN;
+                iob->len = (u32_t) (nread - CMD_MAX_SIZE - MAX_NONCE_LEN);
                 ctx->pending_iob = iob;
 
                 if (!is_valid_cmd(cmd)) {
@@ -577,10 +576,10 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
 
                 } else if (cmd->cmd == CMD_CONNECT_CLIENT) {
                     /* find an online client. */
-                    pending_ctx_t* pdctx = xhash_get_data(&pending_ctxs, cmd->d.devid);
+                    pending_ctx_t* pdctx = xhash_get_data(&pending_ctxs, cmd->data);
 
                     xlog_debug("got CONNECT_CLIENT cmd (%s) from proxy client, process.",
-                        devid_to_str(cmd->d.devid));
+                        devid_to_str(cmd->data));
 
                     if (pdctx != XHASH_INVALID_DATA) {
 
@@ -621,9 +620,9 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
                     struct sockaddr_in remote;
 
                     remote.sin_family = AF_INET;
-                    remote.sin_port = cmd->t.port;
+                    remote.sin_port = cmd->port;
 
-                    memcpy(&remote.sin_addr, &cmd->t.addr, 4);
+                    memcpy(&remote.sin_addr, &cmd->data, 4);
 
                     xlog_debug("got CONNECT_IPV4 cmd (%s) from proxy client, process.",
                         addr_to_str(&remote));
@@ -648,7 +647,7 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
 
                     req->data = ctx;
 
-                    sprintf(portstr, "%d", ntohs(cmd->t.port));
+                    sprintf(portstr, "%d", ntohs(cmd->port));
                     xlog_debug("got CONNECT_DOMAIN cmd (%s) from proxy client, process.",
                         maddr_to_str(cmd));
 
@@ -656,8 +655,8 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
                     uv_read_stop(stream);
 
                     if (uv_getaddrinfo(loop, req, on_domain_resolved,
-                            (char*) cmd->t.addr, portstr, &hints) != 0) {
-                        xlog_error("uv_getaddrinfo (%s) failed immediately.", cmd->t.addr);
+                            (char*) cmd->data, portstr, &hints) != 0) {
+                        xlog_error("uv_getaddrinfo (%s) failed immediately.", cmd->data);
 
                         uv_close((uv_handle_t*) stream, on_xclient_closed);
                         xlist_erase(&addrinfo_reqs, xlist_value_iter(req));
@@ -667,9 +666,9 @@ static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
                     struct sockaddr_in6 remote;
 
                     remote.sin6_family = AF_INET6;
-                    remote.sin6_port = cmd->t.port;
+                    remote.sin6_port = cmd->port;
 
-                    memcpy(&remote.sin6_addr, &cmd->t.addr, 16);
+                    memcpy(&remote.sin6_addr, &cmd->data, 16);
 
                     xlog_debug("got CONNECT_IPV6 cmd (%s) from proxy client, process.",
                         addr_to_str(&remote));
@@ -768,7 +767,7 @@ static int _pending_ctx_equal(void* l, void* r)
 static void usage(const char* s)
 {
     fprintf(stderr, "trp v%d.%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, s);
-    fprintf(stderr, "options:\n");
+    fprintf(stderr, "[options]:\n");
     fprintf(stderr, "  -s <address>  server listen at. (default: 127.0.0.1:%d)\n", DEF_SERVER_PORT);
     fprintf(stderr, "  -x <address>  proxy server listen at. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
     fprintf(stderr, "  -m <method>   crypto method, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
@@ -859,6 +858,8 @@ int main(int argc, char** argv)
         if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
             xlog_warn("set NOFILE limit to %d failed: %s.",
                 nofile, strerror(errno));
+        } else {
+            xlog_info("set NOFILE limit to %d.", nofile);
         }
     }
 #endif

@@ -323,7 +323,7 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
             /* start a new server connection always. */
             new_server_connection(NULL);
 
-            if (nread >= sizeof(cmd_t) + MAX_NONCE_LEN) {
+            if (nread >= CMD_MAX_SIZE + MAX_NONCE_LEN) {
                 cmd_t* cmd = (cmd_t*) (buf->base + MAX_NONCE_LEN);
 
                 cryptox.init(&ctx->dctx, cryptox_key, (u8_t*) buf->base);
@@ -333,8 +333,8 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                 cryptox.init(&ctx->ectx, cryptox_key, (u8_t*) buf->base);
 
                 /* pending this 'iob' always. */
-                iob->idx = sizeof(cmd_t) + MAX_NONCE_LEN;
-                iob->len = (u32_t) (nread - sizeof(cmd_t) - MAX_NONCE_LEN);
+                iob->idx = CMD_MAX_SIZE + MAX_NONCE_LEN;
+                iob->len = (u32_t) (nread - CMD_MAX_SIZE - MAX_NONCE_LEN);
                 ctx->pending_iob = iob;
 
                 if (!is_valid_cmd(cmd)) {
@@ -345,9 +345,9 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                     struct sockaddr_in remote;
 
                     remote.sin_family = AF_INET;
-                    remote.sin_port = cmd->t.port;
+                    remote.sin_port = cmd->port;
 
-                    memcpy(&remote.sin_addr, &cmd->t.addr, 4);
+                    memcpy(&remote.sin_addr, &cmd->data, 4);
                     xlog_debug("got CONNECT_IPV4 cmd (%s) from proxy client, process.",
                         addr_to_str(&remote));
 
@@ -371,7 +371,7 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
 
                     req->data = ctx;
 
-                    sprintf(portstr, "%d", ntohs(cmd->t.port));
+                    sprintf(portstr, "%d", ntohs(cmd->port));
                     xlog_debug("got CONNECT_DOMAIN cmd (%s) from proxy client, process.",
                         maddr_to_str(cmd));
 
@@ -379,8 +379,8 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                     uv_read_stop(stream);
 
                     if (uv_getaddrinfo(loop, req, on_domain_resolved,
-                            (char*) cmd->t.addr, portstr, &hints) != 0) {
-                        xlog_error("uv_getaddrinfo (%s) failed immediately.", cmd->t.addr);
+                            (char*) cmd->data, portstr, &hints) != 0) {
+                        xlog_error("uv_getaddrinfo (%s) failed immediately.", cmd->data);
 
                         uv_close((uv_handle_t*) stream, on_io_closed);
                         xlist_erase(&addrinfo_reqs, xlist_value_iter(req));
@@ -390,9 +390,9 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
                     struct sockaddr_in6 remote;
 
                     remote.sin6_family = AF_INET6;
-                    remote.sin6_port = cmd->t.port;
+                    remote.sin6_port = cmd->port;
 
-                    memcpy(&remote.sin6_addr, &cmd->t.addr, 16);
+                    memcpy(&remote.sin6_addr, &cmd->data, 16);
                     xlog_debug("got CONNECT_IPV6 cmd (%s) from proxy client, process.",
                         addr_to_str(&remote));                                                                               
 
@@ -463,7 +463,7 @@ static void report_device_id(client_ctx_t* ctx)
     iob->wreq.data = ctx;
 
     wbuf.base = iob->buffer;
-    wbuf.len = sizeof(cmd_t) + MAX_NONCE_LEN;
+    wbuf.len = CMD_MAX_SIZE + MAX_NONCE_LEN;
 
     /* generate and prepend iv in the first packet */
     rand_bytes((u8_t*) iob->buffer, MAX_NONCE_LEN);
@@ -472,11 +472,12 @@ static void report_device_id(client_ctx_t* ctx)
     cmd->major = VERSION_MAJOR;
     cmd->minor = VERSION_MINOR;
     cmd->cmd = CMD_REPORT_DEVID;
+    cmd->len = DEVICE_ID_SIZE;
 
-    memcpy(cmd->d.devid, device_id, DEVICE_ID_SIZE);
+    memcpy(cmd->data, device_id, DEVICE_ID_SIZE);
 
     crypto.init(&ctx->ectx, crypto_key, (u8_t*) iob->buffer);
-    crypto.encrypt(&ctx->ectx, (u8_t*) cmd, sizeof(cmd_t));
+    crypto.encrypt(&ctx->ectx, (u8_t*) cmd, CMD_MAX_SIZE);
 
     uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_server,
         &wbuf, 1, on_server_write);
@@ -740,7 +741,7 @@ int main(int argc, char** argv)
             xlog_warn("set NOFILE limit to %d failed: %s.",
                 nofile, strerror(errno));
         } else {
-            xlog_info("set NOFILE limit to %d done.", nofile);
+            xlog_info("set NOFILE limit to %d.", nofile);
         }
     }
 #endif
