@@ -38,7 +38,7 @@ typedef struct {
     uv_write_t wreq;
     u32_t idx;
     u32_t len;
-    char buffer[MAX_SOCKBUF_SIZE - sizeof(uv_write_t) - 8];
+    char buffer[0];
 } io_buf_t;
 
 typedef struct {
@@ -87,7 +87,7 @@ static void on_iobuf_alloc(uv_handle_t* handle, size_t sg_size, uv_buf_t* buf)
     io_buf_t* iob = xlist_alloc_back(&io_buffers);
 
     buf->base = iob->buffer;
-    buf->len = sizeof(iob->buffer);
+    buf->len = MAX_SOCKBUF_SIZE;
 }
 
 static void on_io_closed(uv_handle_t* handle)
@@ -801,7 +801,7 @@ int main(int argc, char** argv)
     }
 
     xlist_init(&client_ctxs, sizeof(client_ctx_t), NULL);
-    xlist_init(&io_buffers, sizeof(io_buf_t), NULL);
+    xlist_init(&io_buffers, sizeof(io_buf_t) + MAX_SOCKBUF_SIZE, NULL);
     xlist_init(&conn_reqs, sizeof(uv_connect_t), NULL);
     xlist_init(&addrinfo_reqs, sizeof(uv_getaddrinfo_t), NULL);
 
