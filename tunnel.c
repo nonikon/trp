@@ -52,7 +52,7 @@ typedef struct {
 static uv_loop_t* loop;
 
 static union { struct sockaddr x; struct sockaddr_in6 d; } xserver_addr;
-static cmd_t tunnel_maddr;
+static union { cmd_t m; u8_t _[CMD_MAX_SIZE]; } tunnel_maddr;
 
 static xlist_t tserver_ctxs;/* tserver_ctx_t */
 static xlist_t io_buffers;  /* io_buf_t */
@@ -245,13 +245,14 @@ static void init_connect_cmd(tserver_ctx_t* ctx,
         cmd->major = VERSION_MAJOR;
         cmd->minor = VERSION_MINOR;
         cmd->cmd = CMD_CONNECT_CLIENT;
+        cmd->len = DEVICE_ID_SIZE;
 
-        memcpy(cmd->d.devid, device_id, DEVICE_ID_SIZE);
+        memcpy(cmd->data, device_id, DEVICE_ID_SIZE);
 
         crypto.init(&ctx->ectx, crypto_key, pbuf);
-        crypto.encrypt(&ctx->ectx, (u8_t*) cmd, sizeof(cmd_t));
+        crypto.encrypt(&ctx->ectx, (u8_t*) cmd, CMD_MAX_SIZE);
 
-        pbuf += MAX_NONCE_LEN + sizeof(cmd_t);
+        pbuf += MAX_NONCE_LEN + CMD_MAX_SIZE;
     }
 
     /* generate and prepend iv in the first packet */
@@ -263,19 +264,20 @@ static void init_connect_cmd(tserver_ctx_t* ctx,
     cmd->major = VERSION_MAJOR;
     cmd->minor = VERSION_MINOR;
     cmd->cmd = code;
+    cmd->len = (u8_t) addrlen;
+    cmd->port = port;
 
-    cmd->t.port = port;
-    memcpy(cmd->t.addr, addr, addrlen);
+    memcpy(cmd->data, addr, addrlen);
 
     memcpy(dnonce, pbuf, MAX_NONCE_LEN);
     convert_nonce(dnonce);
 
     cryptox.init(&ctx->ectx, cryptox_key, pbuf);
     cryptox.init(&ctx->dctx, cryptox_key, dnonce);
-    cryptox.encrypt(&ctx->ectx, (u8_t*) cmd, sizeof(cmd_t));
+    cryptox.encrypt(&ctx->ectx, (u8_t*) cmd, CMD_MAX_SIZE);
 
     iob->wreq.data = ctx;
-    iob->len = pbuf + MAX_NONCE_LEN + sizeof(cmd_t) - (u8_t*) iob->buffer;
+    iob->len = pbuf + MAX_NONCE_LEN + CMD_MAX_SIZE - (u8_t*) iob->buffer;
 
     ctx->pending_iob = iob;
 }
@@ -365,12 +367,15 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
         xlog_debug("a tunnel client connected.");
 
 #ifdef __linux__
-        if (tunnel_maddr.tag) {
+        if (tunnel_maddr.m.len) {
 #endif
-            init_connect_cmd(ctx, tunnel_maddr.cmd,
-                tunnel_maddr.t.port, tunnel_maddr.t.addr, tunnel_maddr.tag);
+            init_connect_cmd(ctx, tunnel_maddr.m.cmd,
+                tunnel_maddr.m.port, tunnel_maddr.m.data, tunnel_maddr.m.len);
 #ifdef __linux__
         } else {
+#ifndef IP6T_SO_ORIGINAL_DST
+#define IP6T_SO_ORIGINAL_DST 80
+#endif
             union {
                 struct sockaddr     vx;
                 struct sockaddr_in  v4;
@@ -421,35 +426,33 @@ static int init_tunnel_maddr(const char* addrstr)
     if (parse_ip_str(addrstr, -1, &_.dx) == 0) {
 
         if (_.dx.sa_family == AF_INET) {
-            tunnel_maddr.tag = 4;
-            tunnel_maddr.cmd = CMD_CONNECT_IPV4;
-            tunnel_maddr.t.port = _.d4.sin_port;
+            tunnel_maddr.m.cmd = CMD_CONNECT_IPV4;
+            tunnel_maddr.m.len = 4;
+            tunnel_maddr.m.port = _.d4.sin_port;
 
-            memcpy(tunnel_maddr.t.addr, &_.d4.sin_addr, 4);
+            memcpy(tunnel_maddr.m.data, &_.d4.sin_addr, 4);
 
         } else {
-            tunnel_maddr.tag = 16;
-            tunnel_maddr.cmd = CMD_CONNECT_IPV6;
-            tunnel_maddr.t.port = _.d6.sin6_port;
+            tunnel_maddr.m.cmd = CMD_CONNECT_IPV6;
+            tunnel_maddr.m.len = 16;
+            tunnel_maddr.m.port = _.d6.sin6_port;
 
-            memcpy(tunnel_maddr.t.addr, &_.d6.sin6_addr, 16);
+            memcpy(tunnel_maddr.m.data, &_.d6.sin6_addr, 16);
         }
 
     } else if (parse_domain_str(addrstr, -1, &_.dm) == 0) {
 
-        tunnel_maddr.tag = (u8_t) (strlen(_.dm.sdm_addr) + 1);
-        tunnel_maddr.cmd = CMD_CONNECT_DOMAIN;
-        tunnel_maddr.t.port = _.dm.sdm_port;
+        tunnel_maddr.m.cmd = CMD_CONNECT_DOMAIN;
+        tunnel_maddr.m.len = (u8_t) (strlen(_.dm.sdm_addr) + 1);
+        tunnel_maddr.m.port = _.dm.sdm_port;
 
-        memcpy((char*) tunnel_maddr.t.addr, _.dm.sdm_addr,
-            tunnel_maddr.tag);
+        memcpy((char*) tunnel_maddr.m.data, _.dm.sdm_addr,
+            tunnel_maddr.m.len);
 
     } else {
         return -1;
     }
 
-    tunnel_maddr.major = VERSION_MAJOR;
-    tunnel_maddr.minor = VERSION_MINOR;
     return 0;
 }
 
@@ -563,6 +566,8 @@ int main(int argc, char** argv)
         if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
             xlog_warn("set NOFILE limit to %d failed: %s.",
                 nofile, strerror(errno));
+        } else {
+            xlog_info("set NOFILE limit to %d.", nofile);
         }
     }
 #endif
@@ -641,7 +646,7 @@ int main(int argc, char** argv)
         xlog_error("invalid tunnel address [%s].", tunnel_str);
         goto end;
     } else {
-        xlog_info("tunnel to [%s].", maddr_to_str(&tunnel_maddr));
+        xlog_info("tunnel to [%s].", maddr_to_str(&tunnel_maddr.m));
     }
 
     uv_tcp_init(loop, &io_tserver);

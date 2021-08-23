@@ -12,8 +12,8 @@
             ((type*) ((char*) (ptr) - offsetof(type, member)))
 
 #define VERSION_MAJOR       0x01
-#define VERSION_MINOR       0x02
-#define VERSION_PATCH       0x02
+#define VERSION_MINOR       0x03
+#define VERSION_PATCH       0x00
 
 #define DEF_SERVER_PORT     9901    /* default server port */
 #define DEF_XSERVER_PORT    9902    /* default proxy server port */
@@ -45,26 +45,17 @@ enum {
 };
 
 #define CMD_TAG         0x7E
+#define CMD_MAX_SIZE    (sizeof(cmd_t) + MAX_DOMAIN_LEN)
 
 typedef struct {
     u8_t tag;
     u8_t major;
     u8_t minor;
     u8_t cmd;
-
-    union {
-        /* CMD_CONNECT_IPV4 | CMD_CONNECT_IPV6 | CMD_CONNECT_DOMAIN */
-        struct {
-            u16_t resv; /* reserved */
-            u16_t port; /* big endian port */
-             u8_t addr[MAX_DOMAIN_LEN];
-        } t;
-        /* CMD_CONNECT_CLIENT | CMD_REPORT_DEVID */
-        struct {
-            // u32_t resv;
-             u8_t devid[DEVICE_ID_SIZE];
-        } d;
-    };
+    u8_t rsv;   /* reserved */
+    u8_t len;   /* data length */
+    u16_t port; /* big endian port */
+    u8_t data[0];
 } cmd_t;
 
 /* domain struct which compatible with 'struct sockaddr' */
@@ -107,10 +98,12 @@ int resolve_domain_sync(uv_loop_t* loop,
 
 /* convert 'struct sockaddr' to string (include port). */
 const char* addr_to_str(const void* addr);
+
 /* convert 'cmd_t' address to string (include port). */
 const char* maddr_to_str(const cmd_t* cmd);
 
 const char* devid_to_str(const u8_t id[DEVICE_ID_SIZE]);
+
 int str_to_devid(u8_t id[DEVICE_ID_SIZE], const char* str);
 
 #endif // _COMMON_H_
