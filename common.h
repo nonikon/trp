@@ -65,6 +65,13 @@ struct sockaddr_dm {
      char sdm_addr[MAX_DOMAIN_LEN]; /* null-terminated domain */
 };
 
+typedef struct {
+    uv_write_t wreq;
+    u32_t idx;
+    u32_t len;
+    char buffer[0];
+} io_buf_t;
+
 #define is_valid_devid(s)   (*(u32_t*) (s))
 
 #define is_valid_cmd(c)     ( \

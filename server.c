@@ -39,13 +39,6 @@ enum {
  */
 
 typedef struct {
-    uv_write_t wreq;
-    u32_t idx;
-    u32_t len;
-    char buffer[0];
-} io_buf_t;
-
-typedef struct {
     u8_t devid[DEVICE_ID_SIZE]; /* (must be the first member) */
     xlist_t clients;    /* peer_t, the clients which at COMMAND stage */
     xlist_t xclients;   /* xserver_ctx_t, the xclients which is connecting to a client */
