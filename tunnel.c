@@ -32,13 +32,6 @@
  */
 
 typedef struct {
-    uv_write_t wreq;
-    u32_t idx;
-    u32_t len;
-    char buffer[0];
-} io_buf_t;
-
-typedef struct {
     uv_tcp_t io_tclient;    /* tunnel-client */
     uv_tcp_t io_xserver;    /* proxy-server */
     io_buf_t* pending_iob;
