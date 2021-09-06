@@ -53,6 +53,7 @@ set(client_defines
 # tunnel
 set(tunnel_sources
     ${generic_sources}
+    xclient.c
     tunnel.c
 )
 set(tunnel_defines
@@ -63,6 +64,7 @@ set(tunnel_defines
 # socks
 set(socks_sources
     ${generic_sources}
+    xclient.c
     socks.c
 )
 set(socks_defines
