@@ -13,275 +13,37 @@
 #include <sys/resource.h> /* for setrlimit() */
 #endif
 
-#include "common.h"
-#include "xlog.h"
-#include "xlist.h"
-#include "crypto.h"
+#include "remote.h"
 
-#define RECONNECT_INTERVAL  (10 * 1000) /* ms */
-#define KEEPIDLE_TIME       (40) /* s */
+#define RECONNECT_SERVER_INTERVAL  (10 * 1000) /* ms */
 #define DEFAULT_DEVID       "\x11\x22\x33\x44\x55\x66\x77\x88"
-
-enum {
-    STAGE_INIT,    /* server connecting */
-    STAGE_COMMAND, /* server connected */
-    STAGE_CONNECT, /* remote connecting */
-    STAGE_FORWARD, /* remote connected */
-};
 
 /*  --------         --------         --------
  * | remote | <---> | client | <---> | server |
  *  --------         --------         --------
  */
 
-typedef struct {
-    uv_tcp_t io_server;
-    uv_tcp_t io_remote;
-    io_buf_t* pending_iob;  /* the pending 'io_buf_t' before 'io_remote' connected */
-    crypto_ctx_t ectx;
-    crypto_ctx_t dctx;
-    u8_t ref_count;         /* increase when 'io_server' or 'io_remote' opened, decrease when closed */
-    u8_t server_blocked;    /* server reading is stopped */
-    u8_t remote_blocked;    /* remote reading is stopped */
-    u8_t stage;
-} client_ctx_t;
-
-static uv_loop_t* loop;
 static uv_timer_t reconnect_timer;
 
 static union { struct sockaddr x; struct sockaddr_dm  d; } server_addr;
 static union { struct sockaddr x; struct sockaddr_in6 d; } server_addr_r; /* store resolved server domain */
 
-static xlist_t client_ctxs;     /* client_ctx_t */
-static xlist_t io_buffers;      /* io_buf_t */
-static xlist_t conn_reqs;       /* uv_connect_t */
-static xlist_t addrinfo_reqs;   /* uv_getaddrinfo_t */
-
-static crypto_t crypto;     /* crypto between client and server */
 static crypto_t cryptox;    /* crypto between client and proxy-client */
-static u8_t crypto_key[16]; /* crypto key between client and server */
 static u8_t cryptox_key[16];/* crypto key between client and proxy-client */
 static u8_t device_id[DEVICE_ID_SIZE];
 
 static int nconnect = 1;
 
-static void on_remote_write(uv_write_t* req, int status);
-static void on_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf);
-static void on_remote_connected(uv_connect_t* req, int status);
-static int connect_remote(client_ctx_t* ctx, struct sockaddr* addr);
-
-static void on_server_write(uv_write_t* req, int status);
-static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf);
 static void on_server_connected(uv_connect_t* req, int status);
 static void new_server_connection(uv_timer_t* handle);
 
-static void on_iobuf_alloc(uv_handle_t* handle, size_t sg_size, uv_buf_t* buf)
+/* override */ void on_peer_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 {
-    io_buf_t* iob = xlist_alloc_back(&io_buffers);
-
-    buf->base = iob->buffer;
-    buf->len = MAX_SOCKBUF_SIZE;
-}
-
-static void on_io_closed(uv_handle_t* handle)
-{
-    client_ctx_t* ctx = handle->data;
-
-    if (ctx->ref_count > 1) {
-        --ctx->ref_count;
-    } else {
-
-        if (ctx->pending_iob) {
-            xlist_erase(&io_buffers, xlist_value_iter(ctx->pending_iob));
-        }
-        xlist_erase(&client_ctxs, xlist_value_iter(ctx));
-
-        xlog_debug("current %zd ctxs, %zd iobufs.",
-            xlist_size(&client_ctxs), xlist_size(&io_buffers));
-    }
-}
-
-static void on_remote_write(uv_write_t* req, int status)
-{
-    client_ctx_t* ctx = req->data;
-    io_buf_t* iob = xcontainer_of(req, io_buf_t, wreq);
-
-    if (ctx->server_blocked && uv_stream_get_write_queue_size(
-            (uv_stream_t*) &ctx->io_remote) == 0) {
-        xlog_debug("remote write queue cleared.");
-
-        /* remote write queue cleared, start reading from server. */
-        uv_read_start((uv_stream_t*) &ctx->io_server,
-            on_iobuf_alloc, on_server_read);
-        ctx->server_blocked = 0;
-    }
-
-    xlist_erase(&io_buffers, xlist_value_iter(iob));
-}
-
-static void on_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
-{
-    client_ctx_t* ctx = stream->data;
+    peer_ctx_t* ctx = stream->data;
     io_buf_t* iob = xcontainer_of(buf->base, io_buf_t, buffer);
 
     if (nread > 0) {
-        uv_buf_t wbuf;
-
-        xlog_debug("recved %zd bytes from remote, forward.", nread);
-
-        wbuf.base = buf->base;
-        wbuf.len = nread;
-
-        iob->wreq.data = ctx;
-
-        cryptox.encrypt(&ctx->ectx, (u8_t*) wbuf.base, wbuf.len);
-
-        uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_server,
-            &wbuf, 1, on_server_write);
-
-        if (uv_stream_get_write_queue_size(
-                (uv_stream_t*) &ctx->io_server) > MAX_WQUEUE_SIZE) {
-            xlog_debug("server write queue pending.");
-
-            /* stop reading from remote until server write queue cleared. */
-            uv_read_stop(stream);
-            ctx->remote_blocked = 1;
-        }
-
-        /* don't release 'iob' in this place,
-         *'on_server_write' callback will do it.
-         */
-    } else if (nread < 0) {
-        xlog_debug("disconnected from remote: %s.",
-            uv_err_name((int) nread));
-
-        uv_close((uv_handle_t*) stream, on_io_closed);
-        uv_close((uv_handle_t*) &ctx->io_server, on_io_closed);
-
-        if (buf->base) {
-            /* 'buf->base' may be 'NULL' when 'nread' < 0. */
-            xlist_erase(&io_buffers, xlist_value_iter(iob));
-        }
-
-    } else {
-        xlist_erase(&io_buffers, xlist_value_iter(iob));
-    }
-}
-
-static void on_remote_connected(uv_connect_t* req, int status)
-{
-    client_ctx_t* ctx = req->data;
-
-    if (status < 0) {
-        xlog_error("connect remote failed: %s.", uv_err_name(status));
-
-        /* 'status' will be 'ECANCELED' when 'uv_close' is called before remote connected.
-         * as a result, we should check it to avoid calling 'uv_close' twice.
-         */
-        // if (status != ECANCELED) {
-            uv_close((uv_handle_t*) &ctx->io_remote, on_io_closed);
-            uv_close((uv_handle_t*) &ctx->io_server, on_io_closed);
-        // }
-
-    } else {
-        io_buf_t* iob = ctx->pending_iob;
-
-        xlog_debug("remote connected.");
-
-        if (iob->len > 0) {
-            uv_buf_t wbuf;
-
-            wbuf.base = iob->buffer + iob->idx;
-            wbuf.len = iob->len;
-
-            iob->wreq.data = ctx;
-
-            /* write 'iob' to remote, 'iob' free later. */
-            uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_remote,
-                &wbuf, 1, on_remote_write);
-        } else {
-            /* free this 'iob' now. */
-            xlist_erase(&io_buffers, xlist_value_iter(iob));
-        }
-
-        uv_read_start((uv_stream_t*) &ctx->io_remote,
-            on_iobuf_alloc, on_remote_read);
-        uv_read_start((uv_stream_t*) &ctx->io_server,
-            on_iobuf_alloc, on_server_read);
-
-        ctx->pending_iob = NULL;
-        ctx->stage = STAGE_FORWARD;
-    }
-
-    xlist_erase(&conn_reqs, xlist_value_iter(req));
-}
-
-static int connect_remote(client_ctx_t* ctx, struct sockaddr* addr)
-{
-    uv_connect_t* req = xlist_alloc_back(&conn_reqs);
-
-    req->data = ctx;
-    /* 'io_remote' will be opened, increase refcount. */
-    ++ctx->ref_count;
-
-    if (uv_tcp_connect(req, &ctx->io_remote, addr, on_remote_connected) != 0) {
-        xlog_error("connect remote failed immediately.");
-
-        uv_close((uv_handle_t*) &ctx->io_remote, on_io_closed);
-        xlist_erase(&conn_reqs, xlist_value_iter(req));
-        return -1;
-    }
-
-    ctx->stage = STAGE_CONNECT;
-    return 0;
-}
-
-static void on_domain_resolved(uv_getaddrinfo_t* req, int status, struct addrinfo* res)
-{
-    client_ctx_t* ctx = req->data;
-
-    if (status < 0) {
-        xlog_debug("resolve domain failed: %s.", uv_err_name(status));
-        uv_close((uv_handle_t*) &ctx->io_server, on_io_closed);
-
-    } else {
-        xlog_debug("resolve result [%s], connect it.", addr_to_str(res->ai_addr));
-
-        if (connect_remote(ctx, res->ai_addr) != 0) {
-            /* connect failed immediately, just close this connection. */
-            uv_close((uv_handle_t*) &ctx->io_server, on_io_closed);
-        }
-        uv_freeaddrinfo(res);
-    }
-
-    xlist_erase(&addrinfo_reqs, xlist_value_iter(req));
-}
-
-static void on_server_write(uv_write_t* req, int status)
-{
-    client_ctx_t* ctx = req->data;
-    io_buf_t* iob = xcontainer_of(req, io_buf_t, wreq);
-
-    if (ctx->remote_blocked && uv_stream_get_write_queue_size(
-            (uv_stream_t*) &ctx->io_server) == 0) {
-        xlog_debug("server write queue cleared.");
-
-        /* server write queue cleared, start reading from remote. */
-        uv_read_start((uv_stream_t*) &ctx->io_remote,
-            on_iobuf_alloc, on_remote_read);
-        ctx->remote_blocked = 0;
-    }
-
-    xlist_erase(&io_buffers, xlist_value_iter(iob));
-}
-
-static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
-{
-    client_ctx_t* ctx = stream->data;
-    io_buf_t* iob = xcontainer_of(buf->base, io_buf_t, buffer);
-
-    if (nread > 0) {
-        if (ctx->stage == STAGE_FORWARD) {
+        if (ctx->stage == STAGE_FORWARDTCP) {
             uv_buf_t wbuf;
 
             xlog_debug("recved %zd bytes from server, forward.", nread);
@@ -291,152 +53,63 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
 
             iob->wreq.data = ctx;
 
-            cryptox.decrypt(&ctx->dctx, (u8_t*) wbuf.base, wbuf.len);
+            cryptox.decrypt(&ctx->edctx, (u8_t*) wbuf.base, wbuf.len);
 
-            uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_remote,
-                &wbuf, 1, on_remote_write);
+            uv_write(&iob->wreq, (uv_stream_t*) &ctx->remote->t.io,
+                &wbuf, 1, on_tcp_remote_write);
 
             if (uv_stream_get_write_queue_size(
-                    (uv_stream_t*) &ctx->io_remote) > MAX_WQUEUE_SIZE) {
+                    (uv_stream_t*) &ctx->remote->t.io) > MAX_WQUEUE_SIZE) {
                 xlog_debug("remote write queue pending.");
 
                 /* stop reading from server until remote write queue cleared. */
                 uv_read_stop(stream);
-                ctx->server_blocked = 1;
+                ctx->peer_blocked = 1;
             }
 
-            /* don't release 'iob' in this place,
-             * 'on_remote_write' callback will do it.
-             */
+            /* 'iob' free later. */
             return;
         }
 
         if (ctx->stage == STAGE_COMMAND) {
+            iob->len = (u32_t) nread;
+
             ++nconnect;
             /* start a new server connection always. */
             new_server_connection(NULL);
 
-            if (nread >= CMD_MAX_SIZE + MAX_NONCE_LEN) {
-                cmd_t* cmd = (cmd_t*) (buf->base + MAX_NONCE_LEN);
-
-                cryptox.init(&ctx->dctx, cryptox_key, (u8_t*) buf->base);
-                cryptox.decrypt(&ctx->dctx, (u8_t*) cmd, (u32_t) (nread - MAX_NONCE_LEN));
-
-                convert_nonce((u8_t*) buf->base);
-                cryptox.init(&ctx->ectx, cryptox_key, (u8_t*) buf->base);
-
-                /* pending this 'iob' always. */
-                iob->idx = CMD_MAX_SIZE + MAX_NONCE_LEN;
-                iob->len = (u32_t) (nread - CMD_MAX_SIZE - MAX_NONCE_LEN);
-                ctx->pending_iob = iob;
-
-                if (!is_valid_cmd(cmd)) {
-                    xlog_warn("got an error packet (content) from proxy client.");
-                    uv_close((uv_handle_t*) stream, on_io_closed);
-
-                } else if (cmd->cmd == CMD_CONNECT_IPV4) {
-                    struct sockaddr_in remote;
-
-                    remote.sin_family = AF_INET;
-                    remote.sin_port = cmd->port;
-
-                    memcpy(&remote.sin_addr, &cmd->data, 4);
-                    xlog_debug("got CONNECT_IPV4 cmd (%s) from proxy client, process.",
-                        addr_to_str(&remote));
-
-                    /* stop reading from server until remote connected. */
-                    uv_read_stop(stream);
-
-                    if (connect_remote(ctx, (struct sockaddr*) &remote) != 0) {
-                        /* connect failed immediately, just close this connection. */
-                        uv_close((uv_handle_t*) stream, on_io_closed);
-                    }
-
-                } else if (cmd->cmd == CMD_CONNECT_DOMAIN) {
-                    struct addrinfo hints;
-                    char portstr[8];
-                    uv_getaddrinfo_t* req = xlist_alloc_back(&addrinfo_reqs);
-
-                    hints.ai_family = AF_UNSPEC; /* ipv4 and ipv6 */
-                    hints.ai_socktype = SOCK_STREAM;
-                    hints.ai_protocol = IPPROTO_TCP;
-                    hints.ai_flags = 0;
-
-                    req->data = ctx;
-
-                    sprintf(portstr, "%d", ntohs(cmd->port));
-                    xlog_debug("got CONNECT_DOMAIN cmd (%s) from proxy client, process.",
-                        maddr_to_str(cmd));
-
-                    /* stop reading from server until remote connected. */
-                    uv_read_stop(stream);
-
-                    if (uv_getaddrinfo(loop, req, on_domain_resolved,
-                            (char*) cmd->data, portstr, &hints) != 0) {
-                        xlog_error("uv_getaddrinfo (%s) failed immediately.", cmd->data);
-
-                        uv_close((uv_handle_t*) stream, on_io_closed);
-                        xlist_erase(&addrinfo_reqs, xlist_value_iter(req));
-                    }
-
-                } else if (cmd->cmd == CMD_CONNECT_IPV6) {
-                    struct sockaddr_in6 remote;
-
-                    remote.sin6_family = AF_INET6;
-                    remote.sin6_port = cmd->port;
-
-                    memcpy(&remote.sin6_addr, &cmd->data, 16);
-                    xlog_debug("got CONNECT_IPV6 cmd (%s) from proxy client, process.",
-                        addr_to_str(&remote));                                                                               
-
-                    /* stop reading from server until remote connected. */
-                    uv_read_stop(stream);
-
-                    if (connect_remote(ctx, (struct sockaddr*) &remote) != 0) {
-                        /* connect failed immediately, just close this connection. */
-                        uv_close((uv_handle_t*) stream, on_io_closed);
-                    }
-
-                } else {
-                    xlog_warn("got an error command (%d) from proxy client.", cmd->cmd);
-                    uv_close((uv_handle_t*) stream, on_io_closed);
-                }
-
-                /* 'iob' free later. */
-                return;
+            if (invoke_peer_command(ctx, iob) != 0) {
+                uv_close((uv_handle_t*) stream, on_peer_closed);
             }
 
-            xlog_warn("got an error packet (length) from server.");
-            uv_close((uv_handle_t*) stream, on_io_closed);
-
-        } else {
-            /* should not reach here */
-            xlog_error("unexpected state happen when read.");
+            /* 'iob' free later. */
+            return;
         }
 
-    } else if (nread < 0) {
+        /* should not reach here */
+        xlog_error("unexpected state happen when read.");
+        return;
+    }
+
+    if (nread < 0) {
         xlog_debug("disconnected from server: %s, stage %d.",
             uv_err_name((int) nread), ctx->stage);
 
-        if (ctx->stage == STAGE_FORWARD) {
-            uv_close((uv_handle_t*) &ctx->io_remote, on_io_closed);
+        if (ctx->stage == STAGE_FORWARDTCP) {
+            uv_close((uv_handle_t*) &ctx->remote->t.io, on_tcp_remote_closed);
 
         } else if (ctx->stage == STAGE_COMMAND) {
             xlog_warn("connection closed by server at COMMAND stage.");
 
             ++nconnect;
             if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
-                /* reconnect after RECONNECT_INTERVAL ms. */
+                /* reconnect after RECONNECT_SERVER_INTERVAL ms. */
                 uv_timer_start(&reconnect_timer, new_server_connection,
-                    RECONNECT_INTERVAL, 0);
+                    RECONNECT_SERVER_INTERVAL, 0);
             }
-
-        } else { /* STAGE_CONNECT */
-            /* should not reach here */
-            xlog_error("unexpected state happen when disconnect.");
         }
 
-        uv_close((uv_handle_t*) stream, on_io_closed);
+        uv_close((uv_handle_t*) stream, on_peer_closed);
 
         /* 'buf->base' may be 'NULL' when 'nread' < 0.
          * just 'return' in this situation.
@@ -444,12 +117,12 @@ static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
         if (!buf->base) return;
     }
 
-    xlist_erase(&io_buffers, xlist_value_iter(iob));
+    xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
 }
 
-static void report_device_id(client_ctx_t* ctx)
+static void report_device_id(peer_ctx_t* ctx)
 {
-    io_buf_t* iob = xlist_alloc_back(&io_buffers);
+    io_buf_t* iob = xlist_alloc_back(&remote.io_buffers);
     cmd_t* cmd = (cmd_t*) (iob->buffer + MAX_NONCE_LEN);
     uv_buf_t wbuf;
 
@@ -469,43 +142,42 @@ static void report_device_id(client_ctx_t* ctx)
 
     memcpy(cmd->data, device_id, DEVICE_ID_SIZE);
 
-    crypto.init(&ctx->ectx, crypto_key, (u8_t*) iob->buffer);
-    crypto.encrypt(&ctx->ectx, (u8_t*) cmd, CMD_MAX_SIZE);
+    /* use 'ctx->edctx' temporarily. */
+    remote.crypto.init(&ctx->edctx, remote.crypto_key, (u8_t*) iob->buffer);
+    remote.crypto.encrypt(&ctx->edctx, (u8_t*) cmd, CMD_MAX_SIZE);
 
-    uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_server,
-        &wbuf, 1, on_server_write);
+    uv_write(&iob->wreq, (uv_stream_t*) &ctx->io, &wbuf, 1, on_peer_write);
 }
 
 static void on_server_connected(uv_connect_t* req, int status)
 {
     static int retry_displayed = 1;
 
-    client_ctx_t* ctx = req->data;
+    peer_ctx_t* ctx = req->data;
 
     if (status < 0) {
-        uv_close((uv_handle_t*) &ctx->io_server, on_io_closed);
+        uv_close((uv_handle_t*) &ctx->io, on_peer_closed);
 
         /* mark server domain need to be resolved again. */
         server_addr_r.x.sa_family = 0;
 
         ++nconnect;
         if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
-            /* reconnect after RECONNECT_INTERVAL ms. */
+            /* reconnect after RECONNECT_SERVER_INTERVAL ms. */
             uv_timer_start(&reconnect_timer, new_server_connection,
-                RECONNECT_INTERVAL, 0);
+                RECONNECT_SERVER_INTERVAL, 0);
         }
 
         if (!retry_displayed) {
             xlog_error("connect server failed: %s, retry every %d seconds.",
-                uv_err_name(status), RECONNECT_INTERVAL / 1000);
+                uv_err_name(status), RECONNECT_SERVER_INTERVAL / 1000);
             retry_displayed = 1;
         }
 
     } else {
         /* enable tcp-keepalive. */
-        uv_tcp_keepalive(&ctx->io_server, 1, KEEPIDLE_TIME);
-        uv_read_start((uv_stream_t*) &ctx->io_server,
-            on_iobuf_alloc, on_server_read);
+        uv_tcp_keepalive(&ctx->io, 1, KEEPIDLE_TIME);
+        uv_read_start((uv_stream_t*) &ctx->io, on_iobuf_alloc, on_peer_read);
 
         report_device_id(ctx);
 
@@ -523,22 +195,22 @@ static void on_server_connected(uv_connect_t* req, int status)
         }
     }
 
-    xlist_erase(&conn_reqs, xlist_value_iter(req));
+    xlist_erase(&remote.conn_reqs, xlist_value_iter(req));
 }
 
 static void connect_server(struct sockaddr* addr)
 {
-    client_ctx_t* ctx = xlist_alloc_back(&client_ctxs);
-    uv_connect_t* req = xlist_alloc_back(&conn_reqs);
+    peer_ctx_t* ctx = xlist_alloc_back(&remote.peer_ctxs);
+    uv_connect_t* req = xlist_alloc_back(&remote.conn_reqs);
 
-    uv_tcp_init(loop, &ctx->io_server);
-    uv_tcp_init(loop, &ctx->io_remote);
+    uv_tcp_init(remote.loop, &ctx->io);
 
-    ctx->io_server.data = ctx;
-    ctx->io_remote.data = ctx;
+    ctx->io.data = ctx;
+    ctx->remote = NULL;
+    // ctx->pending_ctx = NULL;
     ctx->pending_iob = NULL;
-    ctx->ref_count = 1;
-    ctx->server_blocked = 0;
+    ctx->reserved = 0;
+    ctx->peer_blocked = 0;
     ctx->remote_blocked = 0;
     ctx->stage = STAGE_INIT;
 
@@ -546,18 +218,18 @@ static void connect_server(struct sockaddr* addr)
 
     xlog_debug("connecting server [%s]...", addr_to_str(addr));
 
-    if (uv_tcp_connect(req, &ctx->io_server, addr, on_server_connected) != 0) {
+    if (uv_tcp_connect(req, &ctx->io, addr, on_server_connected) != 0) {
         xlog_error("connect server failed immediately.");
 
         ++nconnect;
         if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
-            /* reconnect after RECONNECT_INTERVAL ms. */
+            /* reconnect after RECONNECT_SERVER_INTERVAL ms. */
             uv_timer_start(&reconnect_timer, new_server_connection,
-                RECONNECT_INTERVAL, 0);
+                RECONNECT_SERVER_INTERVAL, 0);
         }
 
-        uv_close((uv_handle_t*) &ctx->io_server, on_io_closed);
-        xlist_erase(&conn_reqs, xlist_value_iter(req));
+        uv_close((uv_handle_t*) &ctx->io, on_peer_closed);
+        xlist_erase(&remote.conn_reqs, xlist_value_iter(req));
     }
 }
 
@@ -569,9 +241,9 @@ static void on_server_domain_resolved(
 
         ++nconnect;
         if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
-            /* reconnect after RECONNECT_INTERVAL ms. */
+            /* reconnect after RECONNECT_SERVER_INTERVAL ms. */
             uv_timer_start(&reconnect_timer, new_server_connection,
-                RECONNECT_INTERVAL, 0);
+                RECONNECT_SERVER_INTERVAL, 0);
         }
 
     } else {
@@ -585,7 +257,7 @@ static void on_server_domain_resolved(
         uv_freeaddrinfo(res);
     }
 
-    xlist_erase(&addrinfo_reqs, xlist_value_iter(req));
+    xlist_erase(&remote.addrinfo_reqs, xlist_value_iter(req));
 }
 
 static void new_server_connection(uv_timer_t* timer)
@@ -604,7 +276,7 @@ static void new_server_connection(uv_timer_t* timer)
         /* server address is domain, resolve it. */
         struct addrinfo hints;
         char portstr[8];
-        uv_getaddrinfo_t* req = xlist_alloc_back(&addrinfo_reqs);
+        uv_getaddrinfo_t* req = xlist_alloc_back(&remote.addrinfo_reqs);
 
         hints.ai_family = AF_UNSPEC; /* ipv4 and ipv6 */
         hints.ai_socktype = SOCK_STREAM;
@@ -613,22 +285,22 @@ static void new_server_connection(uv_timer_t* timer)
 
         sprintf(portstr, "%d", ntohs(server_addr.d.sdm_port));
 
-        if (uv_getaddrinfo(loop, req, on_server_domain_resolved,
+        if (uv_getaddrinfo(remote.loop, req, on_server_domain_resolved,
                 server_addr.d.sdm_addr, portstr, &hints) != 0) {
             xlog_error("uv_getaddrinfo (%s) failed immediately.", server_addr.d.sdm_addr);
 
             ++nconnect;
             if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
-                /* reconnect after RECONNECT_INTERVAL ms.
+                /* reconnect after RECONNECT_SERVER_INTERVAL ms.
                  * 'reconnect_timer' is inactive when 'new_server_connection'
                  * is invoked by 'reconnect_timer'. so,
                  * 'uv_timer_start' will not be called twice anyway.
                  */
                 uv_timer_start(&reconnect_timer, new_server_connection,
-                    RECONNECT_INTERVAL, 0);
+                    RECONNECT_SERVER_INTERVAL, 0);
             }
 
-            xlist_erase(&addrinfo_reqs, xlist_value_iter(req));
+            xlist_erase(&remote.addrinfo_reqs, xlist_value_iter(req));
         }
     }
 }
@@ -720,6 +392,16 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    if (xlog_init(logfile) != 0) {
+        fprintf(stderr, "open logfile failed.\n");
+    }
+
+    if (!verbose) {
+        xlog_ctrl(XLOG_INFO, 0, 0);
+    } else {
+        xlog_info("enable verbose output.");
+    }
+
 #ifndef _WIN32
     if (logfile && daemon(1, 0) != 0) {
         xlog_error("run as daemon failed: %s.", strerror(errno));
@@ -731,26 +413,16 @@ int main(int argc, char** argv)
         struct rlimit limit = { nofile, nofile };
 
         if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
-            xlog_warn("set NOFILE limit to %d failed: %s.",
-                nofile, strerror(errno));
+            xlog_warn("set NOFILE limit to %d failed: %s.", nofile, strerror(errno));
         } else {
             xlog_info("set NOFILE limit to %d.", nofile);
         }
     }
 #endif
 
-    loop = uv_default_loop();
+    remote.loop = uv_default_loop();
 
     seed_rand((u32_t) time(NULL));
-
-    if (xlog_init(logfile) != 0) {
-        fprintf(stderr, "open logfile failed.\n");
-    }
-    if (!verbose) {
-        xlog_ctrl(XLOG_INFO, 0, 0);
-    } else {
-        xlog_info("enable verbose output.");
-    }
 
     if (nconnect <= 0 || nconnect > 1024) {
         xlog_warn("invalid connection pool size [%d], reset to [1].", nconnect);
@@ -766,7 +438,7 @@ int main(int argc, char** argv)
     }
 
     if (passwd) {
-        derive_key(crypto_key, passwd);
+        derive_key(remote.crypto_key, passwd);
     } else {
         xlog_info("password not set, disable crypto with server.");
         method = CRYPTO_NONE;
@@ -778,7 +450,7 @@ int main(int argc, char** argv)
         methodx = CRYPTO_NONE;
     }
 
-    if (crypto_init(&crypto, method) != 0) {
+    if (crypto_init(&remote.crypto, method) != 0) {
         xlog_error("invalid crypto method: %d.", method);
         goto end;
     }
@@ -793,21 +465,23 @@ int main(int argc, char** argv)
         goto end;
     }
 
-    xlist_init(&client_ctxs, sizeof(client_ctx_t), NULL);
-    xlist_init(&io_buffers, sizeof(io_buf_t) + MAX_SOCKBUF_SIZE, NULL);
-    xlist_init(&conn_reqs, sizeof(uv_connect_t), NULL);
-    xlist_init(&addrinfo_reqs, sizeof(uv_getaddrinfo_t), NULL);
+    xlist_init(&remote.peer_ctxs, sizeof(peer_ctx_t), NULL);
+    xlist_init(&remote.remote_ctxs, sizeof(remote_ctx_t), NULL);
+    xlist_init(&remote.io_buffers, sizeof(io_buf_t) + MAX_SOCKBUF_SIZE, NULL);
+    xlist_init(&remote.conn_reqs, sizeof(uv_connect_t), NULL);
+    xlist_init(&remote.addrinfo_reqs, sizeof(uv_getaddrinfo_t), NULL);
 
-    uv_timer_init(loop, &reconnect_timer);
+    uv_timer_init(remote.loop, &reconnect_timer);
 
     xlog_info("server address [%s], connecting...", addr_to_str(&server_addr));
     new_server_connection(NULL);
-    uv_run(loop, UV_RUN_DEFAULT);
+    uv_run(remote.loop, UV_RUN_DEFAULT);
 
-    xlist_destroy(&addrinfo_reqs);
-    xlist_destroy(&conn_reqs);
-    xlist_destroy(&io_buffers);
-    xlist_destroy(&client_ctxs);
+    xlist_destroy(&remote.addrinfo_reqs);
+    xlist_destroy(&remote.conn_reqs);
+    xlist_destroy(&remote.io_buffers);
+    xlist_destroy(&remote.remote_ctxs);
+    xlist_destroy(&remote.peer_ctxs);
 end:
     xlog_info("end of loop.");
     xlog_exit();
