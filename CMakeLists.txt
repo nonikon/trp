@@ -10,12 +10,6 @@ if(LIBUV_EMBEDDED)
     add_subdirectory(${LIBUV_SRC_PATH})
 endif()
 
-# if(WIN32)
-#     set(libs ws2_32 psapi user32 userenv iphlpapi)
-# else()
-#     set(libs pthread dl)
-# endif()
-
 set(generic_sources
     xlist.c
     xlog.c
@@ -32,18 +26,21 @@ set(server_sources
     http_parser.c
     http_server.c
     server.c
+    remote.c
 )
 set(server_defines
     HTTP_PARSER_STRICT=0
     XHASH_ENABLE_CACHE=1
     XLIST_ENABLE_CACHE=1
     XLOG_OUT_CTRL=4
+    WITH_CLIREMOTE=1
 )
 
 # client
 set(client_sources
     ${generic_sources}
     client.c
+    remote.c
 )
 set(client_defines
     XLIST_ENABLE_CACHE=1
