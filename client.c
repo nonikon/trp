@@ -15,8 +15,8 @@
 
 #include "remote.h"
 
-#define RECONNECT_SERVER_INTERVAL  (10 * 1000) /* ms */
-#define DEFAULT_DEVID       "\x11\x22\x33\x44\x55\x66\x77\x88"
+#define RECONNECT_SERVER_INTERVAL   (10 * 1000) /* ms */
+#define DEFAULT_DEVICE_ID           "\x11\x22\x33\x44\x55\x66\x77\x88"
 
 /*  --------         --------         --------
  * | remote | <---> | client | <---> | server |
@@ -28,8 +28,8 @@ static uv_timer_t reconnect_timer;
 static union { struct sockaddr x; struct sockaddr_dm  d; } server_addr;
 static union { struct sockaddr x; struct sockaddr_in6 d; } server_addr_r; /* store resolved server domain */
 
-static crypto_t cryptox;    /* crypto between client and proxy-client */
-static u8_t cryptox_key[16];/* crypto key between client and proxy-client */
+static crypto_t crypto;     /* crypto between client and server */
+static u8_t crypto_key[16]; /* crypto key between client and server */
 static u8_t device_id[DEVICE_ID_SIZE];
 
 static int nconnect = 1;
@@ -53,7 +53,7 @@ static void new_server_connection(uv_timer_t* handle);
 
             iob->wreq.data = ctx;
 
-            cryptox.decrypt(&ctx->edctx, (u8_t*) wbuf.base, wbuf.len);
+            remote.crypto.decrypt(&ctx->edctx, (u8_t*) wbuf.base, wbuf.len);
 
             uv_write(&iob->wreq, (uv_stream_t*) &ctx->remote->t.io,
                 &wbuf, 1, on_tcp_remote_write);
@@ -68,6 +68,13 @@ static void new_server_connection(uv_timer_t* handle);
             }
 
             /* 'iob' free later. */
+            return;
+        }
+
+        if (ctx->stage == STAGE_FORWARDUDP) {
+            /* TODO */
+            xlog_debug("recved %zd bytes from server, to udp remote.", nread);
+            xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
             return;
         }
 
@@ -143,8 +150,8 @@ static void report_device_id(peer_ctx_t* ctx)
     memcpy(cmd->data, device_id, DEVICE_ID_SIZE);
 
     /* use 'ctx->edctx' temporarily. */
-    remote.crypto.init(&ctx->edctx, remote.crypto_key, (u8_t*) iob->buffer);
-    remote.crypto.encrypt(&ctx->edctx, (u8_t*) cmd, CMD_MAX_SIZE);
+    crypto.init(&ctx->edctx, remote.crypto_key, (u8_t*) iob->buffer);
+    crypto.encrypt(&ctx->edctx, (u8_t*) cmd, CMD_MAX_SIZE);
 
     uv_write(&iob->wreq, (uv_stream_t*) &ctx->io, &wbuf, 1, on_peer_write);
 }
@@ -310,7 +317,7 @@ static void usage(const char* s)
     fprintf(stderr, "trp v%d.%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, s);
     fprintf(stderr, "[options]:\n");
     fprintf(stderr, "  -s <address>  server connect to. (default: 127.0.0.1:%d)\n", DEF_SERVER_PORT);
-    fprintf(stderr, "  -d <devid>    device id of this client. (default: %s)\n", devid_to_str((u8_t*) DEFAULT_DEVID));
+    fprintf(stderr, "  -d <devid>    device id of this client. (default: %s)\n", devid_to_str((u8_t*) DEFAULT_DEVICE_ID));
     fprintf(stderr, "  -m <method>   crypto method with server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
     fprintf(stderr, "  -M <METHOD>   crypto method with proxy client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
     fprintf(stderr, "  -k <password> crypto password with server. (default: none)\n");
@@ -431,30 +438,30 @@ int main(int argc, char** argv)
 
     if (!devid_str) {
         xlog_info("device id not set, use default.");
-        memcpy(device_id, DEFAULT_DEVID, DEVICE_ID_SIZE);
+        memcpy(device_id, DEFAULT_DEVICE_ID, DEVICE_ID_SIZE);
     } else if (str_to_devid(device_id, devid_str) != 0) {
         xlog_error("invalid device id string [%s].", devid_str);
         goto end;
     }
 
     if (passwd) {
-        derive_key(remote.crypto_key, passwd);
+        derive_key(crypto_key, passwd);
     } else {
         xlog_info("password not set, disable crypto with server.");
         method = CRYPTO_NONE;
     }
     if (passwdx) {
-        derive_key(cryptox_key, passwdx);
+        derive_key(remote.crypto_key, passwdx);
     } else {
         xlog_info("PASSWORD (-K) not set, disable crypto with proxy client.");
         methodx = CRYPTO_NONE;
     }
 
-    if (crypto_init(&remote.crypto, method) != 0) {
+    if (crypto_init(&crypto, method) != 0) {
         xlog_error("invalid crypto method: %d.", method);
         goto end;
     }
-    if (crypto_init(&cryptox, methodx) != 0) {
+    if (crypto_init(&remote.crypto, methodx) != 0) {
         xlog_error("invalid crypto METHOD: %d.", methodx);
         goto end;
     }
