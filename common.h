@@ -24,8 +24,8 @@
 
 #define MAX_NONCE_LEN       16
 #define MAX_DOMAIN_LEN      64
-#define MAX_SOCKBUF_SIZE    4096
-#define MAX_WQUEUE_SIZE     0 /* bytes */
+#define MAX_WQUEUE_SIZE     0       /* bytes */
+#define MAX_SOCKBUF_SIZE    (4096 - sizeof(io_buf_t) - sizeof(xlist_node_t))
 
 #define DEVICE_ID_SIZE      8
 
@@ -41,6 +41,7 @@ enum {
     CMD_CONNECT_IPV6,
     CMD_CONNECT_DOMAIN,
     CMD_CONNECT_CLIENT,
+    CMD_CONNECT_UDP,
     CMD_REPORT_DEVID,
 };
 
@@ -58,6 +59,15 @@ typedef struct {
     u8_t data[0];
 } cmd_t;
 
+typedef struct {
+    u8_t tag;
+    u8_t isv6;      /* ipv6 addr flag */
+    u16_t id;
+    u16_t len;      /* data length */
+    u16_t dport;    /* big endian dest port */
+    u8_t data[0];   /* daddr + payload */
+} udp_cmd_t;
+
 /* domain struct which compatible with 'struct sockaddr' */
 struct sockaddr_dm {
     u16_t sdm_family; /* (always '0') */
@@ -66,15 +76,15 @@ struct sockaddr_dm {
 };
 
 typedef struct {
-    uv_write_t wreq;
     u32_t idx;
     u32_t len;
+    uv_write_t wreq;
     char buffer[0];
 } io_buf_t;
 
 #define is_valid_devid(s)   (*(u32_t*) (s))
 
-#define is_valid_cmd(c)     ( \
+#define is_valid_command(c)     ( \
             (c)->major == VERSION_MAJOR && \
             (c)->minor == VERSION_MINOR && \
             (c)->tag == CMD_TAG)
