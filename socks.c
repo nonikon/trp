@@ -18,7 +18,7 @@
 /*  --------------         --------------         --------------
  * | proxy-server | <---> | proxy-client | <---> | applications |
  *  --------------         --------------         --------------
- *                         (socks-server)         (socks_client)
+ *                         (socks-server)         (socks-client)
  *
  * SOCKS5 Protocol: https://www.ietf.org/rfc/rfc1928.txt
  */
@@ -89,7 +89,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
                 return -1;
             }
 
-            init_connect_cmd(ctx, CMD_CONNECT_IPV4,
+            init_connect_command(ctx, CMD_CONNECT_IPV4,
                 *(u16_t*) (buf->base + 2), (u8_t*) (buf->base + 4), 4);
 
             buf->base[0] = 0x00; /* set 'VN' to 0x00 */
@@ -160,7 +160,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
             if (buf->base[3] == 0x01) { /* 'ATYP' == 0x01 (IPV4) */
 
                 if (buf->len == 6 + 4) {
-                    init_connect_cmd(ctx, CMD_CONNECT_IPV4,
+                    init_connect_command(ctx, CMD_CONNECT_IPV4,
                         *(u16_t*) (buf->base + 8), (u8_t*) (buf->base + 4), 4);
                     buf->base[1] = 0x00;
                 } else {
@@ -175,7 +175,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
                     u16_t port = *(u16_t*) (buf->base + l + 5);
 
                     buf->base[5 + l] = 0; /* make domain name null-terminated. */
-                    init_connect_cmd(ctx, CMD_CONNECT_DOMAIN,
+                    init_connect_command(ctx, CMD_CONNECT_DOMAIN,
                         port, (u8_t*) (buf->base + 5), l + 1);
                     buf->base[1] = 0x00;
                 } else {
@@ -186,7 +186,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
             } else if (buf->base[3] == 0x04) { /* 'ATYP' == 0x04 (IPV6) */
 
                 if (buf->len == 6 + 16) {
-                    init_connect_cmd(ctx, CMD_CONNECT_IPV6,
+                    init_connect_command(ctx, CMD_CONNECT_IPV6,
                         *(u16_t*) (buf->base + 20), (u8_t*) (buf->base + 4), 16);
                     buf->base[1] = 0x00;
                 } else {
@@ -310,7 +310,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
     xlist_erase(&xclient.io_buffers, xlist_value_iter(iob));
 }
 
-static void on_xclient_connect(uv_stream_t* stream, int status)
+static void on_sclient_connect(uv_stream_t* stream, int status)
 {
     xclient_ctx_t* ctx;
 
@@ -455,8 +455,7 @@ int main(int argc, char** argv)
         struct rlimit limit = { nofile, nofile };
 
         if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
-            xlog_warn("set NOFILE limit to %d failed: %s.",
-                nofile, strerror(errno));
+            xlog_warn("set NOFILE limit to %d failed: %s.", nofile, strerror(errno));
         } else {
             xlog_info("set NOFILE limit to %d.", nofile);
         }
@@ -521,7 +520,7 @@ int main(int argc, char** argv)
     uv_tcp_bind(&io_sserver, &saddr.x, 0);
 
     error = uv_listen((uv_stream_t*) &io_sserver,
-                LISTEN_BACKLOG, on_xclient_connect);
+                LISTEN_BACKLOG, on_sclient_connect);
     if (error) {
         xlog_error("uv_listen [%s] failed: %s.",
             addr_to_str(&saddr), uv_strerror(error));

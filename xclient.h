@@ -40,7 +40,7 @@ typedef struct {
 /*  public */ void on_xclient_write(uv_write_t* req, int status);
 /* virtual */ void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf);
 
-/*  public */ void init_connect_cmd(xclient_ctx_t* ctx, u8_t code, u16_t port, u8_t* addr, u32_t addrlen);
+/*  public */ void init_connect_command(xclient_ctx_t* ctx, u8_t code, u16_t port, u8_t* addr, u32_t addrlen);
 /*  public */ int connect_xserver(xclient_ctx_t* ctx);
 
 typedef struct {

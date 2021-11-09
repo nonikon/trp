@@ -181,7 +181,7 @@ void on_xclient_write(uv_write_t* req, int status)
     xlist_erase(&xclient.io_buffers, xlist_value_iter(iob));
 }
 
-void init_connect_cmd(xclient_ctx_t* ctx,
+void init_connect_command(xclient_ctx_t* ctx,
                 u8_t code, u16_t port, u8_t* addr, u32_t addrlen)
 {
     io_buf_t* iob = xlist_alloc_back(&xclient.io_buffers);

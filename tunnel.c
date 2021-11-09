@@ -27,10 +27,7 @@
  */
 
 static uv_loop_t* loop;
-static union {
-    cmd_t m;
-    u8_t _[CMD_MAX_SIZE];
-} tunnel_maddr;
+static union { cmd_t m; u8_t _[CMD_MAX_SIZE]; } tunnel_maddr;
 
 /* override */ void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 {
@@ -105,7 +102,7 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
 #ifdef __linux__
         if (tunnel_maddr.m.len) {
 #endif
-            init_connect_cmd(ctx, tunnel_maddr.m.cmd,
+            init_connect_command(ctx, tunnel_maddr.m.cmd,
                 tunnel_maddr.m.port, tunnel_maddr.m.data, tunnel_maddr.m.len);
 #ifdef __linux__
         } else {
@@ -121,12 +118,12 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
 
             if (getsockopt(ctx->io_xclient.io_watcher.fd,
                     SOL_IP, SO_ORIGINAL_DST, &dest, &len) == 0) {
-                init_connect_cmd(ctx, CMD_CONNECT_IPV4,
+                init_connect_command(ctx, CMD_CONNECT_IPV4,
                     dest.v4.sin_port, (u8_t*) &dest.v4.sin_addr, 4);
 
             } else if (getsockopt(ctx->io_xclient.io_watcher.fd,
                     SOL_IPV6, IP6T_SO_ORIGINAL_DST, &dest, &len) == 0) {
-                init_connect_cmd(ctx, CMD_CONNECT_IPV6,
+                init_connect_command(ctx, CMD_CONNECT_IPV6,
                     dest.v6.sin6_port, (u8_t*) &dest.v6.sin6_addr, 16);
 
             } else {
@@ -311,8 +308,7 @@ int main(int argc, char** argv)
         struct rlimit limit = { nofile, nofile };
 
         if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
-            xlog_warn("set NOFILE limit to %d failed: %s.",
-                nofile, strerror(errno));
+            xlog_warn("set NOFILE limit to %d failed: %s.", nofile, strerror(errno));
         } else {
             xlog_info("set NOFILE limit to %d.", nofile);
         }
