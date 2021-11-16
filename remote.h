@@ -54,11 +54,19 @@ typedef union {
     /* udp remote */
     struct {
         peer_ctx_t* peer;
-        xlist_t conns;              /* udp_conn_t */
-        io_buf_t* buf;
+        xhash_t conns;  /* udp_conn_t */
+        io_buf_t* rbuf;
         crypto_ctx_t edctx;
     } u;
 } remote_ctx_t;
+
+typedef struct {
+    u32_t id;   /* (must be the first element) */
+    u8_t alen;  /* addr length */
+    uv_udp_t io;
+    uv_timer_t timer;
+    remote_ctx_t* parent;
+} udp_conn_t;
 
 struct peer_ctx {
     uv_tcp_t io;
@@ -68,7 +76,6 @@ struct peer_ctx {
 #endif
     io_buf_t* pending_iob;          /* the pending 'io_buf_t' before 'remote' connected */
     crypto_ctx_t edctx;
-    u8_t reserved;
     u8_t peer_blocked;
     u8_t remote_blocked;
     u8_t stage;
@@ -85,7 +92,9 @@ struct peer_ctx {
 /*  public */ void on_peer_closed(uv_handle_t* handle);
 /*  public */ void on_peer_write(uv_write_t* req, int status);
 /* virtual */ void on_peer_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf);
-/*  public */ int invoke_peer_command(peer_ctx_t* ctx, io_buf_t* iob);
+/*  public */ void close_udp_remote(remote_ctx_t* ctx);
+/*  public */ void forward_peer_udp_packets(remote_ctx_t* ctx, u32_t nread);
+/*  public */ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob);
 
 typedef struct {
     uv_loop_t* loop;

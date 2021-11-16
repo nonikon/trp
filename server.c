@@ -87,16 +87,19 @@
         }
 
         if (ctx->stage == STAGE_FORWARDUDP) {
-            /* TODO */
             xlog_debug("recved %zd bytes from proxy client, to udp remote.", nread);
-            xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
+
+            remote.crypto.decrypt(&ctx->edctx, (u8_t*) buf->base, (u32_t) nread);
+            forward_peer_udp_packets(ctx->remote, (u32_t) nread);
+
+            /* 'iob' can't be freed. */
             return;
         }
 
         if (ctx->stage == STAGE_COMMAND) {
             iob->len = (u32_t) nread;
 
-            if (invoke_peer_command(ctx, iob) != 0) {
+            if (invoke_encrypted_peer_command(ctx, iob) != 0) {
                 uv_close((uv_handle_t*) stream, on_peer_closed);
             }
 
@@ -113,15 +116,20 @@
         xlog_debug("disconnected from proxy client: %s, stage %d.",
             uv_err_name((int) nread), ctx->stage);
 
+        uv_close((uv_handle_t*) stream, on_peer_closed);
+
+#ifdef WITH_CLIREMOTE
+        if (ctx->stage == STAGE_FORWARDCLI) {
+            uv_close((uv_handle_t*) &ctx->remote->c.io, on_cli_remote_closed);
+        } else
+#endif
         if (ctx->stage == STAGE_FORWARDTCP) {
             uv_close((uv_handle_t*) &ctx->remote->t.io, on_tcp_remote_closed);
+        } else if (ctx->stage == STAGE_FORWARDUDP) {
+            close_udp_remote(ctx->remote);
+            /* 'iob' can't be freed in this place. */
+            return;
         }
-#ifdef WITH_CLIREMOTE
-        else if (ctx->stage == STAGE_FORWARDCLI) {
-            uv_close((uv_handle_t*) &ctx->remote->c.io, on_cli_remote_closed);
-        }
-#endif
-        uv_close((uv_handle_t*) stream, on_peer_closed);
 
         /* 'buf->base' may be 'NULL' when 'nread' < 0.
          * just 'return' in this situation.
@@ -151,7 +159,6 @@ static void on_xclient_connect(uv_stream_t* stream, int status)
     ctx->pending_ctx = NULL;
 #endif
     ctx->pending_iob = NULL;
-    ctx->reserved = 0;
     ctx->peer_blocked = 0;
     ctx->remote_blocked = 0;
     ctx->stage = STAGE_COMMAND;
@@ -212,7 +219,9 @@ static void usage(const char* s)
 
 int main(int argc, char** argv)
 {
+#ifdef WITH_CLIREMOTE
     uv_tcp_t io_server;  /* server listen io */
+#endif
     uv_tcp_t io_xserver; /* proxy-server listen io */
     union { struct sockaddr x; struct sockaddr_in6 d; } addr;
     union { struct sockaddr x; struct sockaddr_in6 d; } xaddr;
@@ -323,12 +332,10 @@ int main(int argc, char** argv)
         goto end;
     }
 
-    uv_tcp_init(remote.loop, &io_server);
-    uv_tcp_init(remote.loop, &io_xserver);
-    uv_tcp_bind(&io_server, &addr.x, 0);
-    uv_tcp_bind(&io_xserver, &xaddr.x, 0);
-
 #ifdef WITH_CLIREMOTE
+    uv_tcp_init(remote.loop, &io_server);
+    uv_tcp_bind(&io_server, &addr.x, 0);
+
     error = uv_listen((uv_stream_t*) &io_server,
                 LISTEN_BACKLOG, on_cli_remote_connect);
     if (error) {
@@ -337,6 +344,9 @@ int main(int argc, char** argv)
         goto end;
     }
 #endif
+    uv_tcp_init(remote.loop, &io_xserver);
+    uv_tcp_bind(&io_xserver, &xaddr.x, 0);
+
     error = uv_listen((uv_stream_t*) &io_xserver,
                 LISTEN_BACKLOG, on_xclient_connect);
     if (error) {

@@ -72,9 +72,12 @@ static void new_server_connection(uv_timer_t* handle);
         }
 
         if (ctx->stage == STAGE_FORWARDUDP) {
-            /* TODO */
-            xlog_debug("recved %zd bytes from server, to udp remote.", nread);
-            xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
+            xlog_debug("recved %zd bytes from proxy client, to udp remote.", nread);
+
+            remote.crypto.decrypt(&ctx->edctx, (u8_t*) buf->base, (u32_t) nread);
+            forward_peer_udp_packets(ctx->remote, (u32_t) nread);
+
+            /* 'iob' can't be freed. */
             return;
         }
 
@@ -85,7 +88,7 @@ static void new_server_connection(uv_timer_t* handle);
             /* start a new server connection always. */
             new_server_connection(NULL);
 
-            if (invoke_peer_command(ctx, iob) != 0) {
+            if (invoke_encrypted_peer_command(ctx, iob) != 0) {
                 uv_close((uv_handle_t*) stream, on_peer_closed);
             }
 
@@ -102,21 +105,23 @@ static void new_server_connection(uv_timer_t* handle);
         xlog_debug("disconnected from server: %s, stage %d.",
             uv_err_name((int) nread), ctx->stage);
 
-        if (ctx->stage == STAGE_FORWARDTCP) {
-            uv_close((uv_handle_t*) &ctx->remote->t.io, on_tcp_remote_closed);
+        uv_close((uv_handle_t*) stream, on_peer_closed);
 
-        } else if (ctx->stage == STAGE_COMMAND) {
+        if (ctx->stage == STAGE_COMMAND) {
             xlog_warn("connection closed by server at COMMAND stage.");
-
             ++nconnect;
             if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
                 /* reconnect after RECONNECT_SERVER_INTERVAL ms. */
                 uv_timer_start(&reconnect_timer, new_server_connection,
                     RECONNECT_SERVER_INTERVAL, 0);
             }
+        } else if (ctx->stage == STAGE_FORWARDTCP) {
+            uv_close((uv_handle_t*) &ctx->remote->t.io, on_tcp_remote_closed);
+        } else if (ctx->stage == STAGE_FORWARDUDP) {
+            close_udp_remote(ctx->remote);
+            /* 'iob' can't be freed in this place. */
+            return;
         }
-
-        uv_close((uv_handle_t*) stream, on_peer_closed);
 
         /* 'buf->base' may be 'NULL' when 'nread' < 0.
          * just 'return' in this situation.
@@ -216,7 +221,6 @@ static void connect_server(struct sockaddr* addr)
     ctx->remote = NULL;
     // ctx->pending_ctx = NULL;
     ctx->pending_iob = NULL;
-    ctx->reserved = 0;
     ctx->peer_blocked = 0;
     ctx->remote_blocked = 0;
     ctx->stage = STAGE_INIT;

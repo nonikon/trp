@@ -48,15 +48,12 @@ void on_peer_write(uv_write_t* req, int status)
             uv_read_start((uv_stream_t*) &ctx->remote->c.io,
                 on_iobuf_alloc, on_cli_remote_read);
         } else { /* ctx->stage == STAGE_FORWARDTCP */
+#endif
             uv_read_start((uv_stream_t*) &ctx->remote->t.io,
                 on_iobuf_alloc, on_tcp_remote_read);
+#ifdef WITH_CLIREMOTE
         }
-#else
-        /* ctx->stage == STAGE_FORWARDTCP */
-        uv_read_start((uv_stream_t*) &ctx->remote->t.io,
-            on_iobuf_alloc, on_tcp_remote_read);
 #endif
-
         ctx->remote_blocked = 0;
     }
 
@@ -127,7 +124,7 @@ static void connect_cli_remote(peer_ctx_t* pctx, remote_ctx_t* rctx)
     // uv_tcp_keepalive(&client->io, 0, 0);
 }
 
-static int invoke_cli_remote_command(remote_ctx_t* ctx, char* data, u32_t len)
+static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u32_t len)
 {
     /* process command from client */
     cmd_t* cmd = (cmd_t*) (data + MAX_NONCE_LEN);
@@ -238,7 +235,7 @@ static void on_cli_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_
         }
 
         /* ctx->c.peer == NULL */
-        if (invoke_cli_remote_command(ctx, buf->base, (u32_t) nread) != 0) {
+        if (invoke_encrypted_cli_remote_command(ctx, buf->base, (u32_t) nread) != 0) {
             uv_close((uv_handle_t*) stream, on_cli_remote_closed);
         }
 
@@ -478,7 +475,281 @@ static void on_tcp_remote_domain_resolved(
     xlist_erase(&remote.addrinfo_reqs, xlist_value_iter(req));
 }
 
-int invoke_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
+static void on_udp_conn_closed(uv_handle_t* handle)
+{
+    udp_conn_t* ucon = handle->data;
+    remote_ctx_t* ctx = ucon->parent;
+
+    xlog_debug("current %zd udp connections left (remote %X), free one (id %d).",
+        xhash_size(&ctx->u.conns), (unsigned) (size_t) ctx, ucon->id);
+
+    xhash_remove(&ctx->u.conns, xhash_data_iter(ucon));
+
+    if (xhash_empty(&ctx->u.conns) && !ctx->u.peer) {
+        /* free remote ctx when peer is closed. */
+        xhash_destroy(&ctx->u.conns);
+        xlist_erase(&remote.io_buffers, xlist_value_iter(ctx->u.rbuf));
+        xlist_erase(&remote.remote_ctxs, xlist_value_iter(ctx));
+
+        xlog_debug("free udp remote (%X), current %zd remotes, %zd iobufs.",
+            (unsigned) (size_t) ctx, xlist_size(&remote.remote_ctxs), xlist_size(&remote.io_buffers));
+    }
+}
+
+static inline void close_udp_conn(udp_conn_t* ucon)
+{
+    uv_close((uv_handle_t*) &ucon->io, on_udp_conn_closed);
+    uv_timer_stop(&ucon->timer);
+}
+
+void close_udp_remote(remote_ctx_t* ctx)
+{
+    xhash_iter_t b = xhash_begin(&ctx->u.conns);
+
+    /* mark peer will be closed. */
+    ctx->u.peer = NULL;
+
+    /* close all udp connections. */
+    while (xhash_iter_valid(b)) {
+        close_udp_conn(xhash_iter_data(b));
+        b = xhash_iter_next(&ctx->u.conns, b);
+    }
+}
+
+static void on_udp_remote_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf,
+        const struct sockaddr* addr, unsigned int flags)
+{
+    udp_conn_t* ucon = io->data;
+    io_buf_t* iob = xcontainer_of(buf->base - sizeof(udp_cmd_t) - ucon->alen,
+        io_buf_t, buffer);
+
+    if (nread >= 0) {
+        udp_cmd_t* cmd = (udp_cmd_t*) iob->buffer;
+        uv_buf_t wbuf;
+
+        xlog_debug("recved %zd bytes from udp remote (%s), forward.",
+            nread, addr_to_str(addr));
+
+        if (uv_stream_get_write_queue_size(
+                (uv_stream_t*) &ucon->parent->u.peer->io) > MAX_WQUEUE_SIZE) {
+            xlog_debug("peer write queue pending, drop this udp packet.");
+            xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
+            return;
+        }
+
+        cmd->tag = CMD_TAG;
+        cmd->alen = ucon->alen;
+        cmd->id = ucon->id;
+        cmd->len = htonl(ucon->alen + nread);
+
+        if (addr->sa_family == AF_INET) {
+            const struct sockaddr_in* d = (const struct sockaddr_in*) addr;
+            cmd->dport = d->sin_port;
+            memcpy(cmd->data, &d->sin_addr, 4);
+        } else { /* AF_INET6 */
+            const struct sockaddr_in6* d = (const struct sockaddr_in6*) addr;
+            cmd->dport = d->sin6_port;
+            memcpy(cmd->data, &d->sin6_addr, 16);
+        }
+
+        wbuf.base = iob->buffer;
+        wbuf.len = sizeof(udp_cmd_t) + ucon->alen + nread;
+    
+        iob->wreq.data = ucon->parent->u.peer;
+
+        remote.crypto.encrypt(&ucon->parent->u.edctx, (u8_t*) wbuf.base, wbuf.len);
+
+        uv_write(&iob->wreq, (uv_stream_t*) &ucon->parent->u.peer->io,
+            &wbuf, 1, on_peer_write);
+
+        /* 'iob' free later. */
+        return;
+    }
+
+    xlog_warn("udp remote read failed: %s.", uv_err_name((int) nread));
+    close_udp_conn(ucon);
+    /* free 'iob' now. */
+    xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
+}
+
+static void on_udp_conn_timeout(uv_timer_t* timer)
+{
+    xlog_debug("udp connectin timeout, id %d.", ((udp_conn_t*) timer->data)->id);
+    close_udp_conn(timer->data);
+}
+
+static void on_udp_remote_rbuf_alloc(uv_handle_t* handle, size_t sg_size, uv_buf_t* buf)
+{
+    io_buf_t* iob = xlist_alloc_back(&remote.io_buffers);
+    udp_conn_t* ucon = handle->data;
+
+    /* leave 'sizeof(udp_cmd_t) + ucon->alen' bytes space at the beginnig.  */
+    buf->base = iob->buffer + ucon->alen + sizeof(udp_cmd_t);
+    buf->len = MAX_SOCKBUF_SIZE - sizeof(udp_cmd_t) - ucon->alen;
+}
+
+static void send_udp_packet(remote_ctx_t* ctx, udp_cmd_t* cmd, u32_t dlen)
+{
+    union {
+        struct sockaddr     vx;
+        struct sockaddr_in  v4;
+        struct sockaddr_in6 v6;
+    } addr;
+    uv_buf_t wbuf;
+    udp_conn_t* ucon;
+    int rt;
+
+    if (cmd->alen == 4) {
+        if (dlen < 4) {
+            xlog_warn("udp packet datalen < 4.");
+            return;
+        }
+        addr.v4.sin_family = AF_INET;
+        addr.v4.sin_port = cmd->dport;
+        memcpy(&addr.v4.sin_addr, cmd->data, 4);
+
+        wbuf.base = (char*) (cmd->data + 4);
+        wbuf.len = dlen - 4;
+    } else { /* cmd->alen == 16 */
+        if (dlen < 16) {
+            xlog_warn("udp packet datalen < 16.");
+            return;
+        }
+        addr.v6.sin6_family = AF_INET6;
+        addr.v6.sin6_port = cmd->dport;
+        memcpy(&addr.v6.sin6_addr, cmd->data, 16);
+
+        wbuf.base = (char*) (cmd->data + 16);
+        wbuf.len = dlen - 16;
+    }
+
+    ucon = xhash_get_data(&ctx->u.conns, &cmd->id);
+
+    if (ucon == XHASH_INVALID_DATA) {
+        ucon = xhash_iter_data(xhash_put_ex(&ctx->u.conns,
+            &cmd->id, sizeof(cmd->id)));
+
+        uv_udp_init(remote.loop, &ucon->io);
+        uv_timer_init(remote.loop, &ucon->timer);
+
+        ucon->alen = cmd->alen;
+        ucon->io.data = ucon;
+        ucon->timer.data = ucon;
+        ucon->parent = ctx;
+
+        rt = uv_udp_try_send(&ucon->io, &wbuf, 1, &addr.vx);
+
+        if (rt > 0) {
+            uv_udp_recv_start(&ucon->io, on_udp_remote_rbuf_alloc, on_udp_remote_read);
+            uv_timer_start(&ucon->timer, on_udp_conn_timeout, KEEPIDLE_TIME * 1000, 0);
+
+            xlog_debug("send udp packet (%s) done, %d bytes, id %d.", addr_to_str(&addr),
+                wbuf.len, ucon->id);
+        } else {
+            close_udp_conn(ucon);
+            xlog_warn("udp packet send failed: %s, id %d.", uv_err_name(rt), cmd->id);
+        }
+    } else {
+        rt = uv_udp_try_send(&ucon->io, &wbuf, 1, &addr.vx);
+
+        if (rt > 0) {
+            uv_timer_again(&ucon->timer);
+            xlog_debug("send udp packet (%s) done, %d bytes, id %d.", addr_to_str(&addr),
+                wbuf.len, ucon->id);
+        } else {
+            xlog_warn("udp packet send failed: %s, id %d.", uv_err_name(rt), cmd->id);
+        }
+    }
+}
+
+void forward_peer_udp_packets(remote_ctx_t* ctx, u32_t nread)
+{
+    io_buf_t* iob = ctx->u.rbuf;
+    udp_cmd_t* cmd;
+    char* buf = iob->buffer + iob->idx;
+    u32_t len = iob->len + nread;
+    u32_t need;
+
+    do {
+        if (len <= sizeof(udp_cmd_t)) {
+            xlog_debug("udp packet need more (header).");
+            break;
+        }
+        cmd = (udp_cmd_t*) buf;
+        if (cmd->tag != CMD_TAG) {
+            xlog_warn("got an error udp packet (tag).");
+            iob->len = 0;
+            return;
+        }
+        need = ntohs(cmd->len) + sizeof(udp_cmd_t);
+        if (need > MAX_SOCKBUF_SIZE) {
+            xlog_warn("got an error udp packet (length).");
+            iob->len = 0;
+            return;
+        }
+        if (len < need) {
+            xlog_debug("udp pcaket need more (data).");
+            break;
+        }
+        /* an udp packet is received completely, send out. */
+        send_udp_packet(ctx, cmd, need - sizeof(udp_cmd_t));
+        buf += need;
+        len -= need;
+    }
+    while (1);
+
+    iob->len = len;
+    if (len && buf != iob->buffer) {
+        memmove(iob->buffer, buf, len);
+    }
+}
+
+static void on_udp_peer_rbuf_alloc(uv_handle_t* handle, size_t sg_size, uv_buf_t* buf)
+{
+    io_buf_t* iob = ((peer_ctx_t*) handle->data)->remote->u.rbuf;
+
+    buf->base = iob->buffer + iob->len;
+    buf->len = MAX_SOCKBUF_SIZE - iob->len;
+}
+
+static unsigned _udp_conn_hash(void* v)
+{
+    return xhash_improve_hash(((udp_conn_t*) v)->id);
+}
+
+static int _udp_conn_equal(void* l, void* r)
+{
+    return ((udp_conn_t*) l)->id == ((udp_conn_t*) r)->id;
+}
+
+static void connect_udp_remote(peer_ctx_t* ctx)
+{
+    remote_ctx_t* rctx = xlist_alloc_back(&remote.remote_ctxs);
+    io_buf_t* iob = ctx->pending_iob;
+
+    xhash_init(&rctx->u.conns, -1, sizeof(udp_conn_t),
+        _udp_conn_hash, _udp_conn_equal, NULL);
+
+    rctx->u.peer = ctx;
+    rctx->u.rbuf = iob;
+
+    convert_nonce((u8_t*) iob->buffer);
+    remote.crypto.init(&rctx->u.edctx, remote.crypto_key, (u8_t*) iob->buffer);
+
+    ctx->remote = rctx;
+    ctx->pending_iob = NULL;
+    ctx->stage = STAGE_FORWARDUDP;
+    /* this maybe unsafe, use 'uv_read_stop()' and 'uv_read_start()' instead? TODO. */
+    ctx->io.alloc_cb = on_udp_peer_rbuf_alloc;
+
+    if (iob->len > 0) {
+        remote.crypto.decrypt(&ctx->edctx, (u8_t*) iob->buffer + iob->idx, iob->len);
+        forward_peer_udp_packets(ctx->remote, 0);
+    }
+    iob->idx = 0;
+}
+
+int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 {
     /* process command from peer. */
     cmd_t* cmd = (cmd_t*) (iob->buffer + MAX_NONCE_LEN);
@@ -614,10 +885,9 @@ int invoke_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
     }
 
     if (cmd->cmd == CMD_CONNECT_UDP) {
-        ctx->stage = STAGE_FORWARDUDP;
         xlog_debug("got FORWARD_UDP cmd from peer, process.");
-        // TODO
-        return -1;
+        connect_udp_remote(ctx);
+        return 0;
     }
 
     xlog_warn("got an error command (%d) from peer.", cmd->cmd);
