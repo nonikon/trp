@@ -11,6 +11,7 @@ if(LIBUV_EMBEDDED)
 endif()
 
 set(generic_sources
+    xhash.c
     xlist.c
     xlog.c
     common.c
@@ -22,7 +23,6 @@ set(generic_sources
 # server
 set(server_sources
     ${generic_sources}
-    xhash.c
     http_parser.c
     http_server.c
     server.c
@@ -43,6 +43,7 @@ set(client_sources
     remote.c
 )
 set(client_defines
+    XHASH_ENABLE_CACHE=1
     XLIST_ENABLE_CACHE=1
     XLOG_OUT_CTRL=4
 )
@@ -54,6 +55,7 @@ set(tunnel_sources
     tunnel.c
 )
 set(tunnel_defines
+    XHASH_ENABLE_CACHE=1
     XLIST_ENABLE_CACHE=1
     XLOG_OUT_CTRL=4
 )
@@ -65,15 +67,13 @@ set(socks_sources
     socks.c
 )
 set(socks_defines
+    XHASH_ENABLE_CACHE=1
     XLIST_ENABLE_CACHE=1
     XLOG_OUT_CTRL=4
 )
 
 if(MSVC)
-    add_compile_definitions(
-        _WINSOCK_DEPRECATED_NO_WARNINGS
-        _CRT_SECURE_NO_WARNINGS
-    )
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 else()
     add_compile_options(-Wall)
 endif()

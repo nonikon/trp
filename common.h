@@ -61,19 +61,13 @@ typedef struct {
 
 typedef struct {
     u8_t tag;
-    u8_t isv6;      /* ipv6 addr flag */
-    u16_t id;
+    u8_t alen;      /* addr length */
+    u16_t rsv;
+    u32_t id;
     u16_t len;      /* data length */
     u16_t dport;    /* big endian dest port */
     u8_t data[0];   /* daddr + payload */
 } udp_cmd_t;
-
-/* domain struct which compatible with 'struct sockaddr' */
-struct sockaddr_dm {
-    u16_t sdm_family; /* (always '0') */
-    u16_t sdm_port;   /* big endian port */
-     char sdm_addr[MAX_DOMAIN_LEN]; /* null-terminated domain */
-};
 
 typedef struct {
     u32_t idx;
@@ -81,6 +75,13 @@ typedef struct {
     uv_write_t wreq;
     char buffer[0];
 } io_buf_t;
+
+/* domain struct which compatible with 'struct sockaddr' */
+struct sockaddr_dm {
+    u16_t sdm_family; /* (always '0') */
+    u16_t sdm_port;   /* big endian port */
+     char sdm_addr[MAX_DOMAIN_LEN]; /* null-terminated domain */
+};
 
 #define is_valid_devid(s)   (*(u32_t*) (s))
 
@@ -115,12 +116,11 @@ int resolve_domain_sync(uv_loop_t* loop,
 
 /* convert 'struct sockaddr' to string (include port). */
 const char* addr_to_str(const void* addr);
-
 /* convert 'cmd_t' address to string (include port). */
 const char* maddr_to_str(const cmd_t* cmd);
-
+/* ... */
 const char* devid_to_str(const u8_t id[DEVICE_ID_SIZE]);
-
+/* ... */
 int str_to_devid(u8_t id[DEVICE_ID_SIZE], const char* str);
 
 #endif // _COMMON_H_
