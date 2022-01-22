@@ -155,7 +155,7 @@ static void report_device_id(peer_ctx_t* ctx)
     memcpy(cmd->data, device_id, DEVICE_ID_SIZE);
 
     /* use 'ctx->edctx' temporarily. */
-    crypto.init(&ctx->edctx, remote.crypto_key, (u8_t*) iob->buffer);
+    crypto.init(&ctx->edctx, crypto_key, (u8_t*) iob->buffer);
     crypto.encrypt(&ctx->edctx, (u8_t*) cmd, CMD_MAX_SIZE);
 
     uv_write(&iob->wreq, (uv_stream_t*) &ctx->io, &wbuf, 1, on_peer_write);

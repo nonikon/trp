@@ -19,6 +19,11 @@ set(generic_sources
     sm4.c
     chacha.c
 )
+set(generic_defines
+    XHASH_ENABLE_CACHE=1
+    XLIST_ENABLE_CACHE=1
+    XLOG_OUT_CTRL=4
+)
 
 # server
 set(server_sources
@@ -29,10 +34,8 @@ set(server_sources
     remote.c
 )
 set(server_defines
+    ${generic_defines}
     HTTP_PARSER_STRICT=0
-    XHASH_ENABLE_CACHE=1
-    XLIST_ENABLE_CACHE=1
-    XLOG_OUT_CTRL=4
     WITH_CLIREMOTE=1
 )
 
@@ -43,9 +46,7 @@ set(client_sources
     remote.c
 )
 set(client_defines
-    XHASH_ENABLE_CACHE=1
-    XLIST_ENABLE_CACHE=1
-    XLOG_OUT_CTRL=4
+    ${generic_defines}
 )
 
 # tunnel
@@ -55,9 +56,7 @@ set(tunnel_sources
     tunnel.c
 )
 set(tunnel_defines
-    XHASH_ENABLE_CACHE=1
-    XLIST_ENABLE_CACHE=1
-    XLOG_OUT_CTRL=4
+    ${generic_defines}
 )
 
 # socks
@@ -67,9 +66,7 @@ set(socks_sources
     socks.c
 )
 set(socks_defines
-    XHASH_ENABLE_CACHE=1
-    XLIST_ENABLE_CACHE=1
-    XLOG_OUT_CTRL=4
+    ${generic_defines}
 )
 
 if(MSVC)
@@ -87,16 +84,12 @@ endif()
 
 add_executable(trp-server ${server_sources})
 target_compile_definitions(trp-server PRIVATE ${server_defines})
-# target_compile_options(trp-server PRIVATE ${server_cflags})
 
 add_executable(trp-client ${client_sources})
 target_compile_definitions(trp-client PRIVATE ${client_defines})
-# target_compile_options(trp-client PRIVATE ${client_cflags})
 
 add_executable(trp-tunnel ${tunnel_sources})
 target_compile_definitions(trp-tunnel PRIVATE ${tunnel_defines})
-# target_compile_options(trp-tunnel PRIVATE ${tunnel_cflags})
 
 add_executable(trp-socks ${socks_sources})
 target_compile_definitions(trp-socks PRIVATE ${socks_defines})
-# target_compile_options(trp-socks PRIVATE ${socks_cflags})

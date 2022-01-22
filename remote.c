@@ -3,6 +3,8 @@
  * All rights reserved.
  */
 
+#include <string.h>
+
 #include "remote.h"
 
 remote_t remote;
@@ -121,7 +123,7 @@ static void connect_cli_remote(peer_ctx_t* pctx, remote_ctx_t* rctx)
     }
 
     /* disable tcp-keepalive with client. */
-    // uv_tcp_keepalive(&client->io, 0, 0);
+    uv_tcp_keepalive(&rctx->c.io, 0, 0);
 }
 
 static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u32_t len)
@@ -275,10 +277,9 @@ void on_cli_remote_connect(uv_stream_t* stream, int status)
 
     if (uv_accept(stream, (uv_stream_t*) &ctx->c.io) == 0) {
         xlog_debug("a client connected.");
-        uv_read_start((uv_stream_t*) &ctx->c.io, on_iobuf_alloc, on_cli_remote_read);
-
         /* enable tcp-keepalive with client. */
         uv_tcp_keepalive(&ctx->c.io, 1, KEEPIDLE_TIME);
+        uv_read_start((uv_stream_t*) &ctx->c.io, on_iobuf_alloc, on_cli_remote_read);
     } else {
         xlog_error("uv_accept failed.");
         uv_close((uv_handle_t*) &ctx->c.io, on_cli_remote_closed);
@@ -290,7 +291,7 @@ static void on_connect_cli_remote_timeout(uv_timer_t* timer)
     pending_ctx_t* ctx = xcontainer_of(timer, pending_ctx_t, timer);
 
     xlog_debug("still no available client after %d seconds, close %zd pending peer(s).",
-        CONNECT_CLIREMOTE_TIMOUT / 1000, xlist_size(&ctx->peers));
+        CONNECT_CLI_TIMEO / 1000, xlist_size(&ctx->peers));
 
     do {
         peer_ctx_t* x = xlist_cut_front(&ctx->peers);
@@ -626,8 +627,7 @@ static void send_udp_packet(remote_ctx_t* ctx, udp_cmd_t* cmd, u32_t dlen)
     ucon = xhash_get_data(&ctx->u.conns, &cmd->id);
 
     if (ucon == XHASH_INVALID_DATA) {
-        ucon = xhash_iter_data(xhash_put_ex(&ctx->u.conns,
-            &cmd->id, sizeof(cmd->id)));
+        ucon = xhash_iter_data(xhash_put_ex(&ctx->u.conns, &cmd->id, sizeof(cmd->id)));
 
         uv_udp_init(remote.loop, &ucon->io);
         uv_timer_init(remote.loop, &ucon->timer);
@@ -801,7 +801,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 
                 if (!uv_is_active((uv_handle_t*) &pdctx->timer)) {
                     uv_timer_start(&pdctx->timer, on_connect_cli_remote_timeout,
-                        CONNECT_CLIREMOTE_TIMOUT, 0);
+                        CONNECT_CLI_TIMEO, 0);
                 }
                 ctx->pending_ctx = pdctx;
             }

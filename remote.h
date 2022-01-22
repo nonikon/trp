@@ -12,9 +12,6 @@
 #include "xlist.h"
 #include "xhash.h"
 
-#define CONNECT_CLIREMOTE_TIMOUT    (10 * 1000) /* ms */
-#define KEEPIDLE_TIME               (40) /* s */
-
 enum {
     STAGE_INIT,
     STAGE_COMMAND,
@@ -61,7 +58,7 @@ typedef union {
 } remote_ctx_t;
 
 typedef struct {
-    u32_t id;   /* (must be the first element) */
+    u32_t id;   /* (must be the first member) */
     u8_t alen;  /* addr length */
     uv_udp_t io;
     uv_timer_t timer;

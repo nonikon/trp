@@ -165,6 +165,8 @@ static void on_xclient_connect(uv_stream_t* stream, int status)
 
     if (uv_accept(stream, (uv_stream_t*) &ctx->io) == 0) {
         xlog_debug("a proxy client connected.");
+        /* enable tcp-keepalive with proxy client. */
+        uv_tcp_keepalive(&ctx->io, 1, KEEPIDLE_TIME);
         uv_read_start((uv_stream_t*) &ctx->io, on_iobuf_alloc, on_peer_read);
     } else {
         xlog_error("uv_accept failed.");
@@ -336,22 +338,18 @@ int main(int argc, char** argv)
     uv_tcp_init(remote.loop, &io_server);
     uv_tcp_bind(&io_server, &addr.x, 0);
 
-    error = uv_listen((uv_stream_t*) &io_server,
-                LISTEN_BACKLOG, on_cli_remote_connect);
+    error = uv_listen((uv_stream_t*) &io_server, LISTEN_BACKLOG, on_cli_remote_connect);
     if (error) {
-        xlog_error("uv_listen [%s] failed: %s.",
-            addr_to_str(&addr), uv_strerror(error));
+        xlog_error("uv_listen [%s] failed: %s.", addr_to_str(&addr), uv_strerror(error));
         goto end;
     }
 #endif
     uv_tcp_init(remote.loop, &io_xserver);
     uv_tcp_bind(&io_xserver, &xaddr.x, 0);
 
-    error = uv_listen((uv_stream_t*) &io_xserver,
-                LISTEN_BACKLOG, on_xclient_connect);
+    error = uv_listen((uv_stream_t*) &io_xserver, LISTEN_BACKLOG, on_xclient_connect);
     if (error) {
-        xlog_error("uv_listen [%s] failed: %s.",
-            addr_to_str(&xaddr), uv_strerror(error));
+        xlog_error("uv_listen [%s] failed: %s.", addr_to_str(&xaddr), uv_strerror(error));
         goto end;
     }
 
