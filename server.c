@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 nonikon@qq.com.
+ * Copyright (C) 2021-2022 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -177,18 +177,25 @@ static void on_xclient_connect(uv_stream_t* stream, int status)
 #ifdef WITH_CLIREMOTE
 static unsigned _pending_ctx_hash(void* v)
 {
-    unsigned* p = (unsigned*) ((pending_ctx_t*) v)->devid;
-    unsigned  h = p[0] + p[1];
-
-    return xhash_improve_hash(h);
+    return xhash_data_hash(v, DEVICE_ID_SIZE);
 }
 
 static int _pending_ctx_equal(void* l, void* r)
 {
-    return !memcmp(((pending_ctx_t*) l)->devid,
-                   ((pending_ctx_t*) r)->devid, DEVICE_ID_SIZE);
+    return !memcmp(l, r, DEVICE_ID_SIZE);
 }
 #endif
+
+static unsigned _udp_session_hash(void* v)
+{
+    /* first 4 bytes of session id. */
+    return xhash_data_hash(v, 4);
+}
+
+static int _udp_session_equal(void* l, void* r)
+{
+    return !memcmp(l, r, SESSION_ID_SIZE);
+}
 
 static void usage(const char* s)
 {
@@ -364,6 +371,8 @@ int main(int argc, char** argv)
     xlist_init(&remote.io_buffers, sizeof(io_buf_t) + MAX_SOCKBUF_SIZE, NULL);
     xlist_init(&remote.conn_reqs, sizeof(uv_connect_t), NULL);
     xlist_init(&remote.addrinfo_reqs, sizeof(uv_getaddrinfo_t), NULL);
+    xhash_init(&remote.udp_sessions, -1, sizeof(udp_sess_t),
+        _udp_session_hash, _udp_session_equal, NULL);
 
 #ifdef WITH_CLIREMOTE
     xlog_info("server listen at [%s]...", addr_to_str(&addr));
@@ -371,6 +380,7 @@ int main(int argc, char** argv)
     xlog_info("proxy server listen at [%s]...", addr_to_str(&xaddr));
     uv_run(remote.loop, UV_RUN_DEFAULT);
 
+    xhash_destroy(&remote.udp_sessions);
     xlist_destroy(&remote.addrinfo_reqs);
     xlist_destroy(&remote.conn_reqs);
     xlist_destroy(&remote.io_buffers);

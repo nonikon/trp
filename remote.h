@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 nonikon@qq.com.
+ * Copyright (C) 2021-2022 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -32,6 +32,22 @@ typedef struct {
 } pending_ctx_t;
 #endif
 
+/* [udp_sess_t]
+ *   |- [remote_ctx_t]
+ *   |    |- [udp_conn_t]
+ *   |    |- [udp_conn_t]
+ *   |    |- ...
+ *   |- [remote_ctx_t]
+ *   |    |- [udp_conn_t]
+ *   |    |- ...
+ *   | -...
+ */
+typedef struct {
+    u8_t sid[SESSION_ID_SIZE];  /* (must be the first member) */
+    xlist_t rctxs;              /* remote_ctx_t, udp remote contexts with this sid */
+    xhash_t conns;              /* udp_conn_t, udp connections with this sid */
+} udp_sess_t;
+
 typedef union {
 #ifdef WITH_CLIREMOTE
     /* client remote */
@@ -51,9 +67,10 @@ typedef union {
     /* udp remote */
     struct {
         peer_ctx_t* peer;
-        xhash_t conns;  /* udp_conn_t */
+        udp_sess_t* parent;
         io_buf_t* rbuf;
         crypto_ctx_t edctx;
+        u32_t nconns;   /* the number of udp connections under this 'remote_ctx_t' */
     } u;
 } remote_ctx_t;
 
@@ -69,9 +86,9 @@ struct peer_ctx {
     uv_tcp_t io;
     remote_ctx_t* remote;
 #ifdef WITH_CLIREMOTE
-    pending_ctx_t* pending_ctx;     /* the 'pending_ctx_t' belonging to */
+    pending_ctx_t* pending_ctx; /* the 'pending_ctx_t' belonging to */
 #endif
-    io_buf_t* pending_iob;          /* the pending 'io_buf_t' before 'remote' connected */
+    io_buf_t* pending_iob;      /* the pending 'io_buf_t' before 'remote' connected */
     crypto_ctx_t edctx;
     u8_t peer_blocked;
     u8_t remote_blocked;
@@ -103,6 +120,7 @@ typedef struct {
     xlist_t io_buffers;     /* io_buf_t */
     xlist_t conn_reqs;      /* uv_connect_t */
     xlist_t addrinfo_reqs;  /* uv_getaddrinfo_t */
+    xhash_t udp_sessions;   /* udp_session_t */
     crypto_t crypto;
     u8_t crypto_key[16];
 } remote_t;

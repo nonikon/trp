@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 nonikon@qq.com.
+ * Copyright (C) 2021-2022 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -27,7 +27,8 @@
 #define MAX_WQUEUE_SIZE     0       /* bytes */
 #define MAX_SOCKBUF_SIZE    (4096 - sizeof(io_buf_t) - sizeof(xlist_node_t))
 
-#define DEVICE_ID_SIZE      8
+#define SESSION_ID_SIZE     16      /* proxy-client session id size */
+#define DEVICE_ID_SIZE      8       /* client device id size */
 
 #define CONNECT_CLI_TIMEO   (10 * 1000) /* ms */
 #define KEEPIDLE_TIME       (40)    /* s */
@@ -40,12 +41,12 @@ typedef unsigned int    u32_t;
 typedef signed int      s32_t;
 
 enum {
-    CMD_CONNECT_IPV4,
-    CMD_CONNECT_IPV6,
-    CMD_CONNECT_DOMAIN,
-    CMD_CONNECT_CLIENT,
-    CMD_CONNECT_UDP,
-    CMD_REPORT_DEVID,
+    CMD_CONNECT_IPV4,   /* [4] */
+    CMD_CONNECT_IPV6,   /* [16] */
+    CMD_CONNECT_DOMAIN, /* [n] */
+    CMD_CONNECT_CLIENT, /* [DEVICE_ID_SIZE] */
+    CMD_CONNECT_UDP,    /* [SESSION_ID_SIZE] */
+    CMD_REPORT_DEVID,   /* [DEVICE_ID_SIZE] */
 };
 
 #define CMD_TAG         0x7E

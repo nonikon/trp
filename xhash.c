@@ -235,6 +235,8 @@ void xhash_clear(xhash_t* xh)
     xhash_node_t* curr = NULL;
     xhash_node_t* next;
 
+    if (xhash_empty(xh)) return;
+
     for (i = 0; i < xh->bkt_size; ++i)
     {
         curr = xh->buckets[i];

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2021 nonikon@qq.com.
+ * Copyright (C) 2019-2022 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -173,5 +173,44 @@ static inline unsigned xhash_string_hash(const char *s)
     return h;
 }
 #endif
+
+/* Basic data hash function, from MurmurHash2. */
+static inline unsigned xhash_data_hash(const unsigned char *data, unsigned len)
+{
+    unsigned h = 0 ^ len, k; /* h = seed ^ len */
+
+    while (len >= 4)
+    {
+        k = data[0] | data[1] << 8 |
+            data[2] << 16 | data[3] << 24;
+
+        k *= 0x5bd1e995;
+        k ^= k >> 24;
+        k *= 0x5bd1e995;
+
+        h *= 0x5bd1e995;
+        h ^= k;
+
+        data += 4;
+        len -= 4;
+    }
+
+    switch (len)
+    {
+    case 3:
+        h ^= data[2] << 16; /* fall through */
+    case 2:
+        h ^= data[1] << 8;  /* fall through */
+    case 1:
+        h ^= data[0];
+        h *= 0x5bd1e995;
+    }
+
+    h ^= h >> 13;
+    h *= 0x5bd1e995;
+    h ^= h >> 15;
+
+    return h;
+}
 
 #endif // _XHASH_H_
