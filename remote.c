@@ -218,7 +218,7 @@ static void on_cli_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_
             wbuf.base = buf->base;
             wbuf.len = nread;
 
-            iob->wreq.data = ctx;
+            iob->wreq.data = ctx->c.peer;
 
             uv_write(&iob->wreq, (uv_stream_t*) &ctx->c.peer->io,
                 &wbuf, 1, on_peer_write);
@@ -348,7 +348,7 @@ static void on_tcp_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_
         wbuf.base = buf->base;
         wbuf.len = nread;
 
-        iob->wreq.data = ctx;
+        iob->wreq.data = ctx->t.peer;
 
         remote.crypto.encrypt(&ctx->t.edctx, (u8_t*) wbuf.base, wbuf.len);
 
@@ -486,7 +486,7 @@ static void free_udp_remote(remote_ctx_t* ctx)
     xlist_erase(&remote.io_buffers, xlist_value_iter(ctx->u.rbuf));
     xlist_erase(&sess->rctxs, xlist_value_iter(ctx));
 
-    if (xlist_empty(&sess->conns)) {
+    if (xlist_empty(&sess->rctxs) && xhash_empty(&sess->conns)) {
         /* there is no connection under this session, free session. */
         xlist_destroy(&sess->rctxs);
         xhash_destroy(&sess->conns);
