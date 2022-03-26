@@ -123,6 +123,9 @@ typedef struct {
     xhash_t udp_sessions;   /* udp_session_t */
     crypto_t crypto;
     u8_t crypto_key[16];
+#ifdef WITH_CLIREMOTE
+    u32_t dconnect_off;
+#endif
 } remote_t;
 
 extern remote_t remote;

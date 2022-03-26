@@ -852,6 +852,12 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         xlog_warn("device_id not exist for peer.");
         return -1;
     }
+
+    if (remote.dconnect_off) {
+        xlog_debug("attempt to connect [%s] directly but function is disabled.",
+            maddr_to_str(cmd));
+        return -1;
+    }
 #endif
 
     if (cmd->cmd == CMD_CONNECT_IPV4) {

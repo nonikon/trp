@@ -213,6 +213,9 @@ static void usage(const char* s)
     fprintf(stderr, "  -n <number>   set max number of open files.\n");
     fprintf(stderr, "  -L <path>     write output to file and run as daemon. (default: write to STDOUT)\n");
 #endif
+#ifdef WITH_CLIREMOTE
+    fprintf(stderr, "  -D            disable direct connect (connect tcp or udp remote directly).\n");
+#endif
     fprintf(stderr, "  -v            output verbosely.\n");
     fprintf(stderr, "  -h            print this help message.\n");
     fprintf(stderr, "[address]:\n");
@@ -244,6 +247,9 @@ int main(int argc, char** argv)
 #ifndef _WIN32
     int nofile = 0;
 #endif
+#ifdef WITH_CLIREMOTE
+    int dconnoff = 0;
+#endif
     int verbose = 0;
     int error, i;
 
@@ -260,7 +266,10 @@ int main(int argc, char** argv)
         opt = argv[i][1];
 
         switch (opt) {
-        case 'v': verbose = 1; continue;
+        case 'v':  verbose = 1; continue;
+#ifdef WITH_CLIREMOTE
+        case 'D': dconnoff = 1; continue;
+#endif
         case 'h':
             usage(argv[0]);
             return 1;
@@ -331,6 +340,10 @@ int main(int argc, char** argv)
     }
 
 #ifdef WITH_CLIREMOTE
+    if (dconnoff) {
+        xlog_info("disable direct connect.");
+        remote.dconnect_off = 1;
+    }
     if (parse_ip_str(server_str, DEF_SERVER_PORT, &addr.x) != 0) {
         xlog_error("invalid server address [%s].", server_str);
         goto end;
