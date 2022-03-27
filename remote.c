@@ -40,8 +40,8 @@ void on_peer_write(uv_write_t* req, int status)
     peer_ctx_t* ctx = req->data;
     io_buf_t* iob = xcontainer_of(req, io_buf_t, wreq);
 
-    if (ctx->remote_blocked && uv_stream_get_write_queue_size(
-            (uv_stream_t*) &ctx->io) == 0) {
+    if (ctx->remote_blocked && status == 0 &&
+            uv_stream_get_write_queue_size((uv_stream_t*) &ctx->io) == 0) {
         xlog_debug("peer write queue cleared.");
 
         /* peer write queue cleared, start reading from remote. */
@@ -67,17 +67,18 @@ void on_cli_remote_closed(uv_handle_t* handle)
 {
     remote_ctx_t* ctx = handle->data;
 
-    if (!ctx->c.pending_ctx) {
-        xlist_erase(&remote.remote_ctxs, xlist_value_iter(ctx));
+    if (ctx->c.pending_ctx) {
+        /* move client node from 'pending_ctx->clients' to 'remote_ctxs' */
+        xlist_paste_back(&remote.remote_ctxs,
+            xlist_cut(&ctx->c.pending_ctx->clients, xlist_value_iter(ctx)));
 
-        xlog_debug("current %zd remotes, %zd iobufs.",
-            xlist_size(&remote.remote_ctxs), xlist_size(&remote.io_buffers));
-    } else {
-        xlist_erase(&ctx->c.pending_ctx->clients, xlist_value_iter(ctx));
-
-        xlog_debug("current %zd pending clients with this devid, %zd iobufs.",
-            xlist_size(&ctx->c.pending_ctx->clients), xlist_size(&remote.io_buffers));
+        xlog_debug("current %zd pending clients with this devid.",
+            xlist_size(&ctx->c.pending_ctx->clients));
     }
+    xlist_erase(&remote.remote_ctxs, xlist_value_iter(ctx));
+
+    xlog_debug("current %zd remotes, %zd iobufs.",
+        xlist_size(&remote.remote_ctxs), xlist_size(&remote.io_buffers));
 }
 
 void on_cli_remote_write(uv_write_t* req, int status)
@@ -85,8 +86,8 @@ void on_cli_remote_write(uv_write_t* req, int status)
     remote_ctx_t* ctx = req->data;
     io_buf_t* iob = xcontainer_of(req, io_buf_t, wreq);
 
-    if (ctx->c.peer->peer_blocked && uv_stream_get_write_queue_size(
-            (uv_stream_t*) &ctx->c.io) == 0) {
+    if (status == 0 && ctx->c.peer->peer_blocked &&
+            uv_stream_get_write_queue_size((uv_stream_t*) &ctx->c.io) == 0) {
         xlog_debug("client remote write queue cleared.");
 
         /* remote write queue cleared, start reading from peer. */
@@ -323,8 +324,8 @@ void on_tcp_remote_write(uv_write_t* req, int status)
     remote_ctx_t* ctx = req->data;
     io_buf_t* iob = xcontainer_of(req, io_buf_t, wreq);
 
-    if (ctx->t.peer->peer_blocked && uv_stream_get_write_queue_size(
-            (uv_stream_t*) &ctx->t.io) == 0) {
+    if (status == 0 && ctx->t.peer->peer_blocked &&
+            uv_stream_get_write_queue_size((uv_stream_t*) &ctx->t.io) == 0) {
         xlog_debug("tcp remote write queue cleared.");
 
         /* remote write queue cleared, start reading from peer. */
@@ -794,6 +795,8 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
     /* process command from peer. */
     cmd_t* cmd = (cmd_t*) (iob->buffer + MAX_NONCE_LEN);
 
+    ctx->pending_iob = iob;
+
     if (iob->len < CMD_MAX_SIZE + MAX_NONCE_LEN) {
         xlog_warn("got an error packet (length) from peer.");
         return -1;
@@ -805,7 +808,6 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
     /* pending this 'iob' always (nonce will be used when remote connected). */
     iob->idx = CMD_MAX_SIZE + MAX_NONCE_LEN;
     iob->len -= CMD_MAX_SIZE + MAX_NONCE_LEN;
-    ctx->pending_iob = iob;
 
     if (!is_valid_command(cmd)) {
         xlog_warn("got an error packet (header) from peer.");
