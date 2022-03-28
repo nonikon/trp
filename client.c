@@ -51,7 +51,7 @@ static void new_server_connection(uv_timer_t* handle);
             wbuf.base = buf->base;
             wbuf.len = nread;
 
-            iob->wreq.data = ctx;
+            iob->wreq.data = ctx->remote;
 
             remote.crypto.decrypt(&ctx->edctx, (u8_t*) wbuf.base, wbuf.len);
 
