@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 nonikon@qq.com.
+ * Copyright (C) 2021-2022 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -58,23 +58,21 @@ static union { cmd_t m; u8_t _[CMD_MAX_SIZE]; } tunnel_maddr;
             ctx->xclient_blocked = 1;
         }
 
-        /* don't release 'iob' in this place,
-         *'on_xserver_write' callback will do it.
-         */
-    } else if (nread < 0) {
+        /* 'iob' free later. */
+        return;
+    }
+
+    if (nread < 0) {
         xlog_debug("disconnected from tunnel client: %s.", uv_err_name((int) nread));
 
         uv_close((uv_handle_t*) stream, on_io_closed);
         uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
 
-        if (buf->base) {
-            /* 'buf->base' may be 'NULL' when 'nread' < 0. */
-            xlist_erase(&xclient.io_buffers, xlist_value_iter(iob));
-        }
-
-    } else {
-        xlist_erase(&xclient.io_buffers, xlist_value_iter(iob));
+        /* 'buf->base' may be 'NULL' when 'nread' < 0. */
+        if (!buf->base) return;
     }
+
+    xlist_erase(&xclient.io_buffers, xlist_value_iter(iob));
 }
 
 static void on_tclient_connect(uv_stream_t* stream, int status)
@@ -93,12 +91,12 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
     ctx->io_xclient.data = ctx;
     ctx->io_xserver.data = ctx;
     ctx->ref_count = 1;
+    ctx->pending_iob = NULL;
     ctx->xclient_blocked = 0;
     ctx->xserver_blocked = 0;
 
     if (uv_accept(stream, (uv_stream_t*) &ctx->io_xclient) == 0) {
         xlog_debug("a tunnel client connected.");
-
 #ifdef __linux__
         if (tunnel_maddr.m.len) {
 #endif
@@ -140,10 +138,8 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
             /* connect failed immediately, just close this connection. */
             uv_close((uv_handle_t*) &ctx->io_xclient, on_io_closed);
         }
-
     } else {
         xlog_error("uv_accept failed.");
-
         uv_close((uv_handle_t*) &ctx->io_xclient, on_io_closed);
     }
 }
@@ -386,11 +382,9 @@ int main(int argc, char** argv)
     uv_tcp_init(loop, &io_tserver);
     uv_tcp_bind(&io_tserver, &taddr.x, 0);
 
-    error = uv_listen((uv_stream_t*) &io_tserver,
-                LISTEN_BACKLOG, on_tclient_connect);
+    error = uv_listen((uv_stream_t*) &io_tserver, LISTEN_BACKLOG, on_tclient_connect);
     if (error) {
-        xlog_error("uv_listen [%s] failed: %s.",
-            addr_to_str(&taddr), uv_strerror(error));
+        xlog_error("uv_listen [%s] failed: %s.", addr_to_str(&taddr), uv_strerror(error));
         goto end;
     }
 

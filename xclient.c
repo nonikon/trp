@@ -1,7 +1,9 @@
 /*
- * Copyright (C) 2021 nonikon@qq.com.
+ * Copyright (C) 2021-2022 nonikon@qq.com.
  * All rights reserved.
  */
+
+#include <string.h>
 
 #include "xclient.h"
 
@@ -42,8 +44,7 @@ void on_xserver_write(uv_write_t* req, int status)
         xlog_debug("proxy server write queue cleared.");
 
         /* proxy server write queue cleared, start reading from proxy client. */
-        uv_read_start((uv_stream_t*) &ctx->io_xclient,
-            on_iobuf_alloc, on_xclient_read);
+        uv_read_start((uv_stream_t*) &ctx->io_xclient, on_iobuf_alloc, on_xclient_read);
         ctx->xclient_blocked = 0;
     }
 
@@ -79,24 +80,21 @@ void on_xserver_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
             ctx->xserver_blocked = 1;
         }
 
-        /* don't release 'iob' in this place,
-         *'on_sclient_write' callback will do it.
-         */
-    } else if (nread < 0) {
-        xlog_debug("disconnected from proxy server: %s.",
-            uv_err_name((int) nread));
+        /* 'iob' free later. */
+        return;
+    }
+
+    if (nread < 0) {
+        xlog_debug("disconnected from proxy server: %s.", uv_err_name((int) nread));
 
         uv_close((uv_handle_t*) stream, on_io_closed);
         uv_close((uv_handle_t*) &ctx->io_xclient, on_io_closed);
 
-        if (buf->base) {
-            /* 'buf->base' may be 'NULL' when 'nread' < 0. */
-            xlist_erase(&xclient.io_buffers, xlist_value_iter(iob));
-        }
-
-    } else {
-        xlist_erase(&xclient.io_buffers, xlist_value_iter(iob));
+        /* 'buf->base' may be 'NULL' when 'nread' < 0. */
+        if (!buf->base) return;
     }
+
+    xlist_erase(&xclient.io_buffers, xlist_value_iter(iob));
 }
 
 static void on_xserver_connected(uv_connect_t* req, int status)
@@ -119,12 +117,11 @@ static void on_xserver_connected(uv_connect_t* req, int status)
 
         xlog_debug("proxy server connected.");
 
-        uv_read_start((uv_stream_t*) &ctx->io_xclient,
-            on_iobuf_alloc, on_xclient_read);
-        uv_read_start((uv_stream_t*) &ctx->io_xserver,
-            on_iobuf_alloc, on_xserver_read);
+        uv_read_start((uv_stream_t*) &ctx->io_xclient, on_iobuf_alloc, on_xclient_read);
+        uv_read_start((uv_stream_t*) &ctx->io_xserver, on_iobuf_alloc, on_xserver_read);
+
         /* enable tcp-keepalive. */
-        uv_tcp_keepalive(&ctx->io_xserver, 1, KEEPIDLE_TIME);
+        // uv_tcp_keepalive(&ctx->io_xserver, 1, KEEPIDLE_TIME);
 
         /* send connect command. */
         wbuf.base = ctx->pending_iob->buffer;
@@ -134,7 +131,7 @@ static void on_xserver_connected(uv_connect_t* req, int status)
             &wbuf, 1, on_xserver_write);
 
         ctx->pending_iob = NULL;
-        ctx->stage = STAGE_FORWARD;
+        ctx->stage = STAGE_FORWARDTCP;
     }
 
     xlist_erase(&xclient.conn_reqs, xlist_value_iter(req));
@@ -150,17 +147,17 @@ int connect_xserver(xclient_ctx_t* ctx)
     /* 'io_xserver' will be opened, increase refcount. */
     ++ctx->ref_count;
 
-    if (uv_tcp_connect(req, &ctx->io_xserver,
-            &xclient.xserver_addr.x, on_xserver_connected) != 0) {
-        xlog_error("connect proxy server failed immediately.");
-
-        uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
-        xlist_erase(&xclient.conn_reqs, xlist_value_iter(req));
-        return -1;
+    if (uv_tcp_connect(req, &ctx->io_xserver, &xclient.xserver_addr.x,
+            on_xserver_connected) == 0) {
+        ctx->stage = STAGE_CONNECT;
+        return 0;
     }
 
-    ctx->stage = STAGE_CONNECT;
-    return 0;
+    xlog_error("connect proxy server failed immediately.");
+
+    uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
+    xlist_erase(&xclient.conn_reqs, xlist_value_iter(req));
+    return -1;
 }
 
 void on_xclient_write(uv_write_t* req, int status)
@@ -173,8 +170,7 @@ void on_xclient_write(uv_write_t* req, int status)
         xlog_debug("proxy client write queue cleared.");
 
         /* proxy client write queue cleared, start reading from proxy server. */
-        uv_read_start((uv_stream_t*) &ctx->io_xserver,
-            on_iobuf_alloc, on_xserver_read);
+        uv_read_start((uv_stream_t*) &ctx->io_xserver, on_iobuf_alloc, on_xserver_read);
         ctx->xserver_blocked = 0;
     }
 

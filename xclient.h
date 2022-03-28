@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 nonikon@qq.com.
+ * Copyright (C) 2021-2022 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -11,13 +11,13 @@
 #include "xlog.h"
 #include "xlist.h"
 
-#define KEEPIDLE_TIME       (40) /* s */
-
 enum {
     STAGE_INIT,
     STAGE_COMMAND,
-    STAGE_CONNECT, /* remote connecting */
-    STAGE_FORWARD, /* remote connected */
+    STAGE_CONNECT,
+    STAGE_FORWARDTCP,
+    STAGE_FORWARDUDP,
+    STAGE_NOOP,
 };
 
 typedef struct {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 nonikon@qq.com.
+ * Copyright (C) 2021-2022 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -246,7 +246,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
 
         iob->wreq.data = ctx;
 
-        if (ctx->stage == STAGE_FORWARD) {
+        if (ctx->stage == STAGE_FORWARDTCP) {
 
             xlog_debug("recved %zd bytes from SOCKS client, forward.", nread);
 
@@ -296,7 +296,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
         xlog_debug("disconnected from SOCKS client: %s, stage %d.",
             uv_err_name((int) nread), ctx->stage);
 
-        if (ctx->stage == STAGE_FORWARD) {
+        if (ctx->stage == STAGE_FORWARDTCP) {
             uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
         }
         uv_close((uv_handle_t*) stream, on_io_closed);
@@ -325,6 +325,7 @@ static void on_sclient_connect(uv_stream_t* stream, int status)
 
     ctx->io_xclient.data = ctx;
     ctx->io_xserver.data = ctx;
+    ctx->pending_iob = NULL;
     ctx->ref_count = 1;
     ctx->xclient_blocked = 0;
     ctx->xserver_blocked = 0;
@@ -332,14 +333,10 @@ static void on_sclient_connect(uv_stream_t* stream, int status)
 
     if (uv_accept(stream, (uv_stream_t*) &ctx->io_xclient) == 0) {
         xlog_debug("a SOCKS client connected.");
-
         uv_tcp_init(loop, &ctx->io_xserver);
-        uv_read_start((uv_stream_t*) &ctx->io_xclient,
-            on_iobuf_alloc, on_xclient_read);
-
+        uv_read_start((uv_stream_t*) &ctx->io_xclient, on_iobuf_alloc, on_xclient_read);
     } else {
         xlog_error("uv_accept failed.");
-
         uv_close((uv_handle_t*) &ctx->io_xclient, on_io_closed);
     }
 }
@@ -519,11 +516,9 @@ int main(int argc, char** argv)
     uv_tcp_init(loop, &io_sserver);
     uv_tcp_bind(&io_sserver, &saddr.x, 0);
 
-    error = uv_listen((uv_stream_t*) &io_sserver,
-                LISTEN_BACKLOG, on_sclient_connect);
+    error = uv_listen((uv_stream_t*) &io_sserver, LISTEN_BACKLOG, on_sclient_connect);
     if (error) {
-        xlog_error("uv_listen [%s] failed: %s.",
-            addr_to_str(&saddr), uv_strerror(error));
+        xlog_error("uv_listen [%s] failed: %s.", addr_to_str(&saddr), uv_strerror(error));
         goto end;
     }
 
