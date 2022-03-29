@@ -343,7 +343,7 @@ static void on_sclient_connect(uv_stream_t* stream, int status)
 
 static void usage(const char* s)
 {
-    fprintf(stderr, "trp v%d.%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, s);
+    fprintf(stderr, "trp v%d.%d.%d, libuv %s, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, uv_version_string(), s);
     fprintf(stderr, "[options]:\n");
     fprintf(stderr, "  -x <address>  proxy server connect to. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
     fprintf(stderr, "  -b <address>  SOCKS4/SOCKS5 server listen at. (default: 127.0.0.1:%d)\n", DEF_SSERVER_PORT);

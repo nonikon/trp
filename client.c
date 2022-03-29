@@ -329,7 +329,7 @@ static int _udp_session_equal(void* l, void* r)
 
 static void usage(const char* s)
 {
-    fprintf(stderr, "trp v%d.%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, s);
+    fprintf(stderr, "trp v%d.%d.%d, libuv %s, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, uv_version_string(), s);
     fprintf(stderr, "[options]:\n");
     fprintf(stderr, "  -s <address>  server connect to. (default: 127.0.0.1:%d)\n", DEF_SERVER_PORT);
     fprintf(stderr, "  -d <devid>    device id of this client. (default: %s)\n", devid_to_str((u8_t*) DEFAULT_DEVICE_ID));

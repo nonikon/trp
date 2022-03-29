@@ -199,7 +199,7 @@ static int _udp_session_equal(void* l, void* r)
 
 static void usage(const char* s)
 {
-    fprintf(stderr, "trp v%d.%d.%d, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, s);
+    fprintf(stderr, "trp v%d.%d.%d, libuv %s, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, uv_version_string(), s);
     fprintf(stderr, "[options]:\n");
 #ifdef WITH_CLIREMOTE
     fprintf(stderr, "  -s <address>  server listen at. (default: 127.0.0.1:%d)\n", DEF_SERVER_PORT);
