@@ -24,6 +24,7 @@
 
 #define MAX_NONCE_LEN       16
 #define MAX_DOMAIN_LEN      64
+#define MAX_PENDING_UPKTS   16
 #define MAX_WQUEUE_SIZE     0       /* bytes */
 #define MAX_SOCKBUF_SIZE    (4096 - sizeof(io_buf_t) - sizeof(xlist_node_t))
 
@@ -31,7 +32,8 @@
 #define DEVICE_ID_SIZE      8       /* client device id size */
 
 #define CONNECT_CLI_TIMEO   (10 * 1000) /* ms */
-#define KEEPIDLE_TIME       (40)    /* s */
+#define UDPCONN_TIMEO       (40)        /* s */
+#define KEEPIDLE_TIME       (40)        /* s */
 
 typedef unsigned char   u8_t;
 typedef signed char     s8_t;
@@ -65,12 +67,10 @@ typedef struct {
 
 typedef struct {
     u8_t tag;
-    u8_t alen;      /* addr length */
-    u16_t rsv;
-    u32_t id;
-    u16_t len;      /* data length */
-    u16_t dport;    /* big endian dest port */
-    u8_t data[0];   /* daddr + payload */
+    u8_t alen;      /* daddr length */
+    u16_t len;      /* data length (daddr + dport + payload) */
+    u32_t id;       /* packet id (source address) */
+    u8_t data[0];   /* daddr + dport + payload */
 } udp_cmd_t;
 
 typedef struct {

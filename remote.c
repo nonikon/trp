@@ -7,7 +7,41 @@
 
 #include "remote.h"
 
-remote_t remote;
+remote_t remote;    /* remote public data */
+
+typedef struct {
+    u32_t id;       /* (must be the first member) */
+    u8_t alen;      /* addr length */
+    u8_t alive;
+    uv_udp_t io;
+    uv_timer_t timer;
+    udp_session_t* parent;
+} udp_conn_t;
+
+struct udp_session {
+    u8_t sid[SESSION_ID_SIZE];  /* (must be the first member) */
+    xlist_iter_t iter;          /* the 'remote_ctx_t' used for next udp packet. */
+    xlist_t rctxs;              /* remote_ctx_t, udp remote contexts with this sid */
+    xhash_t conns;              /* udp_conn_t, udp connections with this sid */
+};
+
+#ifdef WITH_CLIREMOTE
+struct pending_ctx {
+    u8_t devid[DEVICE_ID_SIZE]; /* (must be the first member) */
+    xlist_t clients;            /* remote_ctx_t, the clients which at COMMAND stage */
+    xlist_t peers;              /* peer_ctx_t, the peers which is connecting to a client */
+    uv_timer_t timer;           /* peers connect timeout timer */
+};
+#endif
+
+/* remote private data */
+static struct {
+    xlist_t remote_ctxs;    /* remote_ctx_t */
+#ifdef WITH_CLIREMOTE
+    xhash_t pending_ctxs;   /* pending_ctx_t */
+#endif
+    xhash_t udp_sessions;   /* udp_session_t */
+} remote_pri;
 
 #ifdef WITH_CLIREMOTE
 static void on_cli_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf);
@@ -69,16 +103,16 @@ void on_cli_remote_closed(uv_handle_t* handle)
 
     if (ctx->c.pending_ctx) {
         /* move client node from 'pending_ctx->clients' to 'remote_ctxs' */
-        xlist_paste_back(&remote.remote_ctxs,
+        xlist_paste_back(&remote_pri.remote_ctxs,
             xlist_cut(&ctx->c.pending_ctx->clients, xlist_value_iter(ctx)));
 
         xlog_debug("current %zd pending clients with this devid.",
             xlist_size(&ctx->c.pending_ctx->clients));
     }
-    xlist_erase(&remote.remote_ctxs, xlist_value_iter(ctx));
+    xlist_erase(&remote_pri.remote_ctxs, xlist_value_iter(ctx));
 
     xlog_debug("current %zd remotes, %zd iobufs.",
-        xlist_size(&remote.remote_ctxs), xlist_size(&remote.io_buffers));
+        xlist_size(&remote_pri.remote_ctxs), xlist_size(&remote.io_buffers));
 }
 
 void on_cli_remote_write(uv_write_t* req, int status)
@@ -148,7 +182,7 @@ static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u3
     if (cmd->cmd == CMD_REPORT_DEVID) {
 
         if (is_valid_devid(cmd->data) && !ctx->c.pending_ctx) {
-            pending_ctx_t* pdctx = xhash_get_data(&remote.pending_ctxs, cmd->data);
+            pending_ctx_t* pdctx = xhash_get_data(&remote_pri.pending_ctxs, cmd->data);
 
             xlog_debug("got REPORT_DEVID (%s) cmd from client, process.",
                 devid_to_str(cmd->data));
@@ -157,7 +191,7 @@ static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u3
                 xlog_info("device_id [%s] not exist, insert.", devid_to_str(cmd->data));
 
                 /* create if not exist maybe unsafe, TODO */
-                pdctx = xhash_iter_data(xhash_put_ex(&remote.pending_ctxs,
+                pdctx = xhash_iter_data(xhash_put_ex(&remote_pri.pending_ctxs,
                             cmd->data, DEVICE_ID_SIZE));
 
                 xlist_init(&pdctx->clients, sizeof(remote_ctx_t), NULL);
@@ -172,7 +206,7 @@ static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u3
                 ctx->c.pending_ctx = pdctx;
                 /* move client node from 'remote_ctxs' to 'pdctx->clients' */
                 xlist_paste_back(&pdctx->clients,
-                    xlist_cut(&remote.remote_ctxs, xlist_value_iter(ctx)));
+                    xlist_cut(&remote_pri.remote_ctxs, xlist_value_iter(ctx)));
 
             } else {
                 xlog_debug("pending peer match, associate.");
@@ -268,7 +302,7 @@ void on_cli_remote_connect(uv_stream_t* stream, int status)
         return;
     }
 
-    ctx = xlist_alloc_back(&remote.remote_ctxs);
+    ctx = xlist_alloc_back(&remote_pri.remote_ctxs);
 
     uv_tcp_init(remote.loop, &ctx->c.io);
 
@@ -313,10 +347,10 @@ void on_tcp_remote_closed(uv_handle_t* handle)
 {
     remote_ctx_t* ctx = handle->data;
 
-    xlist_erase(&remote.remote_ctxs, xlist_value_iter(ctx));
+    xlist_erase(&remote_pri.remote_ctxs, xlist_value_iter(ctx));
 
     xlog_debug("current %zd remotes, %zd iobufs.",
-        xlist_size(&remote.remote_ctxs), xlist_size(&remote.io_buffers));
+        xlist_size(&remote_pri.remote_ctxs), xlist_size(&remote.io_buffers));
 }
 
 void on_tcp_remote_write(uv_write_t* req, int status)
@@ -434,7 +468,7 @@ static void on_tcp_remote_connected(uv_connect_t* req, int status)
 static int connect_tcp_remote(peer_ctx_t* ctx, struct sockaddr* addr)
 {
     uv_connect_t* req = xlist_alloc_back(&remote.conn_reqs);
-    remote_ctx_t* rctx = xlist_alloc_back(&remote.remote_ctxs);
+    remote_ctx_t* rctx = xlist_alloc_back(&remote_pri.remote_ctxs);
 
     uv_tcp_init(remote.loop, &rctx->t.io);
 
@@ -477,41 +511,14 @@ static void on_tcp_remote_domain_resolved(
     xlist_erase(&remote.addrinfo_reqs, xlist_value_iter(req));
 }
 
-static void free_udp_remote(remote_ctx_t* ctx)
-{
-    udp_sess_t* sess = ctx->u.parent;
-
-    xlog_debug("%zd udp remote left in current session, free one.",
-        xlist_size(&sess->rctxs));
-
-    xlist_erase(&remote.io_buffers, xlist_value_iter(ctx->u.rbuf));
-    xlist_erase(&sess->rctxs, xlist_value_iter(ctx));
-
-    if (xlist_empty(&sess->rctxs) && xhash_empty(&sess->conns)) {
-        /* there is no connection under this session, free session. */
-        xlist_destroy(&sess->rctxs);
-        xhash_destroy(&sess->conns);
-
-        xhash_remove_data(&remote.udp_sessions, sess);
-    }
-}
-
 static void on_udp_conn_closed(uv_handle_t* handle)
 {
     udp_conn_t* conn = handle->data;
-    remote_ctx_t* ctx = conn->parent;
 
     xlog_debug("%zd udp connection left in current session, free one (%x).",
-        xhash_size(&ctx->u.parent->conns), conn->id);
+        xhash_size(&conn->parent->conns), conn->id);
 
-    xhash_remove_data(&ctx->u.parent->conns, conn);
-
-    if (--ctx->u.nconns == 0 && !ctx->u.peer) {
-        /* there is no connection under this udp remote
-         * and peer has been closed. free udp remote.
-         */
-        free_udp_remote(ctx);
-    }
+    xhash_remove_data(&conn->parent->conns, conn);
 }
 
 static inline void close_udp_conn(udp_conn_t* conn)
@@ -522,89 +529,129 @@ static inline void close_udp_conn(udp_conn_t* conn)
 
 void close_udp_remote(remote_ctx_t* ctx)
 {
-    if (ctx->u.nconns == 0) {
-        /* there is no connection under this udp remote, free it. */
-        free_udp_remote(ctx);
-    } else {
-        /* mark peer has been closed. */
-        ctx->u.peer = NULL;
+    udp_session_t* sess = ctx->u.parent;
+
+    xlog_debug("%zd udp remote left in current session, free one.",
+        xlist_size(&sess->rctxs));
+
+    if (ctx->u.last_iob) {
+        xlist_erase(&remote.io_buffers, xlist_value_iter(ctx->u.last_iob));
     }
+    /* move 'ctx' node from 'sess->rctxs' to 'remote_pri.remote_ctxs'. */
+    xlist_paste_back(&remote_pri.remote_ctxs,
+        xlist_cut(&sess->rctxs, xlist_value_iter(ctx)));
+    xlist_erase(&remote_pri.remote_ctxs, xlist_value_iter(ctx));
+
+    if (xlist_empty(&sess->rctxs) && xhash_empty(&sess->conns)) {
+        /* there is no connection under this session, free it. */
+        xlog_debug("free udp session %x, %zd left.", *(u32_t*) sess->sid,
+            xhash_size(&remote_pri.udp_sessions) - 1);
+
+        xlist_destroy(&sess->rctxs);
+        xhash_destroy(&sess->conns);
+        xhash_remove_data(&remote_pri.udp_sessions, sess);
+    }
+}
+
+static remote_ctx_t* choose_udp_remote_ctx(udp_session_t* s)
+{
+    remote_ctx_t* rctx;
+
+    if (!xlist_iter_valid(&s->rctxs, s->iter)) {
+        if (xlist_empty(&s->rctxs))
+            return NULL; /* no available remote_ctx_t */
+        s->iter = xlist_begin(&s->rctxs);
+    }
+
+    rctx = xlist_iter_value(s->iter);
+    s->iter = xlist_iter_next(s->iter);
+    return rctx;
 }
 
 static void on_udp_remote_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf,
         const struct sockaddr* addr, unsigned int flags)
 {
     udp_conn_t* conn = io->data;
-    io_buf_t* iob = xcontainer_of(buf->base - sizeof(udp_cmd_t) - conn->alen,
-        io_buf_t, buffer);
+    io_buf_t* iob = xcontainer_of(buf->base - sizeof(udp_cmd_t) - 2 - conn->alen,
+                        io_buf_t, buffer);
+    udp_cmd_t* cmd = (udp_cmd_t*) iob->buffer;
+    remote_ctx_t* rctx;
+    uv_buf_t wbuf;
+    union {
+        const struct sockaddr*     vx;
+        const struct sockaddr_in*  v4;
+        const struct sockaddr_in6* v6;
+    } _ =  { addr };
 
-    if (nread >= 0) {
-        udp_cmd_t* cmd = (udp_cmd_t*) iob->buffer;
-        peer_ctx_t* peer = conn->parent->u.peer;
-        uv_buf_t wbuf;
+    conn->alive = 1;
 
-        xlog_debug("recved %zd bytes from udp remote (%s), forward.",
-            nread, addr_to_str(addr));
-
-        if (!peer) {
-            /* original peer has been closed, choose an available one 
-             * from current session. 
-             */
-            udp_sess_t* sess = conn->parent->u.parent;
-
-            if (xlist_empty(&sess->rctxs)) {
-                xlog_debug("no avaliable peer, drop this udp packet.");
-                xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
-                return;
-            }
-            /* choose the last one. */
-            peer = ((remote_ctx_t*) xlist_back(&sess->rctxs))->u.peer;
-        }
-
-        uv_timer_again(&conn->timer);
-
-        if (uv_stream_get_write_queue_size(
-                (uv_stream_t*) &peer->io) > MAX_WQUEUE_SIZE) {
-            xlog_debug("peer write queue pending, drop this udp packet.");
-            xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
-            return;
-        }
-
-        cmd->tag = CMD_TAG;
-        cmd->alen = conn->alen;
-        cmd->id = conn->id;
-        cmd->len = htonl(conn->alen + nread);
-
-        if (addr->sa_family == AF_INET) {
-            const struct sockaddr_in* d = (const struct sockaddr_in*) addr;
-            cmd->dport = d->sin_port;
-            memcpy(cmd->data, &d->sin_addr, 4);
-        } else { /* AF_INET6 */
-            const struct sockaddr_in6* d = (const struct sockaddr_in6*) addr;
-            cmd->dport = d->sin6_port;
-            memcpy(cmd->data, &d->sin6_addr, 16);
-        }
-
-        wbuf.base = iob->buffer;
-        wbuf.len = sizeof(udp_cmd_t) + conn->alen + nread;
-        iob->wreq.data = peer;
-
-        remote.crypto.encrypt(&conn->parent->u.edctx, (u8_t*) wbuf.base, wbuf.len);
-        uv_write(&iob->wreq, (uv_stream_t*) &peer->io, &wbuf, 1, on_peer_write);
-
-        /* 'iob' free later. */
-    } else {
+    if (nread < 0) {
         xlog_warn("udp remote read failed: %s.", uv_err_name((int) nread));
         close_udp_conn(conn);
-        /* free 'iob' now. */
         xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
+        return;
     }
+    /* 'nread' == 0 and 'addr' == NULL means no more data. */
+    if (!addr) {
+        xlog_debug("udp remote read nothing.");
+        xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
+        return;
+    }
+    if (flags & UV_UDP_PARTIAL) {
+        xlog_warn("remote udp packet too large (> %u), drop.", iob->len);
+        xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
+        return;
+    }
+
+    xlog_debug("recved %zd bytes from udp remote (%s), forward.",
+        nread, addr_to_str(addr));
+
+    rctx = choose_udp_remote_ctx(conn->parent);
+
+    if (!rctx || uv_stream_get_write_queue_size(
+            (uv_stream_t*) &rctx->u.peer->io) > MAX_WQUEUE_SIZE) {
+        xlog_debug("drop this udp packet: rctx %p.", rctx);
+        xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
+        return;
+    }
+
+    cmd->tag = CMD_TAG;
+    cmd->id = conn->id;
+    wbuf.base = iob->buffer;
+
+    switch (_.vx->sa_family) {
+    case AF_INET:
+        cmd->alen = 4;
+        cmd->len = htons(4 + 2 + nread);
+        memcpy(cmd->data, &_.v4->sin_addr, 4);
+        memcpy(cmd->data + 4, &_.v4->sin_port, 2);
+        wbuf.len = sizeof(udp_cmd_t) + 4 + 2 + nread;
+        break;
+    default: /* AF_INET6 */
+        cmd->alen = 16;
+        cmd->len = htons(16 + 2 + nread);
+        memcpy(cmd->data, &_.v6->sin6_addr, 16);
+        memcpy(cmd->data + 16, &_.v6->sin6_port, 2);
+        wbuf.len = sizeof(udp_cmd_t) + 16 + 2 + nread;
+        break;
+    }
+    remote.crypto.encrypt(&rctx->u.edctx, (u8_t*) wbuf.base, wbuf.len);
+
+    iob->wreq.data = rctx->u.peer;
+    uv_write(&iob->wreq, (uv_stream_t*) &rctx->u.peer->io, &wbuf, 1, on_peer_write);
+    /* 'iob' free later. */
 }
 
-static void on_udp_conn_timeout(uv_timer_t* timer)
+static void on_udp_conn_check(uv_timer_t* timer)
 {
-    xlog_debug("udp connection (%x) timeout.", ((udp_conn_t*) timer->data)->id);
-    close_udp_conn(timer->data);
+    udp_conn_t* conn = timer->data;
+
+    if (!conn->alive) {
+        xlog_debug("udp connection %x is not alive, close.", conn->id);
+        close_udp_conn(conn);
+    } else {
+        conn->alive = 0;
+    }
 }
 
 static void on_udp_remote_rbuf_alloc(uv_handle_t* handle, size_t sg_size, uv_buf_t* buf)
@@ -612,12 +659,12 @@ static void on_udp_remote_rbuf_alloc(uv_handle_t* handle, size_t sg_size, uv_buf
     io_buf_t* iob = xlist_alloc_back(&remote.io_buffers);
     udp_conn_t* conn = handle->data;
 
-    /* leave 'sizeof(udp_cmd_t) + conn->alen' bytes space at the beginnig.  */
-    buf->base = iob->buffer + conn->alen + sizeof(udp_cmd_t);
-    buf->len = MAX_SOCKBUF_SIZE - sizeof(udp_cmd_t) - conn->alen;
+    /* leave 'sizeof(udp_cmd_t) + conn->alen + 2' bytes space at the beginnig.  */
+    buf->base = iob->buffer + conn->alen + 2 + sizeof(udp_cmd_t);
+    buf->len = MAX_SOCKBUF_SIZE - sizeof(udp_cmd_t) - 2 - conn->alen;
 }
 
-static void send_udp_packet(remote_ctx_t* ctx, udp_cmd_t* cmd, u32_t dlen)
+static void send_udp_packet(remote_ctx_t* ctx, udp_cmd_t* cmd)
 {
     union {
         struct sockaddr     vx;
@@ -626,41 +673,50 @@ static void send_udp_packet(remote_ctx_t* ctx, udp_cmd_t* cmd, u32_t dlen)
     } addr;
     uv_buf_t wbuf;
     udp_conn_t* conn;
-    int error;
+    u32_t dlen = ntohs(cmd->len);
+    int err;
 
-    if (cmd->alen == 4) {
-        if (dlen < 4) {
-            xlog_warn("udp packet datalen < 4.");
+    switch (cmd->alen) {
+    case 4:
+        if (dlen < 4 + 2) {
+            xlog_warn("udp packet datalen < 4 + 2.");
             return;
         }
         addr.v4.sin_family = AF_INET;
-        addr.v4.sin_port = cmd->dport;
         memcpy(&addr.v4.sin_addr, cmd->data, 4);
+        memcpy(&addr.v4.sin_port, cmd->data + 4, 2);
 
-        wbuf.base = (char*) (cmd->data + 4);
-        wbuf.len = dlen - 4;
-    } else { /* cmd->alen == 16 */
-        if (dlen < 16) {
-            xlog_warn("udp packet datalen < 16.");
+        wbuf.base = (char*) (cmd->data + 4 + 2);
+        wbuf.len = dlen - 4 - 2;
+        break;
+    case 16:
+        if (dlen < 16 + 2) {
+            xlog_warn("udp packet datalen < 16 + 2.");
             return;
         }
         addr.v6.sin6_family = AF_INET6;
-        addr.v6.sin6_port = cmd->dport;
         memcpy(&addr.v6.sin6_addr, cmd->data, 16);
+        memcpy(&addr.v6.sin6_port, cmd->data + 16, 2);
 
-        wbuf.base = (char*) (cmd->data + 16);
-        wbuf.len = dlen - 16;
+        wbuf.base = (char*) (cmd->data + 16 + 2);
+        wbuf.len = dlen - 16 - 2;
+        break;
+    default:
+        xlog_warn("udp packet addrlen error (%d).", cmd->alen);
+        return;
     }
     /* 'wbuf.len' == 0 is allowed. */
 
-    xlog_debug("%x: udp packet to %s (%d bytes).", cmd->id,
-        addr_to_str(&addr), wbuf.len);
+    xlog_debug("udp packet to %s, %u bytes, id %x.", addr_to_str(&addr),
+        wbuf.len, cmd->id);
 
     conn = xhash_get_data(&ctx->u.parent->conns, &cmd->id);
 
     if (conn == XHASH_INVALID_DATA) {
-        conn = xhash_iter_data(xhash_put_ex(&ctx->u.parent->conns,
-                    &cmd->id, sizeof(u32_t)));
+        xlog_debug("new udp connection, id %x.", cmd->id);
+
+        conn = xhash_iter_data(xhash_put_ex(
+                    &ctx->u.parent->conns, &cmd->id, sizeof(u32_t)));
 
         uv_udp_init(remote.loop, &conn->io);
         uv_timer_init(remote.loop, &conn->timer);
@@ -668,111 +724,148 @@ static void send_udp_packet(remote_ctx_t* ctx, udp_cmd_t* cmd, u32_t dlen)
         uv_udp_set_broadcast(&conn->io, 1);
 
         conn->alen = cmd->alen;
+        conn->alive = 0;
         conn->io.data = conn;
         conn->timer.data = conn;
-        conn->parent = ctx;
-        ++ctx->u.nconns;
+        conn->parent = ctx->u.parent;
 
-        error = uv_udp_try_send(&conn->io, &wbuf, 1, &addr.vx);
-
-        if (error >= 0) {
-            uv_udp_recv_start(&conn->io, on_udp_remote_rbuf_alloc, on_udp_remote_read);
-            uv_timer_start(&conn->timer, on_udp_conn_timeout, KEEPIDLE_TIME * 1000, 0);
-        } else {
+        err = uv_udp_try_send(&conn->io, &wbuf, 1, &addr.vx);
+        if (err < 0) {
+            xlog_debug("send first udp packet failed: %s.", uv_err_name(err));
             close_udp_conn(conn);
-            xlog_debug("send first udp packet failed (%s), close connection.",
-                uv_err_name(error));
+        } else {
+            uv_udp_recv_start(&conn->io, on_udp_remote_rbuf_alloc, on_udp_remote_read);
+            uv_timer_start(&conn->timer, on_udp_conn_check, UDPCONN_TIMEO * 1000,
+                UDPCONN_TIMEO * 1000);
         }
     } else if (!uv_is_closing((uv_handle_t*) &conn->io)) {
-        uv_timer_again(&conn->timer);
-        error = uv_udp_try_send(&conn->io, &wbuf, 1, &addr.vx);
-
-        if (error < 0) {
-            xlog_debug("send udp packet failed: %s.", uv_err_name(error));
+        conn->alive = 1;
+        err = uv_udp_try_send(&conn->io, &wbuf, 1, &addr.vx);
+        if (err < 0) {
+            xlog_debug("send udp packet failed: %s.", uv_err_name(err));
         }
     } else {
         xlog_debug("connection is closing, drop this packet.");
     }
 }
 
-void forward_peer_udp_packets(remote_ctx_t* ctx, u32_t nread)
+static int __iob_move(io_buf_t* dst, io_buf_t* src, u32_t need)
 {
-    io_buf_t* iob = ctx->u.rbuf;
+    if (dst->len + src->len < need) {
+        memcpy(dst->buffer + dst->len, src->buffer + src->idx, src->len);
+        dst->len += src->len;
+        return -1;
+    }
+    need -= dst->len;
+    memcpy(dst->buffer + dst->len, src->buffer + src->idx, need);
+    dst->len += need;
+    src->len -= need;
+    src->idx += need;
+    return 0;
+}
+
+int forward_peer_udp_packets(remote_ctx_t* ctx, io_buf_t* iob)
+{
     udp_cmd_t* cmd;
-    char* buf = iob->buffer + iob->idx;
-    u32_t len = iob->len + nread;
     u32_t need;
 
-    do {
-        if (len <= sizeof(udp_cmd_t))
-            break;
-        cmd = (udp_cmd_t*) buf;
-        if (cmd->tag != CMD_TAG) {
-            xlog_warn("got an error udp packet (tag).");
-            iob->len = 0;
-            return;
-        }
+    if (ctx->u.last_iob) {
+        io_buf_t* last_iob = ctx->u.last_iob;
+
+        /* 'last_iob->idx' is always zero. */
+        if (last_iob->len < sizeof(udp_cmd_t)
+                && __iob_move(last_iob, iob, sizeof(udp_cmd_t)) != 0)
+            return 0;
+
+        cmd = (udp_cmd_t*) last_iob->buffer;
         need = ntohs(cmd->len) + sizeof(udp_cmd_t);
-        if (need > MAX_SOCKBUF_SIZE) {
-            xlog_warn("got an error udp packet (length).");
-            iob->len = 0;
-            return;
+
+        if (cmd->tag != CMD_TAG || need > MAX_SOCKBUF_SIZE) {
+            xlog_warn("got an error udp packet from xserver (tag/length).");
+
+            ctx->u.last_iob = NULL;
+            xlist_erase(&remote.io_buffers, xlist_value_iter(last_iob));
+            return 0;
         }
-        if (len < need)
+
+        if (__iob_move(last_iob, iob, need) != 0)
+            return 0;
+
+        send_udp_packet(ctx, cmd);
+
+        ctx->u.last_iob = NULL;
+        xlist_erase(&remote.io_buffers, xlist_value_iter(last_iob));
+    }
+
+    while (iob->len > sizeof(udp_cmd_t)) {
+        cmd = (udp_cmd_t*) (iob->buffer + iob->idx);
+        need = ntohs(cmd->len) + sizeof(udp_cmd_t);
+
+        if (cmd->tag != CMD_TAG || need > MAX_SOCKBUF_SIZE) {
+            xlog_warn("got an error udp packet from xserver (tag/length).");
+            return 0;
+        }
+        if (iob->len < need)
             break;
-        /* an udp packet is received completely, send out. */
-        send_udp_packet(ctx, cmd, need - sizeof(udp_cmd_t));
-        buf += need;
-        len -= need;
-    }
-    while (1);
 
-    iob->len = len;
-    if (len && buf != iob->buffer) {
-        memmove(iob->buffer, buf, len);
+        send_udp_packet(ctx, cmd);
+
+        iob->idx += need;
+        iob->len -= need;
     }
+
+    if (iob->len) {
+        if (iob->idx) {
+            memmove(iob->buffer, iob->buffer + iob->idx, iob->len);
+            iob->idx = 0;
+        }
+        xlog_debug("%d udp bytes left.", iob->len);
+
+        ctx->u.last_iob = iob;
+        return 1;
+    }
+
+    return 0;
 }
 
-static void on_udp_peer_rbuf_alloc(uv_handle_t* handle, size_t sg_size, uv_buf_t* buf)
-{
-    io_buf_t* iob = ((peer_ctx_t*) handle->data)->remote->u.rbuf;
-
-    buf->base = iob->buffer + iob->len;
-    buf->len = MAX_SOCKBUF_SIZE - iob->len;
-}
-
-static unsigned _udp_conn_hash(void* v)
+static unsigned __udp_conn_hash(void* v)
 {
     return xhash_data_hash(v, sizeof(u32_t));
 }
 
-static int _udp_conn_equal(void* l, void* r)
+static int __udp_conn_equal(void* l, void* r)
 {
-    return *((u32_t*) l) == *((u32_t*) r);
+    return *(u32_t*) l == *(u32_t*) r;
 }
 
-static void connect_udp_remote(peer_ctx_t* ctx, const unsigned char* sid)
+static void connect_udp_remote(peer_ctx_t* ctx, const u8_t* sid)
 {
-    udp_sess_t* sess = xhash_get_data(&remote.udp_sessions, sid);
+    udp_session_t* sess = xhash_get_data(&remote_pri.udp_sessions, sid);
     io_buf_t* iob = ctx->pending_iob;
     remote_ctx_t* rctx;
 
     if (sess == XHASH_INVALID_DATA) {
+        xlog_debug("new udp session %x.", *(u32_t*) sid);
+
         /* the number of sessions may need to be limited, TODO. */
-        sess = xhash_iter_data(xhash_put_ex(&remote.udp_sessions,
+        sess = xhash_iter_data(xhash_put_ex(&remote_pri.udp_sessions,
                     sid, SESSION_ID_SIZE));
 
         xlist_init(&sess->rctxs, sizeof(remote_ctx_t), NULL);
-        xhash_init(&sess->conns, -1, sizeof(udp_conn_t),
-            _udp_conn_hash, _udp_conn_equal, NULL);
+        xhash_init(&sess->conns, -1, sizeof(udp_conn_t), __udp_conn_hash,
+            __udp_conn_equal, NULL);
+
+        sess->iter = xlist_end(&sess->rctxs);
     }
 
-    rctx = xlist_alloc_back(&sess->rctxs);
+    rctx = xlist_alloc_back(&remote_pri.remote_ctxs);
+    /* move 'rctx' node from 'remote_pri.remote_ctxs' to 'sess->rctxs'. */
+    xlist_paste_back(&sess->rctxs,
+        xlist_cut(&remote_pri.remote_ctxs, xlist_value_iter(rctx)));
 
     rctx->u.peer = ctx;
     rctx->u.parent = sess;
-    rctx->u.rbuf = iob;
-    rctx->u.nconns = 0;
+    rctx->u.last_iob = NULL;
 
     convert_nonce((u8_t*) iob->buffer);
     remote.crypto.init(&rctx->u.edctx, remote.crypto_key, (u8_t*) iob->buffer);
@@ -780,21 +873,25 @@ static void connect_udp_remote(peer_ctx_t* ctx, const unsigned char* sid)
     ctx->remote = rctx;
     ctx->pending_iob = NULL;
     ctx->stage = STAGE_FORWARDUDP;
-    /* this maybe unsafe, use 'uv_read_stop()' and 'uv_read_start()' instead? TODO. */
-    ctx->io.alloc_cb = on_udp_peer_rbuf_alloc;
 
-    if (iob->len > 0) {
+    if (iob->len) {
         remote.crypto.decrypt(&ctx->edctx, (u8_t*) iob->buffer + iob->idx, iob->len);
-        forward_peer_udp_packets(ctx->remote, 0);
+
+        if (forward_peer_udp_packets(ctx->remote, iob) != 0) {
+            /* some bytes left, 'iob' free later. */
+            return;
+        }
     }
-    iob->idx = 0;
+    /* 'iob' was processed totally, release now. */
+    xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
 }
 
+/* process command from peer. */
 int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 {
-    /* process command from peer. */
     cmd_t* cmd = (cmd_t*) (iob->buffer + MAX_NONCE_LEN);
 
+    /* pending this 'iob' always (nonce will be used when remote connected). */
     ctx->pending_iob = iob;
 
     if (iob->len < CMD_MAX_SIZE + MAX_NONCE_LEN) {
@@ -805,7 +902,6 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
     remote.crypto.init(&ctx->edctx, remote.crypto_key, (u8_t*) iob->buffer);
     remote.crypto.decrypt(&ctx->edctx, (u8_t*) cmd, CMD_MAX_SIZE);
 
-    /* pending this 'iob' always (nonce will be used when remote connected). */
     iob->idx = CMD_MAX_SIZE + MAX_NONCE_LEN;
     iob->len -= CMD_MAX_SIZE + MAX_NONCE_LEN;
 
@@ -817,7 +913,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 #ifdef WITH_CLIREMOTE
     if (cmd->cmd == CMD_CONNECT_CLIENT) {
         /* find an online client. */
-        pending_ctx_t* pdctx = xhash_get_data(&remote.pending_ctxs, cmd->data);
+        pending_ctx_t* pdctx = xhash_get_data(&remote_pri.pending_ctxs, cmd->data);
 
         xlog_debug("got CONNECT_CLIENT cmd (%s) from peer, process.",
             devid_to_str(cmd->data));
@@ -826,11 +922,11 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 
             if (!xlist_empty(&pdctx->clients)) {
                 /* online client exist, associate. */
-                xlog_debug("found an available client, connect to it.");
+                xlog_debug("found an available client, connect it.");
 
                 connect_cli_remote(ctx, xlist_front(&pdctx->clients));
                 /* move client node from 'pdctx->clients' to 'remote_ctxs' */
-                xlist_paste_back(&remote.remote_ctxs, xlist_cut_front(&pdctx->clients));
+                xlist_paste_back(&remote_pri.remote_ctxs, xlist_cut_front(&pdctx->clients));
 
             } else {
                 /* no online client. stop reading from peer and move it to 'pending_ctx_t'. */
@@ -940,4 +1036,45 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 
     xlog_warn("got an error command (%d) from peer.", cmd->cmd);
     return -1;
+}
+
+#ifdef WITH_CLIREMOTE
+static unsigned __pending_ctx_hash(void* v)
+{
+    return xhash_data_hash(v, DEVICE_ID_SIZE);
+}
+static int __pending_ctx_equal(void* l, void* r)
+{
+    return !memcmp(l, r, DEVICE_ID_SIZE);
+}
+#endif
+
+static unsigned __udp_session_hash(void* v)
+{
+    /* first 4 bytes of session id. */
+    return xhash_data_hash(v, 4);
+}
+static int __udp_session_equal(void* l, void* r)
+{
+    return !memcmp(l, r, SESSION_ID_SIZE);
+}
+
+void remote_private_init()
+{
+    xlist_init(&remote_pri.remote_ctxs, sizeof(remote_ctx_t), NULL);
+#ifdef WITH_CLIREMOTE
+    xhash_init(&remote_pri.pending_ctxs, -1, sizeof(pending_ctx_t),
+        __pending_ctx_hash, __pending_ctx_equal, NULL);
+#endif
+    xhash_init(&remote_pri.udp_sessions, -1, sizeof(udp_session_t),
+        __udp_session_hash, __udp_session_equal, NULL);
+}
+
+void remote_private_destroy()
+{
+    xhash_destroy(&remote_pri.udp_sessions);
+#ifdef WITH_CLIREMOTE
+    xhash_destroy(&remote_pri.pending_ctxs);
+#endif
+    xlist_destroy(&remote_pri.remote_ctxs);
 }

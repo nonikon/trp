@@ -10,23 +10,34 @@
 #include "crypto.h"
 #include "xlog.h"
 #include "xlist.h"
+#include "xhash.h"
 
 enum {
     STAGE_INIT,
     STAGE_COMMAND,
     STAGE_CONNECT,
-    STAGE_FORWARDTCP,
-    STAGE_FORWARDUDP,
+    STAGE_FORWARD,
     STAGE_NOOP,
 };
 
 typedef struct {
-    uv_tcp_t io_xclient;    /* socks-client or tunnel-client */
+    union {
+        struct {
+            uv_tcp_t io;    /* socks-client or tunnel-client */
+        } t;
+        struct {
+            io_buf_t* last_iob;
+            io_buf_t* pending_pkts[MAX_PENDING_UPKTS];
+                            /* pending udp packets before xserver connected */
+            u32_t npending;
+        } u;
+    } xclient;
     uv_tcp_t io_xserver;    /* proxy-server */
     io_buf_t* pending_iob;  /* dest address (connect command) */
     crypto_ctx_t ectx;
     crypto_ctx_t dctx;
-    u8_t ref_count;         /* increase when 'io_xserver' or 'io_xclient' opened, decrease when closed */
+    u8_t ref_count;         /* increase when 'io_xserver' or 'xclient.t.io' opened, decrease when closed */
+    u8_t is_udp;
     u8_t xclient_blocked;
     u8_t xserver_blocked;
     u8_t stage;
@@ -43,14 +54,20 @@ typedef struct {
 /*  public */ void init_connect_command(xclient_ctx_t* ctx, u8_t code, u16_t port, u8_t* addr, u32_t addrlen);
 /*  public */ int connect_xserver(xclient_ctx_t* ctx);
 
+/*  public */ u32_t get_udp_packet_id(const struct sockaddr* saddr);
+/*  public */ const struct sockaddr* get_udp_packet_saddr(u32_t id);
+/*  public */ void send_udp_packet(io_buf_t* iob);
+/* virtual */ void recv_udp_packet(udp_cmd_t* cmd);
+
 typedef struct {
+    uv_loop_t* loop;
     union {
         struct sockaddr x;
         struct sockaddr_in6 d;
     } xserver_addr;
+    u32_t n_uconnect;       /* max udp-over-tcp connection size */
     xlist_t xclient_ctxs;   /* xclient_ctx_t */
     xlist_t io_buffers;     /* io_buf_t */
-    xlist_t conn_reqs;      /* uv_connect_t */
     crypto_t crypto;
     crypto_t cryptox;
     u8_t crypto_key[16];
@@ -59,5 +76,8 @@ typedef struct {
 } xclient_t;
 
 extern xclient_t xclient;
+
+void xclient_private_init();
+void xclient_private_destroy();
 
 #endif // _XCLIENT_H_

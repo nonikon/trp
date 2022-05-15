@@ -90,9 +90,14 @@
             xlog_debug("recved %zd bytes from proxy client, to udp remote.", nread);
 
             remote.crypto.decrypt(&ctx->edctx, (u8_t*) buf->base, (u32_t) nread);
-            forward_peer_udp_packets(ctx->remote, (u32_t) nread);
 
-            /* 'iob' can't be freed. */
+            iob->idx = 0;
+            iob->len = (u32_t) nread;
+
+            if (forward_peer_udp_packets(ctx->remote, iob) == 0) {
+                /* 'iob' was recved totally, release now. */
+                xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
+            }
             return;
         }
 
@@ -102,7 +107,6 @@
             if (invoke_encrypted_peer_command(ctx, iob) != 0) {
                 uv_close((uv_handle_t*) stream, on_peer_closed);
             }
-
             /* 'iob' free later. */
             return;
         }
@@ -127,8 +131,6 @@
             uv_close((uv_handle_t*) &ctx->remote->t.io, on_tcp_remote_closed);
         } else if (ctx->stage == STAGE_FORWARDUDP) {
             close_udp_remote(ctx->remote);
-            /* 'iob' can't be freed in this place. */
-            return;
         }
 
         /* 'buf->base' may be 'NULL' when 'nread' < 0.
@@ -172,29 +174,6 @@ static void on_xclient_connect(uv_stream_t* stream, int status)
         xlog_error("uv_accept failed.");
         uv_close((uv_handle_t*) &ctx->io, on_peer_closed);
     }
-}
-
-#ifdef WITH_CLIREMOTE
-static unsigned _pending_ctx_hash(void* v)
-{
-    return xhash_data_hash(v, DEVICE_ID_SIZE);
-}
-
-static int _pending_ctx_equal(void* l, void* r)
-{
-    return !memcmp(l, r, DEVICE_ID_SIZE);
-}
-#endif
-
-static unsigned _udp_session_hash(void* v)
-{
-    /* first 4 bytes of session id. */
-    return xhash_data_hash(v, 4);
-}
-
-static int _udp_session_equal(void* l, void* r)
-{
-    return !memcmp(l, r, SESSION_ID_SIZE);
 }
 
 static void usage(const char* s)
@@ -322,10 +301,10 @@ int main(int argc, char** argv)
         }
     }
 #endif
-
-    remote.loop = uv_default_loop();
-
     seed_rand((u32_t) time(NULL));
+
+    remote_private_init();
+    remote.loop = uv_default_loop();
 
     if (passwd) {
         derive_key(remote.crypto_key, passwd);
@@ -375,17 +354,10 @@ int main(int argc, char** argv)
 
     // http_server_start(loop, "127.0.0.1"); // TODO
 
-#ifdef WITH_CLIREMOTE
-    xhash_init(&remote.pending_ctxs, -1, sizeof(pending_ctx_t),
-        _pending_ctx_hash, _pending_ctx_equal, NULL);
-#endif
     xlist_init(&remote.peer_ctxs, sizeof(peer_ctx_t), NULL);
-    xlist_init(&remote.remote_ctxs, sizeof(remote_ctx_t), NULL);
     xlist_init(&remote.io_buffers, sizeof(io_buf_t) + MAX_SOCKBUF_SIZE, NULL);
     xlist_init(&remote.conn_reqs, sizeof(uv_connect_t), NULL);
     xlist_init(&remote.addrinfo_reqs, sizeof(uv_getaddrinfo_t), NULL);
-    xhash_init(&remote.udp_sessions, -1, sizeof(udp_sess_t),
-        _udp_session_hash, _udp_session_equal, NULL);
 
 #ifdef WITH_CLIREMOTE
     xlog_info("server listen at [%s]...", addr_to_str(&addr));
@@ -393,17 +365,13 @@ int main(int argc, char** argv)
     xlog_info("proxy server listen at [%s]...", addr_to_str(&xaddr));
     uv_run(remote.loop, UV_RUN_DEFAULT);
 
-    xhash_destroy(&remote.udp_sessions);
     xlist_destroy(&remote.addrinfo_reqs);
     xlist_destroy(&remote.conn_reqs);
     xlist_destroy(&remote.io_buffers);
-    xlist_destroy(&remote.remote_ctxs);
     xlist_destroy(&remote.peer_ctxs);
-#ifdef WITH_CLIREMOTE
-    xhash_destroy(&remote.pending_ctxs);
-#endif
 end:
     xlog_info("end of loop.");
+    remote_private_destroy();
     xlog_exit();
 
     return 0;

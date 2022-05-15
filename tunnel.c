@@ -26,7 +26,6 @@
  *                         (tunnel-server)        (tunnel-client)
  */
 
-static uv_loop_t* loop;
 static union { cmd_t m; u8_t _[CMD_MAX_SIZE]; } tunnel_maddr;
 
 /* override */ void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
@@ -86,16 +85,18 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
 
     ctx = xlist_alloc_back(&xclient.xclient_ctxs);
 
-    uv_tcp_init(loop, &ctx->io_xclient);
+    uv_tcp_init(xclient.loop, &ctx->xclient.t.io);
 
-    ctx->io_xclient.data = ctx;
+    ctx->xclient.t.io.data = ctx;
     ctx->io_xserver.data = ctx;
     ctx->ref_count = 1;
+    ctx->is_udp = 0;
     ctx->pending_iob = NULL;
     ctx->xclient_blocked = 0;
     ctx->xserver_blocked = 0;
+    ctx->stage = STAGE_INIT;
 
-    if (uv_accept(stream, (uv_stream_t*) &ctx->io_xclient) == 0) {
+    if (uv_accept(stream, (uv_stream_t*) &ctx->xclient.t.io) == 0) {
         xlog_debug("a tunnel client connected.");
 #ifdef __linux__
         if (tunnel_maddr.m.len) {
@@ -114,12 +115,12 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
             } dest;
             socklen_t len = sizeof(dest);
 
-            if (getsockopt(ctx->io_xclient.io_watcher.fd,
+            if (getsockopt(ctx->xclient.t.io.io_watcher.fd,
                     SOL_IP, SO_ORIGINAL_DST, &dest, &len) == 0) {
                 init_connect_command(ctx, CMD_CONNECT_IPV4,
                     dest.v4.sin_port, (u8_t*) &dest.v4.sin_addr, 4);
 
-            } else if (getsockopt(ctx->io_xclient.io_watcher.fd,
+            } else if (getsockopt(ctx->xclient.t.io.io_watcher.fd,
                     SOL_IPV6, IP6T_SO_ORIGINAL_DST, &dest, &len) == 0) {
                 init_connect_command(ctx, CMD_CONNECT_IPV6,
                     dest.v6.sin6_port, (u8_t*) &dest.v6.sin6_addr, 16);
@@ -127,21 +128,26 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
             } else {
                 xlog_warn("getsockopt IP6T_SO_ORIGINAL_DST failed: %s.",
                     strerror(errno));
-                uv_close((uv_handle_t*) &ctx->io_xclient, on_io_closed);
+                uv_close((uv_handle_t*) &ctx->xclient.t.io, on_io_closed);
                 return;
             }
         }
 #endif
-        uv_tcp_init(loop, &ctx->io_xserver);
+        uv_tcp_init(xclient.loop, &ctx->io_xserver);
 
         if (connect_xserver(ctx) != 0) {
             /* connect failed immediately, just close this connection. */
-            uv_close((uv_handle_t*) &ctx->io_xclient, on_io_closed);
+            uv_close((uv_handle_t*) &ctx->xclient.t.io, on_io_closed);
         }
     } else {
         xlog_error("uv_accept failed.");
-        uv_close((uv_handle_t*) &ctx->io_xclient, on_io_closed);
+        uv_close((uv_handle_t*) &ctx->xclient.t.io, on_io_closed);
     }
+}
+
+/* override */ void recv_udp_packet(udp_cmd_t* cmd)
+{
+    // TODO
 }
 
 static int init_tunnel_maddr(const char* addrstr)
@@ -310,10 +316,10 @@ int main(int argc, char** argv)
         }
     }
 #endif
-
-    loop = uv_default_loop();
-
     seed_rand((u32_t) time(NULL));
+
+    xclient_private_init();
+    xclient.loop = uv_default_loop();
 
     if (devid_str && str_to_devid(xclient.device_id, devid_str) != 0) {
         xlog_error("invalid device id string [%s].", devid_str);
@@ -354,7 +360,7 @@ int main(int argc, char** argv)
         struct sockaddr_dm dm;
 
         if (parse_domain_str(xserver_str, DEF_XSERVER_PORT, &dm) != 0
-                || resolve_domain_sync(loop, &dm, &xclient.xserver_addr.x) != 0) {
+                || resolve_domain_sync(xclient.loop, &dm, &xclient.xserver_addr.x) != 0) {
             xlog_error("invalid proxy server address [%s].", xserver_str);
             goto end;
         }
@@ -379,7 +385,7 @@ int main(int argc, char** argv)
         xlog_info("tunnel to [%s].", maddr_to_str(&tunnel_maddr.m));
     }
 
-    uv_tcp_init(loop, &io_tserver);
+    uv_tcp_init(xclient.loop, &io_tserver);
     uv_tcp_bind(&io_tserver, &taddr.x, 0);
 
     error = uv_listen((uv_stream_t*) &io_tserver, LISTEN_BACKLOG, on_tclient_connect);
@@ -390,17 +396,16 @@ int main(int argc, char** argv)
 
     xlist_init(&xclient.xclient_ctxs, sizeof(xclient_ctx_t), NULL);
     xlist_init(&xclient.io_buffers, sizeof(io_buf_t) + MAX_SOCKBUF_SIZE, NULL);
-    xlist_init(&xclient.conn_reqs, sizeof(uv_connect_t), NULL);
 
     xlog_info("proxy server [%s].", addr_to_str(&xclient.xserver_addr));
     xlog_info("tunnel server listen at [%s]...", addr_to_str(&taddr));
-    uv_run(loop, UV_RUN_DEFAULT);
+    uv_run(xclient.loop, UV_RUN_DEFAULT);
 
-    xlist_destroy(&xclient.conn_reqs);
     xlist_destroy(&xclient.io_buffers);
     xlist_destroy(&xclient.xclient_ctxs);
 end:
     xlog_info("end of loop.");
+    xclient_private_destroy();
     xlog_exit();
 
     return 0;

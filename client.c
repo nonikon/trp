@@ -66,7 +66,6 @@ static void new_server_connection(uv_timer_t* handle);
                 uv_read_stop(stream);
                 ctx->peer_blocked = 1;
             }
-
             /* 'iob' free later. */
             return;
         }
@@ -75,9 +74,14 @@ static void new_server_connection(uv_timer_t* handle);
             xlog_debug("recved %zd bytes from proxy client, to udp remote.", nread);
 
             remote.crypto.decrypt(&ctx->edctx, (u8_t*) buf->base, (u32_t) nread);
-            forward_peer_udp_packets(ctx->remote, (u32_t) nread);
 
-            /* 'iob' can't be freed. */
+            iob->idx = 0;
+            iob->len = (u32_t) nread;
+
+            if (forward_peer_udp_packets(ctx->remote, iob) == 0) {
+                /* 'iob' was recved totally, release now. */
+                xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
+            }
             return;
         }
 
@@ -91,7 +95,6 @@ static void new_server_connection(uv_timer_t* handle);
             if (invoke_encrypted_peer_command(ctx, iob) != 0) {
                 uv_close((uv_handle_t*) stream, on_peer_closed);
             }
-
             /* 'iob' free later. */
             return;
         }
@@ -119,8 +122,6 @@ static void new_server_connection(uv_timer_t* handle);
             uv_close((uv_handle_t*) &ctx->remote->t.io, on_tcp_remote_closed);
         } else if (ctx->stage == STAGE_FORWARDUDP) {
             close_udp_remote(ctx->remote);
-            /* 'iob' can't be freed in this place. */
-            return;
         }
 
         /* 'buf->base' may be 'NULL' when 'nread' < 0.
@@ -316,17 +317,6 @@ static void new_server_connection(uv_timer_t* timer)
     }
 }
 
-static unsigned _udp_session_hash(void* v)
-{
-    /* first 4 bytes of session id. */
-    return xhash_data_hash(v, 4);
-}
-
-static int _udp_session_equal(void* l, void* r)
-{
-    return !memcmp(l, r, SESSION_ID_SIZE);
-}
-
 static void usage(const char* s)
 {
     fprintf(stderr, "trp v%d.%d.%d, libuv %s, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, uv_version_string(), s);
@@ -441,10 +431,10 @@ int main(int argc, char** argv)
         }
     }
 #endif
-
-    remote.loop = uv_default_loop();
-
     seed_rand((u32_t) time(NULL));
+
+    remote_private_init();
+    remote.loop = uv_default_loop();
 
     if (nconnect <= 0 || nconnect > 1024) {
         xlog_warn("invalid connection pool size [%d], reset to [1].", nconnect);
@@ -488,12 +478,9 @@ int main(int argc, char** argv)
     }
 
     xlist_init(&remote.peer_ctxs, sizeof(peer_ctx_t), NULL);
-    xlist_init(&remote.remote_ctxs, sizeof(remote_ctx_t), NULL);
     xlist_init(&remote.io_buffers, sizeof(io_buf_t) + MAX_SOCKBUF_SIZE, NULL);
     xlist_init(&remote.conn_reqs, sizeof(uv_connect_t), NULL);
     xlist_init(&remote.addrinfo_reqs, sizeof(uv_getaddrinfo_t), NULL);
-    xhash_init(&remote.udp_sessions, -1, sizeof(udp_sess_t),
-        _udp_session_hash, _udp_session_equal, NULL);
 
     uv_timer_init(remote.loop, &reconnect_timer);
 
@@ -501,14 +488,13 @@ int main(int argc, char** argv)
     new_server_connection(NULL);
     uv_run(remote.loop, UV_RUN_DEFAULT);
 
-    xhash_destroy(&remote.udp_sessions);
     xlist_destroy(&remote.addrinfo_reqs);
     xlist_destroy(&remote.conn_reqs);
     xlist_destroy(&remote.io_buffers);
-    xlist_destroy(&remote.remote_ctxs);
     xlist_destroy(&remote.peer_ctxs);
 end:
     xlog_info("end of loop.");
+    remote_private_destroy();
     xlog_exit();
 
     return 0;
