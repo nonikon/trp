@@ -537,6 +537,9 @@ void close_udp_remote(remote_ctx_t* ctx)
     if (ctx->u.last_iob) {
         xlist_erase(&remote.io_buffers, xlist_value_iter(ctx->u.last_iob));
     }
+    if (xlist_value_iter(ctx) == sess->iter) {
+        sess->iter = xlist_iter_next(sess->iter);
+    }
     /* move 'ctx' node from 'sess->rctxs' to 'remote_pri.remote_ctxs'. */
     xlist_paste_back(&remote_pri.remote_ctxs,
         xlist_cut(&sess->rctxs, xlist_value_iter(ctx)));
@@ -564,7 +567,8 @@ static remote_ctx_t* choose_udp_remote_ctx(udp_session_t* s)
     }
 
     rctx = xlist_iter_value(s->iter);
-    s->iter = xlist_iter_next(s->iter);
+    if (xlist_size(&s->rctxs) > 1)
+        s->iter = xlist_iter_next(s->iter);
     return rctx;
 }
 
@@ -1029,7 +1033,8 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
     }
 
     if (cmd->cmd == CMD_CONNECT_UDP) {
-        xlog_debug("got FORWARD_UDP cmd from peer, process.");
+        xlog_debug("got FORWARD_UDP cmd (%s) from peer, process.",
+            maddr_to_str(cmd));
         connect_udp_remote(ctx, cmd->data);
         return 0;
     }
