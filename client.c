@@ -45,8 +45,7 @@ static void new_server_connection(uv_timer_t* handle);
     if (nread > 0) {
         if (ctx->stage == STAGE_FORWARDTCP) {
             uv_buf_t wbuf;
-
-            xlog_debug("recved %zd bytes from server, forward.", nread);
+            xlog_debug("%zd bytes from server, to tcp remote.", nread);
 
             wbuf.base = buf->base;
             wbuf.len = nread;
@@ -71,7 +70,7 @@ static void new_server_connection(uv_timer_t* handle);
         }
 
         if (ctx->stage == STAGE_FORWARDUDP) {
-            xlog_debug("recved %zd bytes from proxy client, to udp remote.", nread);
+            xlog_debug("%zd udp bytes from server.", nread);
 
             remote.crypto.decrypt(&ctx->edctx, (u8_t*) buf->base, (u32_t) nread);
 
@@ -79,7 +78,7 @@ static void new_server_connection(uv_timer_t* handle);
             iob->len = (u32_t) nread;
 
             if (forward_peer_udp_packets(ctx->remote, iob) == 0) {
-                /* 'iob' was recved totally, release now. */
+                /* 'iob' was processed totally, release now. */
                 xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
             }
             return;
@@ -123,10 +122,7 @@ static void new_server_connection(uv_timer_t* handle);
         } else if (ctx->stage == STAGE_FORWARDUDP) {
             close_udp_remote(ctx->remote);
         }
-
-        /* 'buf->base' may be 'NULL' when 'nread' < 0.
-         * just 'return' in this situation.
-         */
+        /* 'buf->base' may be 'NULL' when 'nread' < 0. */
         if (!buf->base) return;
     }
 
@@ -165,7 +161,6 @@ static void report_device_id(peer_ctx_t* ctx)
 static void on_server_connected(uv_connect_t* req, int status)
 {
     static int retry_displayed = 1;
-
     peer_ctx_t* ctx = req->data;
 
     if (status < 0) {
@@ -173,20 +168,17 @@ static void on_server_connected(uv_connect_t* req, int status)
 
         /* mark server domain need to be resolved again. */
         server_addr_r.x.sa_family = 0;
-
         ++nconnect;
         if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
             /* reconnect after RECONNECT_SERVER_INTERVAL ms. */
             uv_timer_start(&reconnect_timer, new_server_connection,
                 RECONNECT_SERVER_INTERVAL, 0);
         }
-
         if (!retry_displayed) {
             xlog_error("connect server failed: %s, retry every %d seconds.",
                 uv_err_name(status), RECONNECT_SERVER_INTERVAL / 1000);
             retry_displayed = 1;
         }
-
     } else {
         /* enable tcp-keepalive. */
         uv_tcp_keepalive(&ctx->io, 1, KEEPIDLE_TIME);
@@ -202,7 +194,6 @@ static void on_server_connected(uv_connect_t* req, int status)
             xlog_info("server connected.");
             retry_displayed = 0;
         }
-
         if (nconnect > 0 && !uv_is_active((uv_handle_t*) &reconnect_timer)) {
             new_server_connection(NULL);
         }
@@ -259,7 +250,7 @@ static void on_server_domain_resolved(
         }
 
     } else {
-        xlog_debug("resolve server domain result [%s], connect it.",
+        xlog_debug("resolve server domain result [%s], connect.",
             addr_to_str(res->ai_addr));
 
         /* save resolved server domain. */
@@ -418,7 +409,6 @@ int main(int argc, char** argv)
     if (logfile && daemon(1, 0) != 0) {
         xlog_error("run as daemon failed: %s.", strerror(errno));
     }
-
     signal(SIGPIPE, SIG_IGN);
 
     if (nofile > 1024) {

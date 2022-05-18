@@ -267,7 +267,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
                 }
 
             } else {
-                xlog_warn("socks5 udp relay is not enabled.");
+                xlog_warn("socks5 udp relay not enabled.");
                 buf->base[1] = 0x01;
             }
 
@@ -299,8 +299,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
         iob->wreq.data = ctx;
 
         if (ctx->stage == STAGE_FORWARD) {
-
-            xlog_debug("recved %zd bytes from SOCKS client, forward.", nread);
+            xlog_debug("%zd bytes from socks client, to proxy server.", nread);
 
             xclient.cryptox.encrypt(&ctx->ectx, (u8_t*) wbuf.base, wbuf.len);
 
@@ -315,7 +314,6 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
                 uv_read_stop(stream);
                 ctx->xclient_blocked = 1;
             }
-
             /* 'iob' free later. */
             return;
         }
@@ -344,7 +342,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
         }
 
     } else if (nread < 0) {
-        xlog_debug("disconnected from SOCKS client: %s, stage %d.",
+        xlog_debug("disconnected from socks client: %s, stage %d.",
             uv_err_name((int) nread), ctx->stage);
 
         if (ctx->stage == STAGE_FORWARD) {
@@ -354,9 +352,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
         }
         uv_close((uv_handle_t*) stream, on_io_closed);
 
-        /* 'buf->base' may be 'NULL' when 'nread' < 0.
-         * just 'return' in this situation.
-         */
+        /* 'buf->base' may be 'NULL' when 'nread' < 0. */
         if (!buf->base) return;
     }
 
@@ -371,7 +367,6 @@ static void on_sclient_connect(uv_stream_t* stream, int status)
         xlog_error("new connection error: %s.", uv_strerror(status));
         return;
     }
-
     ctx = xlist_alloc_back(&xclient.xclient_ctxs);
 
     uv_tcp_init(xclient.loop, &ctx->xclient.t.io);
@@ -386,7 +381,7 @@ static void on_sclient_connect(uv_stream_t* stream, int status)
     ctx->stage = STAGE_INIT;
 
     if (uv_accept(stream, (uv_stream_t*) &ctx->xclient.t.io) == 0) {
-        xlog_debug("a SOCKS client connected.");
+        xlog_debug("socks client connected.");
         uv_tcp_init(xclient.loop, &ctx->io_xserver);
         uv_read_start((uv_stream_t*) &ctx->xclient.t.io, on_iobuf_alloc, on_xclient_read);
     } else {
@@ -428,7 +423,8 @@ static void on_udp_sclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
      */
 
     if (nread < 7 || (buf->base[0] | buf->base[1])) { /* 'RSV' != 0x0000 */
-        xlog_warn("invalid socks5 udp packet from client.");
+        xlog_debug("invalid udp packet from socks5 client (%zd/%04x).", nread,
+            *(u16_t*) buf->base);
 
     } else if (flags & UV_UDP_PARTIAL) {
         xlog_warn("socks5 udp packet too large (> %u), drop it.", buf->len);
@@ -449,6 +445,8 @@ static void on_udp_sclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
 
             iob->len = nread - 4 + sizeof(udp_cmd_t);
 
+            xlog_debug("send udp packet to proxy server, %u bytes, id %x.",
+                iob->len, cmd->id);
             send_udp_packet(iob);
             /* 'iob' free later. */
             return;
@@ -469,6 +467,8 @@ static void on_udp_sclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
 
             iob->len = nread - 4 + sizeof(udp_cmd_t);
 
+            xlog_debug("send udp packet to proxy server, %u bytes, id %x.",
+                iob->len, cmd->id);
             send_udp_packet(iob);
             /* 'iob' free later. */
             return;
@@ -492,7 +492,6 @@ static void on_udp_sclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
         xlog_warn("udp packet id (%x) not found.", cmd->id);
         return;
     }
-
     /* zero 'RSV', 'FRAG' and 'ATYP'. */
     cmd->id = 0;
     /* set 'ATYP'. */
@@ -501,8 +500,11 @@ static void on_udp_sclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
     wbuf.base = (char*) cmd + 4;
     wbuf.len = ntohs(cmd->len) + 4;
 
+    xlog_debug("send udp packet to socks5 client [%s], %u bytes.",
+        addr_to_str(addr), wbuf.len);
+
     if (uv_udp_try_send(&io_usserver, &wbuf, 1, addr) < 0) {
-        xlog_debug("send udp packet to socks client failed.");
+        xlog_debug("send udp packet to socks5 client failed.");
     }
 }
 
@@ -613,7 +615,6 @@ int main(int argc, char** argv)
     if (logfile && daemon(1, 0) != 0) {
         xlog_error("run as daemon failed: %s.", strerror(errno));
     }
-
     signal(SIGPIPE, SIG_IGN);
 
     if (nofile > 1024) {
@@ -697,7 +698,6 @@ int main(int argc, char** argv)
 
     if (nconnect) {
         xlog_info("enable udp relay.");
-
         uv_udp_init(xclient.loop, &io_usserver);
         uv_udp_bind(&io_usserver, &saddr.x, 0);
         /* start socks5 udp listen io. */

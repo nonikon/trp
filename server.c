@@ -33,8 +33,7 @@
 #ifdef WITH_CLIREMOTE
         if (ctx->stage == STAGE_FORWARDCLI) {
             uv_buf_t wbuf;
-
-            xlog_debug("recved %zd bytes from proxy client, to client.", nread);
+            xlog_debug("%zd bytes from proxy client, to client.", nread);
 
             wbuf.base = buf->base;
             wbuf.len = nread;
@@ -46,22 +45,19 @@
 
             if (uv_stream_get_write_queue_size(
                     (uv_stream_t*) &ctx->remote->c.io) > MAX_WQUEUE_SIZE) {
-                xlog_debug("remote write queue pending.");
+                xlog_debug("client write queue pending.");
 
-                /* stop reading from peer until remote write queue cleared. */
+                /* stop reading from peer until client write queue cleared. */
                 uv_read_stop(stream);
                 ctx->peer_blocked = 1;
             }
-
             /* 'iob' free later. */
             return;
         }
 #endif
-
         if (ctx->stage == STAGE_FORWARDTCP) {
             uv_buf_t wbuf;
-
-            xlog_debug("recved %zd bytes from proxy client, to tcp remote.", nread);
+            xlog_debug("%zd bytes from proxy client, to tcp remote.", nread);
 
             wbuf.base = buf->base;
             wbuf.len = nread;
@@ -81,13 +77,12 @@
                 uv_read_stop(stream);
                 ctx->peer_blocked = 1;
             }
-
             /* 'iob' free later. */
             return;
         }
 
         if (ctx->stage == STAGE_FORWARDUDP) {
-            xlog_debug("recved %zd bytes from proxy client, to udp remote.", nread);
+            xlog_debug("%zd udp bytes from proxy client.", nread);
 
             remote.crypto.decrypt(&ctx->edctx, (u8_t*) buf->base, (u32_t) nread);
 
@@ -95,7 +90,7 @@
             iob->len = (u32_t) nread;
 
             if (forward_peer_udp_packets(ctx->remote, iob) == 0) {
-                /* 'iob' was recved totally, release now. */
+                /* 'iob' was processed totally, release now. */
                 xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
             }
             return;
@@ -121,7 +116,6 @@
             uv_err_name((int) nread), ctx->stage);
 
         uv_close((uv_handle_t*) stream, on_peer_closed);
-
 #ifdef WITH_CLIREMOTE
         if (ctx->stage == STAGE_FORWARDCLI) {
             uv_close((uv_handle_t*) &ctx->remote->c.io, on_cli_remote_closed);
@@ -132,10 +126,7 @@
         } else if (ctx->stage == STAGE_FORWARDUDP) {
             close_udp_remote(ctx->remote);
         }
-
-        /* 'buf->base' may be 'NULL' when 'nread' < 0.
-         * just 'return' in this situation.
-         */
+        /* 'buf->base' may be 'NULL' when 'nread' < 0. */
         if (!buf->base) return;
     }
 
@@ -150,7 +141,6 @@ static void on_xclient_connect(uv_stream_t* stream, int status)
         xlog_error("new connection error: %s.", uv_strerror(status));
         return;
     }
-
     ctx = xlist_alloc_back(&remote.peer_ctxs);
 
     uv_tcp_init(remote.loop, &ctx->io);
@@ -166,7 +156,7 @@ static void on_xclient_connect(uv_stream_t* stream, int status)
     ctx->stage = STAGE_COMMAND;
 
     if (uv_accept(stream, (uv_stream_t*) &ctx->io) == 0) {
-        xlog_debug("a proxy client connected.");
+        xlog_debug("proxy client connected.");
         /* enable tcp-keepalive with proxy client. */
         uv_tcp_keepalive(&ctx->io, 1, KEEPIDLE_TIME);
         uv_read_start((uv_stream_t*) &ctx->io, on_iobuf_alloc, on_peer_read);
@@ -288,7 +278,6 @@ int main(int argc, char** argv)
     if (logfile && daemon(1, 0) != 0) {
         xlog_error("run as daemon failed: %s.", strerror(errno));
     }
-
     signal(SIGPIPE, SIG_IGN);
 
     if (nofile > 1024) {

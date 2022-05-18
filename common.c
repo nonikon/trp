@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 nonikon@qq.com.
+ * Copyright (C) 2021-2022 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -8,17 +8,17 @@
 
 #include "common.h"
 
-static u32_t _seed;
-static char _addrbuf[MAX_DOMAIN_LEN + 8]; /* long enough to store ipv4/ipv6/domain string and port. */
+static u32_t __seed;
+static char __addrbuf[MAX_DOMAIN_LEN + 8]; /* long enough to store ipv4/ipv6/domain string and port. */
 
 void seed_rand(u32_t seed)
 {
-    _seed = seed;
+    __seed = seed;
 }
 
 static u32_t rand_int()
 {
-    return _seed = _seed * 1103515245 + 12345;
+    return __seed = __seed * 1103515245 + 12345;
 }
 
 void rand_bytes(u8_t* data, u32_t len)
@@ -168,54 +168,57 @@ const char* addr_to_str(const void* addr)
         const struct sockaddr_in*  d4;
         const struct sockaddr_in6* d6;
         const struct sockaddr_dm*  dm;
-    } u;
+    } u = { addr };
 
-    _addrbuf[0] = 0;
-    u.dx = addr;
+    __addrbuf[0] = 0;
 
     switch (u.dx->sa_family) {
     case AF_INET:
-        uv_inet_ntop(AF_INET, &u.d4->sin_addr, _addrbuf, sizeof(_addrbuf));
-        sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(u.d4->sin_port));
+        uv_inet_ntop(AF_INET, &u.d4->sin_addr, __addrbuf, sizeof(__addrbuf));
+        sprintf(__addrbuf + strlen(__addrbuf), ":%d", ntohs(u.d4->sin_port));
         break;
 
     case AF_INET6:
-        uv_inet_ntop(AF_INET6, &u.d6->sin6_addr, _addrbuf, sizeof(_addrbuf));
-        sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(u.d6->sin6_port));
+        uv_inet_ntop(AF_INET6, &u.d6->sin6_addr, __addrbuf, sizeof(__addrbuf));
+        sprintf(__addrbuf + strlen(__addrbuf), ":%d", ntohs(u.d6->sin6_port));
         break;
 
     case 0: /* domain */
-        sprintf(_addrbuf, "%s:%d", u.dm->sdm_addr, ntohs(u.dm->sdm_port));
+        sprintf(__addrbuf, "%s:%d", u.dm->sdm_addr, ntohs(u.dm->sdm_port));
         break;
     }
 
-    return _addrbuf;
+    return __addrbuf;
 }
 
 const char* maddr_to_str(const cmd_t* cmd)
 {
-    _addrbuf[0] = 0;
+    __addrbuf[0] = 0;
 
     switch (cmd->cmd) {
     case CMD_CONNECT_IPV4:
-        uv_inet_ntop(AF_INET, &cmd->data, _addrbuf, sizeof(_addrbuf));
-        sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(cmd->port));
+        uv_inet_ntop(AF_INET, &cmd->data, __addrbuf, sizeof(__addrbuf));
+        sprintf(__addrbuf + strlen(__addrbuf), ":%d", ntohs(cmd->port));
         break;
 
     case CMD_CONNECT_IPV6:
-        uv_inet_ntop(AF_INET6, &cmd->data, _addrbuf, sizeof(_addrbuf));
-        sprintf(_addrbuf + strlen(_addrbuf), ":%d", ntohs(cmd->port));
+        uv_inet_ntop(AF_INET6, &cmd->data, __addrbuf, sizeof(__addrbuf));
+        sprintf(__addrbuf + strlen(__addrbuf), ":%d", ntohs(cmd->port));
         break;
 
     case CMD_CONNECT_DOMAIN:
-        sprintf(_addrbuf, "%s:%d", cmd->data, ntohs(cmd->port));
+        sprintf(__addrbuf, "%s:%d", cmd->data, ntohs(cmd->port));
+        break;
+
+    case CMD_CONNECT_UDP:
+        sprintf(__addrbuf, "udp-session-%x", *(u32_t*) cmd->data);
         break;
 
     case CMD_CONNECT_CLIENT:
         return devid_to_str(cmd->data);
     }
 
-    return _addrbuf;
+    return __addrbuf;
 }
 
 const char* devid_to_str(const u8_t id[DEVICE_ID_SIZE])
