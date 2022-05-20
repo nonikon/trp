@@ -35,8 +35,7 @@ static union { cmd_t m; u8_t _[CMD_MAX_SIZE]; } tunnel_maddr;
 
     if (nread > 0) {
         uv_buf_t wbuf;
-
-        xlog_debug("recved %zd bytes from tunnel client, forward.", nread);
+        xlog_debug("%zd bytes from tunnel client, to proxy server.", nread);
 
         wbuf.base = buf->base;
         wbuf.len = nread;
@@ -56,7 +55,6 @@ static union { cmd_t m; u8_t _[CMD_MAX_SIZE]; } tunnel_maddr;
             uv_read_stop(stream);
             ctx->xclient_blocked = 1;
         }
-
         /* 'iob' free later. */
         return;
     }
@@ -64,8 +62,9 @@ static union { cmd_t m; u8_t _[CMD_MAX_SIZE]; } tunnel_maddr;
     if (nread < 0) {
         xlog_debug("disconnected from tunnel client: %s.", uv_err_name((int) nread));
 
-        uv_close((uv_handle_t*) stream, on_io_closed);
         uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
+        /* 'stream' with NULL 'close_cb' MUST be closed after 'io_xserver'. */
+        uv_close((uv_handle_t*) stream, NULL);
 
         /* 'buf->base' may be 'NULL' when 'nread' < 0. */
         if (!buf->base) return;
@@ -82,14 +81,12 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
         xlog_error("new connection error: %s.", uv_strerror(status));
         return;
     }
-
     ctx = xlist_alloc_back(&xclient.xclient_ctxs);
 
     uv_tcp_init(xclient.loop, &ctx->xclient.t.io);
 
     ctx->xclient.t.io.data = ctx;
     ctx->io_xserver.data = ctx;
-    ctx->ref_count = 1;
     ctx->is_udp = 0;
     ctx->pending_iob = NULL;
     ctx->xclient_blocked = 0;
@@ -97,7 +94,7 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
     ctx->stage = STAGE_INIT;
 
     if (uv_accept(stream, (uv_stream_t*) &ctx->xclient.t.io) == 0) {
-        xlog_debug("a tunnel client connected.");
+        xlog_debug("tunnel client connected.");
 #ifdef __linux__
         if (tunnel_maddr.m.len) {
 #endif
@@ -137,7 +134,9 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
 
         if (connect_xserver(ctx) != 0) {
             /* connect failed immediately, just close this connection. */
-            uv_close((uv_handle_t*) &ctx->xclient.t.io, on_io_closed);
+            uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
+            /* 'xclient.t.io' with NULL 'close_cb' MUST be closed after 'io_xserver'. */
+            uv_close((uv_handle_t*) &ctx->xclient.t.io, NULL);
         }
     } else {
         xlog_error("uv_accept failed.");
@@ -303,7 +302,6 @@ int main(int argc, char** argv)
     if (logfile && daemon(1, 0) != 0) {
         xlog_error("run as daemon failed: %s.", strerror(errno));
     }
-
     signal(SIGPIPE, SIG_IGN);
 
     if (nofile > 1024) {

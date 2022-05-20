@@ -331,12 +331,14 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
                 uv_write(&iob->wreq, (uv_stream_t*) &ctx->xclient.t.io,
                     &wbuf, 1, on_xclient_write);
                 /* close this connection. */
-                uv_close((uv_handle_t*) stream, on_io_closed);
+                uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
+                uv_close((uv_handle_t*) stream, NULL);
                 /* 'iob' free later. */
                 return;
             case -1:
                 /* error packet from client, close connection. */
-                uv_close((uv_handle_t*) stream, on_io_closed);
+                uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
+                uv_close((uv_handle_t*) stream, NULL);
                 break;
             }
         }
@@ -345,12 +347,13 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
         xlog_debug("disconnected from socks client: %s, stage %d.",
             uv_err_name((int) nread), ctx->stage);
 
-        if (ctx->stage == STAGE_FORWARD) {
-            uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
-        } else if (ctx->stage == STAGE_NOOP) {
+        if (ctx->stage == STAGE_NOOP) {
             /* terminate associated udp connection, TODO. */
         }
-        uv_close((uv_handle_t*) stream, on_io_closed);
+
+        uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
+        /* 'stream' with NULL 'close_cb' MUST be closed after 'io_xserver'. */
+        uv_close((uv_handle_t*) stream, NULL);
 
         /* 'buf->base' may be 'NULL' when 'nread' < 0. */
         if (!buf->base) return;
@@ -374,7 +377,6 @@ static void on_sclient_connect(uv_stream_t* stream, int status)
     ctx->xclient.t.io.data = ctx;
     ctx->io_xserver.data = ctx;
     ctx->pending_iob = NULL;
-    ctx->ref_count = 1;
     ctx->is_udp = 0;
     ctx->xclient_blocked = 0;
     ctx->xserver_blocked = 0;

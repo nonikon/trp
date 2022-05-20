@@ -49,30 +49,26 @@ void on_io_closed(uv_handle_t* handle)
 {
     xclient_ctx_t* ctx = handle->data;
 
-    if (ctx->ref_count > 1) {
-        --ctx->ref_count;
-    } else {
-        if (ctx->is_udp) {
-            if (ctx->xclient.u.last_iob) {
+    if (ctx->is_udp) {
+        if (ctx->xclient.u.last_iob) {
+            xlist_erase(&xclient.io_buffers,
+                xlist_value_iter(ctx->xclient.u.last_iob));
+        }
+        if (ctx->xclient.u.npending) {
+            u32_t n = ctx->xclient.u.npending;
+            do {
                 xlist_erase(&xclient.io_buffers,
-                    xlist_value_iter(ctx->xclient.u.last_iob));
-            }
-            if (ctx->xclient.u.npending) {
-                u32_t n = ctx->xclient.u.npending;
-                do {
-                    xlist_erase(&xclient.io_buffers,
-                        xlist_value_iter(ctx->xclient.u.pending_pkts[--n]));
-                } while (n);
-            }
+                    xlist_value_iter(ctx->xclient.u.pending_pkts[--n]));
+            } while (n);
         }
-        if (ctx->pending_iob) {
-            xlist_erase(&xclient.io_buffers, xlist_value_iter(ctx->pending_iob));
-        }
-        xlist_erase(&xclient.xclient_ctxs, xlist_value_iter(ctx));
-
-        xlog_debug("current %zu ctxs, %zu iobufs.",
-            xlist_size(&xclient.xclient_ctxs), xlist_size(&xclient.io_buffers));
     }
+    if (ctx->pending_iob) {
+        xlist_erase(&xclient.io_buffers, xlist_value_iter(ctx->pending_iob));
+    }
+    xlist_erase(&xclient.xclient_ctxs, xlist_value_iter(ctx));
+
+    xlog_debug("current %zu ctxs, %zu iobufs.",
+        xlist_size(&xclient.xclient_ctxs), xlist_size(&xclient.io_buffers));
 }
 
 void on_xserver_write(uv_write_t* req, int status)
@@ -171,6 +167,19 @@ static int forward_xserver_udp_packets(xclient_ctx_t* ctx, io_buf_t* iob)
     return 0;
 }
 
+static inline void close_xclient(xclient_ctx_t* ctx)
+{
+    uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
+    if (!ctx->is_udp) {
+        /* 'xclient.t.io' with NULL 'close_cb' MUST be closed after 'io_xserver'. */
+        uv_close((uv_handle_t*) &ctx->xclient.t.io, NULL);
+    } else {
+        /* move 'ctx' node from 'u_xclient_ctxs' to 'xclient_ctxs'. */
+        xlist_paste_back(&xclient.xclient_ctxs,
+            xlist_cut(&xclient_pri.u_xclient_ctxs, xlist_value_iter(ctx)));
+    }
+}
+
 void on_xserver_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 {
     xclient_ctx_t* ctx = stream->data;
@@ -215,15 +224,7 @@ void on_xserver_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
     } else if (nread < 0) {
         xlog_debug("disconnected from proxy server: %s.", uv_err_name((int) nread));
 
-        if (!ctx->is_udp) {
-            uv_close((uv_handle_t*) &ctx->xclient.t.io, on_io_closed);
-        } else {
-            /* move 'ctx' node from 'u_xclient_ctxs' to 'xclient_ctxs'. */
-            xlist_paste_back(&xclient.xclient_ctxs,
-                xlist_cut(&xclient_pri.u_xclient_ctxs, xlist_value_iter(ctx)));
-        }
-        uv_close((uv_handle_t*) stream, on_io_closed);
-
+        close_xclient(ctx);
         /* 'buf->base' may be 'NULL' when 'nread' < 0. */
         if (!buf->base) return;
     }
@@ -242,14 +243,7 @@ static void on_xserver_connected(uv_connect_t* req, int status)
          * as a result, we should check it to avoid calling 'uv_close' twice.
          */
         // if (status != ECANCELED) {
-            if (!ctx->is_udp) {
-                uv_close((uv_handle_t*) &ctx->xclient.t.io, on_io_closed);
-            } else {
-                /* move 'ctx' node from 'u_xclient_ctxs' to 'xclient_ctxs'. */
-                xlist_paste_back(&xclient.xclient_ctxs,
-                    xlist_cut(&xclient_pri.u_xclient_ctxs, xlist_value_iter(ctx)));
-            }
-            uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
+            close_xclient(ctx);
         // }
     } else {
         uv_buf_t wbuf;
@@ -303,10 +297,7 @@ int connect_xserver(xclient_ctx_t* ctx)
     uv_connect_t* req = xlist_alloc_back(&xclient_pri.conn_reqs);
 
     xlog_debug("connecting porxy server [%s]...", addr_to_str(&xclient.xserver_addr));
-
     req->data = ctx;
-    /* 'io_xserver' will be opened, increase refcount. */
-    ++ctx->ref_count;
 
     if (uv_tcp_connect(req, &ctx->io_xserver, &xclient.xserver_addr.x,
             on_xserver_connected) == 0) {
@@ -315,7 +306,6 @@ int connect_xserver(xclient_ctx_t* ctx)
     }
     xlog_warn("connect proxy server failed immediately.");
 
-    uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
     xlist_erase(&xclient_pri.conn_reqs, xlist_value_iter(req));
     return -1;
 }
@@ -394,20 +384,24 @@ void init_connect_command(xclient_ctx_t* ctx,
     ctx->pending_iob = iob;
 }
 
+static void on_udp_packet_id_free(uv_handle_t* handle)
+{
+    addr2id_t* ai = handle->data;
+
+    xlog_debug("free udp packet id %x, %zd left.", ai->ia->id,
+        xhash_size(&xclient_pri.id2addrs) - 1);
+    xhash_remove_data(&xclient_pri.id2addrs, ai->ia);
+    xhash_remove_data(&xclient_pri.addr2ids, ai);
+}
+
 static void on_udp_packet_id_check(uv_timer_t* timer)
 {
     addr2id_t* ai = timer->data;
 
-    if (!ai->alive) {
-        xlog_debug("free udp packet id %x, %zd left.", ai->ia->id,
-            xhash_size(&xclient_pri.id2addrs) - 1);
-        uv_timer_stop(&ai->timer);
-
-        xhash_remove_data(&xclient_pri.id2addrs, ai->ia);
-        xhash_remove_data(&xclient_pri.addr2ids, ai);
-    } else {
+    if (!ai->alive)
+        uv_close((uv_handle_t*) timer, on_udp_packet_id_free);
+    else
         ai->alive = 0;
-    }
 }
 
 u32_t get_udp_packet_id(const struct sockaddr* saddr)
@@ -462,7 +456,6 @@ void send_udp_packet(io_buf_t* iob)
         ctx->xclient.u.pending_pkts[0] = iob;
         ctx->xclient.u.npending = 1;
         ctx->io_xserver.data = ctx;
-        ctx->ref_count = 0;
         ctx->is_udp = 1;
         ctx->xclient_blocked = 0;
         ctx->xserver_blocked = 0;
@@ -476,8 +469,9 @@ void send_udp_packet(io_buf_t* iob)
             /* move 'ctx' node from 'xclient_ctxs' to 'u_xclient_ctxs'. */
             xlist_paste_front(&xclient_pri.u_xclient_ctxs,
                 xlist_cut(&xclient.xclient_ctxs, xlist_value_iter(ctx)));
-
             iter = xlist_value_iter(ctx);
+        } else {
+            uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
         }
     } else {
         ctx = xlist_iter_value(iter); /* 'iter' is always valid */

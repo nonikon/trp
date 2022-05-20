@@ -502,20 +502,36 @@ static void on_tcp_remote_domain_resolved(
     xlist_erase(&remote.addrinfo_reqs, xlist_value_iter(req));
 }
 
+static inline void free_udp_session(udp_session_t* sess)
+{
+    xlog_info("free udp session %x, %zu left.", *(u32_t*) sess->sid,
+        xhash_size(&remote_pri.udp_sessions) - 1);
+
+    xlist_destroy(&sess->rctxs);
+    xhash_destroy(&sess->conns);
+    xhash_remove_data(&remote_pri.udp_sessions, sess);
+}
+
 static void on_udp_conn_closed(uv_handle_t* handle)
 {
     udp_conn_t* conn = handle->data;
+    udp_session_t* sess = conn->parent;
 
     xlog_debug("free udp connection %x, %zu left in current session.", conn->id,
-        xhash_size(&conn->parent->conns) - 1);
+        xhash_size(&sess->conns) - 1);
 
-    xhash_remove_data(&conn->parent->conns, conn);
+    xhash_remove_data(&sess->conns, conn);
+    if (xhash_empty(&sess->conns) && xlist_empty(&sess->rctxs)) {
+        /* there is no connection under this session, free it. */
+        free_udp_session(sess);
+    }
 }
 
 static inline void close_udp_conn(udp_conn_t* conn)
 {
     uv_close((uv_handle_t*) &conn->io, on_udp_conn_closed);
-    uv_timer_stop(&conn->timer);
+    /* 'timer' with NULL 'close_cb' MUST be closed after 'io'. */
+    uv_close((uv_handle_t*) &conn->timer, NULL);
 }
 
 void close_udp_remote(remote_ctx_t* ctx)
@@ -538,12 +554,7 @@ void close_udp_remote(remote_ctx_t* ctx)
 
     if (xlist_empty(&sess->rctxs) && xhash_empty(&sess->conns)) {
         /* there is no connection under this session, free it. */
-        xlog_info("free udp session %x, %zu left.", *(u32_t*) sess->sid,
-            xhash_size(&remote_pri.udp_sessions) - 1);
-
-        xlist_destroy(&sess->rctxs);
-        xhash_destroy(&sess->conns);
-        xhash_remove_data(&remote_pri.udp_sessions, sess);
+        free_udp_session(sess);
     }
 }
 

@@ -36,7 +36,6 @@ typedef struct {
     io_buf_t* pending_iob;  /* dest address (connect command) */
     crypto_ctx_t ectx;
     crypto_ctx_t dctx;
-    u8_t ref_count;         /* increase when 'io_xserver' or 'xclient.t.io' opened, decrease when closed */
     u8_t is_udp;
     u8_t xclient_blocked;
     u8_t xserver_blocked;
