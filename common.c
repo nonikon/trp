@@ -224,26 +224,26 @@ const char* maddr_to_str(const cmd_t* cmd)
 const char* devid_to_str(const u8_t id[DEVICE_ID_SIZE])
 {
     static const char tb[16] = "0123456789ABCDEF";
-    static char buf[DEVICE_ID_SIZE * 2 + 1];
     int i;
 
     for (i = 0; i < DEVICE_ID_SIZE; ++i) {
-        buf[i * 2] = tb[id[i] >> 4];
-        buf[i * 2 + 1] = tb[id[i] & 0x0F];
+        __addrbuf[i * 2] = tb[id[i] >> 4];
+        __addrbuf[i * 2 + 1] = tb[id[i] & 0x0F];
     }
 
-    return buf;
+    return __addrbuf;
 }
 
 int str_to_devid(u8_t id[DEVICE_ID_SIZE], const char* str)
 {
-    int i, c;
+    int i, c, l = (int) strlen(str);
 
-    if (strlen(str) != DEVICE_ID_SIZE * 2)
+    if (!l || l > DEVICE_ID_SIZE * 2)
         return -1;
-    
-    for (i = 0; i < DEVICE_ID_SIZE * 2; ++i) {
 
+    memset(id, 0, DEVICE_ID_SIZE);
+
+    for (i = 0; i < l; ++i) {
         if (str[i] >= '0' && str[i] <= '9')
             c = str[i] - '0';
         else if (str[i] >= 'a' && str[i] <= 'f')
