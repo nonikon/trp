@@ -321,7 +321,7 @@ static void on_connect_cli_remote_timeout(uv_timer_t* timer)
     pending_ctx_t* ctx = xcontainer_of(timer, pending_ctx_t, timer);
 
     xlog_debug("still no available client after %u seconds, close %zu pending peer(s).",
-        CONNECT_CLI_TIMEO / 1000, xlist_size(&ctx->peers));
+        CONNECT_CLI_TIMEO, xlist_size(&ctx->peers));
 
     do {
         peer_ctx_t* x = xlist_cut_front(&ctx->peers);
@@ -333,8 +333,7 @@ static void on_connect_cli_remote_timeout(uv_timer_t* timer)
     }
     while (!xlist_empty(&ctx->peers));
 
-    /* timer is already stopped. */
-    // uv_timer_stop(timer);
+    uv_timer_stop(timer);
 }
 #endif // WITH_CLIREMOTE
 
@@ -939,7 +938,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 
                 if (!uv_is_active((uv_handle_t*) &pdctx->timer)) {
                     uv_timer_start(&pdctx->timer, on_connect_cli_remote_timeout,
-                        CONNECT_CLI_TIMEO, 0);
+                        CONNECT_CLI_TIMEO * 1000, CONNECT_CLI_TIMEO * 1000);
                 }
                 ctx->pending_ctx = pdctx;
             }

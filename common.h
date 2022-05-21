@@ -31,9 +31,9 @@
 #define SESSION_ID_SIZE     16      /* proxy-client session id size */
 #define DEVICE_ID_SIZE      8       /* client device id size */
 
-#define CONNECT_CLI_TIMEO   (10 * 1000) /* ms */
-#define UDPCONN_TIMEO       (40)        /* s */
-#define KEEPIDLE_TIME       (40)        /* s */
+#define CONNECT_CLI_TIMEO   (10)    /* s */
+#define UDPCONN_TIMEO       (40)    /* s */
+#define KEEPIDLE_TIME       (40)    /* s */
 
 typedef unsigned char   u8_t;
 typedef signed char     s8_t;
