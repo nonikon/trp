@@ -987,6 +987,8 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         hints.ai_flags = 0;
 
         req->data = ctx;
+        /* make sure that domain is null-terminated. */
+        cmd->data[MAX_DOMAIN_LEN - 1] = 0;
 
         sprintf(portstr, "%d", ntohs(cmd->port));
         xlog_debug("CONNECT_DOMAIN cmd (%s) from peer, process.", maddr_to_str(cmd));
