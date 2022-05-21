@@ -119,7 +119,8 @@ static int forward_xserver_udp_packets(xclient_ctx_t* ctx, io_buf_t* iob)
         cmd = (udp_cmd_t*) last_iob->buffer;
         need = ntohs(cmd->len) + sizeof(udp_cmd_t);
 
-        if (cmd->tag != CMD_TAG || need > MAX_SOCKBUF_SIZE) {
+        if (cmd->tag != CMD_TAG || need > MAX_SOCKBUF_SIZE
+                || need < cmd->alen + 2 + sizeof(udp_cmd_t)) {
             xlog_warn("error udp packet tag/length (%u/%u).", cmd->tag, need);
 
             ctx->xclient.u.last_iob = NULL;
@@ -140,13 +141,15 @@ static int forward_xserver_udp_packets(xclient_ctx_t* ctx, io_buf_t* iob)
         cmd = (udp_cmd_t*) (iob->buffer + iob->idx);
         need = ntohs(cmd->len) + sizeof(udp_cmd_t);
 
-        if (cmd->tag != CMD_TAG || need > MAX_SOCKBUF_SIZE) {
+        if (cmd->tag != CMD_TAG || need > MAX_SOCKBUF_SIZE
+                || need < cmd->alen + 2 + sizeof(udp_cmd_t)) {
             xlog_warn("error udp packet tag/length (%u/%u).", cmd->tag, need);
             return 0;
         }
-        if (iob->len < need)
+        if (iob->len < need) {
+            /* udp packet need more. */
             break;
-
+        }
         recv_udp_packet(cmd);
 
         iob->idx += need;

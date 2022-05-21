@@ -683,10 +683,6 @@ static void send_udp_packet(remote_ctx_t* ctx, udp_cmd_t* cmd)
 
     switch (cmd->alen) {
     case 4:
-        if (dlen < 4 + 2) {
-            xlog_warn("udp packet datalen < 4 + 2.");
-            return;
-        }
         addr.v4.sin_family = AF_INET;
         memcpy(&addr.v4.sin_addr, cmd->data, 4);
         memcpy(&addr.v4.sin_port, cmd->data + 4, 2);
@@ -695,10 +691,6 @@ static void send_udp_packet(remote_ctx_t* ctx, udp_cmd_t* cmd)
         wbuf.len = dlen - 4 - 2;
         break;
     case 16:
-        if (dlen < 16 + 2) {
-            xlog_warn("udp packet datalen < 16 + 2.");
-            return;
-        }
         addr.v6.sin6_family = AF_INET6;
         memcpy(&addr.v6.sin6_addr, cmd->data, 16);
         memcpy(&addr.v6.sin6_port, cmd->data + 16, 2);
@@ -785,7 +777,8 @@ int forward_peer_udp_packets(remote_ctx_t* ctx, io_buf_t* iob)
         cmd = (udp_cmd_t*) last_iob->buffer;
         need = ntohs(cmd->len) + sizeof(udp_cmd_t);
 
-        if (cmd->tag != CMD_TAG || need > MAX_SOCKBUF_SIZE) {
+        if (cmd->tag != CMD_TAG || need > MAX_SOCKBUF_SIZE
+                || need < cmd->alen + 2 + sizeof(udp_cmd_t)) {
             xlog_warn("error udp packet tag/length (%u/%u).", cmd->tag, need);
 
             ctx->u.last_iob = NULL;
@@ -806,13 +799,15 @@ int forward_peer_udp_packets(remote_ctx_t* ctx, io_buf_t* iob)
         cmd = (udp_cmd_t*) (iob->buffer + iob->idx);
         need = ntohs(cmd->len) + sizeof(udp_cmd_t);
 
-        if (cmd->tag != CMD_TAG || need > MAX_SOCKBUF_SIZE) {
+        if (cmd->tag != CMD_TAG || need > MAX_SOCKBUF_SIZE
+                || need < cmd->alen + 2 + sizeof(udp_cmd_t)) {
             xlog_warn("error udp packet tag/length (%u/%u).", cmd->tag, need);
             return 0;
         }
-        if (iob->len < need)
+        if (iob->len < need) {
+            /* udp packet need more. */
             break;
-
+        }
         send_udp_packet(ctx, cmd);
 
         iob->idx += need;
