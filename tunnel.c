@@ -27,6 +27,7 @@
  */
 
 static union { cmd_t m; u8_t _[CMD_MAX_SIZE]; } tunnel_maddr;
+static union { uv_tcp_t t; uv_udp_t u; } io_tserver; /* tunnel server listen io */
 
 /* override */ void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 {
@@ -144,9 +145,82 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
     }
 }
 
+static void on_udp_tclient_rbuf_alloc(uv_handle_t* handle, size_t sg_size, uv_buf_t* buf)
+{
+    io_buf_t* iob = xlist_alloc_back(&xclient.io_buffers);
+
+    /* leave 'sizeof(udp_cmd_t) + 2 + tunnel_maddr.m.len' bytes space at the beginnig.  */
+    buf->base = iob->buffer + sizeof(udp_cmd_t) + 2 + tunnel_maddr.m.len;
+    buf->len = MAX_SOCKBUF_SIZE - sizeof(udp_cmd_t) - 2 - tunnel_maddr.m.len;
+}
+
+static void on_udp_tclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf,
+        const struct sockaddr* addr, unsigned int flags)
+{
+    io_buf_t* iob = xcontainer_of(buf->base - sizeof(udp_cmd_t) - 2 - tunnel_maddr.m.len, 
+                        io_buf_t, buffer);
+
+    if (nread < 0) {
+        xlog_warn("udp tunnel client read failed: %s.", uv_err_name((int) nread));
+
+    } else if (!addr) {
+        /* 'nread' == 0 and 'addr' == NULL means no more data. */
+        xlog_debug("udp tunnel client read nothing.");
+
+    } else if (flags & UV_UDP_PARTIAL) {
+        xlog_warn("tunnel client udp packet too large (> %u), drop it.", buf->len);
+
+    } else {
+        udp_cmd_t* cmd = (udp_cmd_t*) iob->buffer;
+
+        cmd->tag = CMD_TAG;
+        cmd->id = get_udp_packet_id(addr);
+
+        switch (tunnel_maddr.m.len) {
+        case 4:
+            cmd->alen = 4;
+            cmd->len = htons(nread + 4 + 2);
+            memcpy(cmd->data, tunnel_maddr.m.data, 4);
+            memcpy(cmd->data + 4, &tunnel_maddr.m.port, 2);
+            iob->len = nread + 4 + 2 + sizeof(udp_cmd_t);
+            break;
+        default: /* 16 */
+            cmd->alen = 16;
+            cmd->len = htons(nread + 16 + 2);
+            memcpy(cmd->data, tunnel_maddr.m.data, 16);
+            memcpy(cmd->data + 16, &tunnel_maddr.m.port, 2);
+            iob->len = nread + 16 + 2 + sizeof(udp_cmd_t);
+            break;
+        }
+
+        xlog_debug("send udp packet to proxy server, %u bytes, id %x.",
+            iob->len, cmd->id);
+        send_udp_packet(iob);
+        /* 'iob' free later. */
+        return;
+    }
+
+    xlist_erase(&xclient.io_buffers, xlist_value_iter(iob));
+}
+
 /* override */ void recv_udp_packet(udp_cmd_t* cmd)
 {
-    // TODO
+    const struct sockaddr* addr = get_udp_packet_saddr(cmd->id);
+    uv_buf_t wbuf;
+
+    if (!addr) {
+        xlog_warn("udp packet id (%x) not found.", cmd->id);
+        return;
+    }
+    wbuf.base = (char*) cmd + cmd->alen + 2 + sizeof(udp_cmd_t);
+    wbuf.len = ntohs(cmd->len) - cmd->alen - 2;
+
+    xlog_debug("send udp packet to tunnel client [%s], %u bytes.",
+        addr_to_str(addr), wbuf.len);
+
+    if (uv_udp_try_send(&io_tserver.u, &wbuf, 1, addr) < 0) {
+        xlog_debug("send udp packet to tunnel client failed.");
+    }
 }
 
 static int init_tunnel_maddr(const char* addrstr)
@@ -207,6 +281,7 @@ static void usage(const char* s)
     fprintf(stderr, "  -M <METHOD>   crypto method with client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
     fprintf(stderr, "  -k <password> crypto password with proxy server. (default: none)\n");
     fprintf(stderr, "  -K <PASSWORD> crypto password with client. (default: none)\n");
+    fprintf(stderr, "  -u <number>   set the number of UDP-over-TCP connection pools and disable TCP tunnel mode. (default: 0)\n");
 #ifdef _WIN32
     fprintf(stderr, "  -L <path>     write output to file. (default: write to STDOUT)\n");
 #else
@@ -230,7 +305,6 @@ static void usage(const char* s)
 
 int main(int argc, char** argv)
 {
-    uv_tcp_t io_tserver; /* tunnel server listen io */
     union { struct sockaddr x; struct sockaddr_in6 d; } taddr;
     const char* xserver_str = "127.0.0.1";
     const char* tserver_str = "127.0.0.1";
@@ -244,6 +318,7 @@ int main(int argc, char** argv)
 #ifndef _WIN32
     int nofile = 0;
 #endif
+    int nconnect = 0;
     int verbose = 0;
     int error, i;
 
@@ -277,6 +352,7 @@ int main(int argc, char** argv)
         case 'M':     methodx = atoi(arg); continue;
         case 'k':      passwd = arg; continue;
         case 'K':     passwdx = arg; continue;
+        case 'u':    nconnect = atoi(arg); continue;
 #ifndef _WIN32
         case 'n':      nofile = atoi(arg); continue;
 #endif
@@ -318,6 +394,11 @@ int main(int argc, char** argv)
 
     xclient_private_init();
     xclient.loop = uv_default_loop();
+
+    if (nconnect < 0 || nconnect > 1024) {
+        xlog_warn("invalid connection pool size [%d], reset to [1].", nconnect);
+        nconnect = 1;
+    }
 
     if (devid_str && str_to_devid(xclient.device_id, devid_str) != 0) {
         xlog_error("invalid device id string [%s].", devid_str);
@@ -371,9 +452,13 @@ int main(int argc, char** argv)
 
     if (!tunnel_str) {
 #ifdef __linux__
-        xlog_info("enter transparent proxy mode.");
+        if (nconnect) {
+            xlog_error("udp transparent proxy mode is not supported currently.");
+            goto end;
+        }
+        xlog_info("enter tcp transparent proxy mode.");
 #else
-        xlog_error("tunnel address must be specified on !linux.");
+        xlog_error("tunnel address (-t) must be specified on !linux.");
         goto end;
 #endif
     } else if (init_tunnel_maddr(tunnel_str) != 0) {
@@ -383,12 +468,33 @@ int main(int argc, char** argv)
         xlog_info("tunnel to [%s].", maddr_to_str(&tunnel_maddr.m));
     }
 
-    uv_tcp_init(xclient.loop, &io_tserver);
-    uv_tcp_bind(&io_tserver, &taddr.x, 0);
+    if (!nconnect) {
+        /* TCP mode. */
+        xlog_info("enter tcp tunnel mode.");
+        uv_tcp_init(xclient.loop, &io_tserver.t);
+        uv_tcp_bind(&io_tserver.t, &taddr.x, 0);
 
-    error = uv_listen((uv_stream_t*) &io_tserver, LISTEN_BACKLOG, on_tclient_connect);
-    if (error) {
-        xlog_error("uv_listen [%s] failed: %s.", addr_to_str(&taddr), uv_strerror(error));
+        error = uv_listen((uv_stream_t*) &io_tserver.t, LISTEN_BACKLOG, on_tclient_connect);
+        if (error) {
+            xlog_error("uv_listen [%s] failed: %s.", addr_to_str(&taddr), uv_strerror(error));
+            goto end;
+        }
+    } else if (tunnel_maddr.m.cmd != CMD_CONNECT_DOMAIN) {
+        /* UDP mode. */
+        xlog_info("enter udp tunnel mode.");
+        uv_udp_init(xclient.loop, &io_tserver.u);
+        uv_udp_bind(&io_tserver.u, &taddr.x, 0);
+
+        error = uv_udp_recv_start(&io_tserver.u, on_udp_tclient_rbuf_alloc,
+                    on_udp_tclient_read);
+        if (error) {
+            xlog_error("uv_udp_recv_start [%s] failed: %s.", addr_to_str(&taddr),
+                uv_strerror(error));
+            goto end;
+        }
+        xclient.n_uconnect = nconnect;
+    } else {
+        xlog_error("udp tunnel to domain is not supported.");
         goto end;
     }
 
