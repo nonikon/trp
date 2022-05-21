@@ -386,6 +386,8 @@ static void on_sclient_connect(uv_stream_t* stream, int status)
         xlog_debug("socks client connected.");
         uv_tcp_init(xclient.loop, &ctx->io_xserver);
         uv_read_start((uv_stream_t*) &ctx->xclient.t.io, on_iobuf_alloc, on_xclient_read);
+        /* keepalive with socks client. */
+        uv_tcp_keepalive(&ctx->xclient.t.io, 1, KEEPIDLE_TIME);
     } else {
         xlog_error("uv_accept failed.");
         uv_close((uv_handle_t*) &ctx->xclient.t.io, on_io_closed);

@@ -138,6 +138,9 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
             uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
             /* 'xclient.t.io' with NULL 'close_cb' MUST be closed after 'io_xserver'. */
             uv_close((uv_handle_t*) &ctx->xclient.t.io, NULL);
+        } else {
+            /* keepalive with tunnel client. */
+            uv_tcp_keepalive(&ctx->xclient.t.io, 1, KEEPIDLE_TIME);
         }
     } else {
         xlog_error("uv_accept failed.");
