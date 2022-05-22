@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 nonikon@qq.com.
+ * Copyright (C) 2021-2022 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -18,7 +18,7 @@
 #endif
 
 #ifndef HTTP_SERVER_TIMEOUT
-#define HTTP_SERVER_TIMEOUT     0 // (10 * 1000)  /* (ms) */
+#define HTTP_SERVER_TIMEOUT     0   // (10 * 1000)  /* (ms) */
 #endif
 
 #if HTTP_SERVER_SAVE_HDR
@@ -83,10 +83,8 @@ static void buf_add_string(char* buf, unsigned* len, const char* src)
 
 static void handle_request_index(http_req_t* req, http_resp_t* resp)
 {
-    buf_add_string(resp->headers, &resp->header_len,
-        "Content-Type: text/plain\r\n");
-    buf_add_string(resp->body, &resp->body_len,
-        "Hello World!");
+    buf_add_string(resp->headers, &resp->header_len, "Content-Type: text/plain\r\n");
+    buf_add_string(resp->body, &resp->body_len, "Hello World!");
 }
 
 static void send_page(http_req_t* req, void (*handle_request)(http_req_t*, http_resp_t*))
@@ -114,7 +112,6 @@ static void send_page(http_req_t* req, void (*handle_request)(http_req_t*, http_
     vbuf[1].base = resp->body;
     vbuf[1].len  = resp->body_len;
 
-    /* no need check success or not. */
     uv_write(&resp->wreq, (uv_stream_t*) &req->io, vbuf, 2, on_write);
 }
 
@@ -146,7 +143,6 @@ static void send_error_page(http_req_t* req, int code, const char* reason)
     vbuf[1].base = resp->body;
     vbuf[1].len  = resp->body_len;
 
-    /* no need check success or not. */
     uv_write(&resp->wreq, (uv_stream_t*) &req->io, vbuf, 2, on_write);
 }
 
@@ -206,6 +202,21 @@ static int on_http_value(http_parser* parser, const char* at, size_t length)
     }
     return 0;
 }
+
+static void dump_headers(http_req_t* req)
+{
+    xlist_iter_t i = xlist_begin(&req->headers);
+
+    while (i != xlist_end(&req->headers)) {
+        http_hdr_t* h = xlist_iter_value(i);
+
+        h->field[h->field_len] = '\0';
+        h->value[h->value_len] = '\0';
+        xlog_debug("%s: %s", h->field, h->value);
+
+        i = xlist_iter_next(i);
+    }
+}
 #endif // HTTP_SERVER_SAVE_HDR
 
 static int on_http_body(http_parser* parser, const char* at, size_t length)
@@ -214,6 +225,9 @@ static int on_http_body(http_parser* parser, const char* at, size_t length)
 
     if (!req->body)
         req->body = (char*) at;
+    else if (req->body + req->body_len != at)
+        memmove(req->body + req->body_len, at, length); /* chunk body */
+
     req->body_len += (unsigned) length;
     return 0;
 }
@@ -247,13 +261,22 @@ static void on_closed(uv_handle_t* handle)
 {
     http_req_t* req = handle->data;
 
-#if HTTP_SERVER_TIMEOUT > 0
-    uv_timer_stop(&req->timer);
-#endif
 #if HTTP_SERVER_SAVE_HDR
     xlist_destroy(&req->headers);
 #endif
     xlist_erase(&requests, xlist_value_iter(req));
+
+    xlog_debug("%zu requests and %zu responses left.",
+        xlist_size(&requests), xlist_size(&responses));
+}
+
+static void inline close_connection(http_req_t* req)
+{
+    uv_close((uv_handle_t*) &req->io, on_closed);
+#if HTTP_SERVER_TIMEOUT > 0
+    /* 'timer' with NULL 'close_cb' MUST be closed after 'client'. */
+    uv_close((uv_handle_t*) &req->timer, NULL);
+#endif
 }
 
 static void on_read(uv_stream_t* client, ssize_t nread, const uv_buf_t* buf)
@@ -262,39 +285,38 @@ static void on_read(uv_stream_t* client, ssize_t nread, const uv_buf_t* buf)
 
     if (nread > 0) {
         req->buf_len += (unsigned) nread;
+        xlog_debug("%zd bytes from client.", nread);
 
         if (req->buf_len < sizeof(req->buf)) {
-            http_parser_execute(&req->parser,
-                &g_parser_settings, buf->base, nread);
-
+            http_parser_execute(&req->parser, &g_parser_settings, buf->base, nread);
+#if HTTP_SERVER_TIMEOUT > 0
+            uv_timer_again(&req->timer);
+#endif
             if (HTTP_PARSER_ERRNO(&req->parser) == HPE_PAUSED) {
                 req->url[req->url_len] = '\0';
-
                 xlog_debug("request url [%s].", req->url);
-
+#if HTTP_SERVER_SAVE_HDR
+                dump_headers(req);
+#endif
                 if (!strcmp(req->url, "/")) {
                     send_page(req, handle_request_index);
-                } /* else if (!strcmp(req->url, "/server/stop")) {
-                    send_page(req, handle_request_stop_server);
-                }  */else {
+                } else {
                     send_error_page(req, 404, "Not Found");
                 }
-                /* close connection when "Connection: Close"? TODO. */
                 /* uv_timer_stop() and uv_read_stop() when download file, TODO */
 
-                http_parser_pause(&req->parser, 0);
-                /* ignore the following data. */
-                req->buf_len = 0;
-
+                if (http_should_keep_alive(&req->parser)) {
+                    http_parser_pause(&req->parser, 0);
+                    req->buf_len = 0; /* ignore the following data. */
+                } else {
+                    close_connection(req);
+                }
             } else if (HTTP_PARSER_ERRNO(&req->parser) != HPE_OK) {
                 send_error_page(req, 400, "Bad Request");
                 /* unset parser error state. */
                 http_parser_init(&req->parser, HTTP_REQUEST);
                 req->buf_len = 0;
             }
-#if HTTP_SERVER_TIMEOUT > 0
-            uv_timer_again(&req->timer);
-#endif
         } else {
             send_error_page(req, 413, "Payload Too Large");
             /* reset parser state. */
@@ -303,10 +325,8 @@ static void on_read(uv_stream_t* client, ssize_t nread, const uv_buf_t* buf)
         }
 
     } else if (nread < 0) {
-        xlog_debug("an client disconnected: %s.",
-            uv_err_name((int) nread));
-
-        uv_close((uv_handle_t*) client, on_closed);
+        xlog_debug("client disconnected: %s.", uv_err_name((int) nread));
+        close_connection(req);
     }
 
     /* do nothing when nread == 0. */
@@ -318,7 +338,7 @@ static void on_timeout(uv_timer_t* timer)
     http_req_t* req = timer->data;
 
     xlog_debug("request timeout, close.");
-    uv_close((uv_handle_t*) &req->io, on_closed);
+    close_connection(req);
 }
 #endif
 
@@ -330,35 +350,28 @@ static void on_connect(uv_stream_t* server, int status)
         xlog_error("new connection error: %s.", uv_strerror(status));
         return;
     }
-
     req = xlist_alloc_back(&requests);
 
     uv_tcp_init(server->data, &req->io);
-#if HTTP_SERVER_TIMEOUT > 0
-    uv_timer_init(server->data, &req->timer);
-#endif
     http_parser_init(&req->parser, HTTP_REQUEST);
 #if HTTP_SERVER_SAVE_HDR
     xlist_init(&req->headers, sizeof(http_hdr_t), NULL);
 #endif
     req->io.data = req;
-#if HTTP_SERVER_TIMEOUT > 0
-    req->timer.data = req;
-#endif
     req->parser.data = req;
     req->buf_len = 0;
 
     if (uv_accept(server, (uv_stream_t*) &req->io) == 0) {
-        xlog_debug("an http client connected.");
-
+        xlog_debug("http client connected.");
         uv_read_start((uv_stream_t*) &req->io, on_read_alloc, on_read);
 #if HTTP_SERVER_TIMEOUT > 0
-        uv_timer_start(&req->timer, on_timeout,
-            HTTP_SERVER_TIMEOUT, HTTP_SERVER_TIMEOUT);
+        req->timer.data = req;
+        uv_timer_init(server->data, &req->timer);
+        uv_timer_start(&req->timer, on_timeout, HTTP_SERVER_TIMEOUT,
+            HTTP_SERVER_TIMEOUT);
 #endif
     } else {
-        xlog_warn("uv_accept failed.");
-
+        xlog_error("uv_accept failed.");
         uv_close((uv_handle_t*) &req->io, on_closed);
     }
 }
@@ -372,23 +385,20 @@ int http_server_start(uv_loop_t* loop, const char* str)
         xlog_error("invalid control server address [%s].", str);
         return -1;
     }
-
     uv_tcp_init(loop, &io_server);
     uv_tcp_bind(&io_server, &addr.x, 0);
 
-    io_server.data = loop;
-
-    error = uv_listen((uv_stream_t*) &io_server, 1024, on_connect);
+    error = uv_listen((uv_stream_t*) &io_server, LISTEN_BACKLOG, on_connect);
     if (error) {
-        xlog_error("uv_listen [%s] failed: %s.",
-            str, uv_strerror(error));
+        xlog_error("uv_listen [%s] failed: %s.", addr_to_str(&addr), uv_strerror(error));
         uv_close((uv_handle_t*) &io_server, NULL);
         return -1;
     }
+    io_server.data = loop;
 
     xlist_init(&requests, sizeof(http_req_t), NULL);
     xlist_init(&responses, sizeof(http_resp_t), NULL);
 
-    xlog_info("control server (http) listen at [%s].", addr_to_str(&addr));
+    xlog_info("control server (HTTP) listen at [%s].", addr_to_str(&addr));
     return 0;
 }
