@@ -170,8 +170,6 @@ const char* addr_to_str(const void* addr)
         const struct sockaddr_dm*  dm;
     } u = { addr };
 
-    __addrbuf[0] = 0;
-
     switch (u.dx->sa_family) {
     case AF_INET:
         uv_inet_ntop(AF_INET, &u.d4->sin_addr, __addrbuf, sizeof(__addrbuf));
@@ -186,6 +184,10 @@ const char* addr_to_str(const void* addr)
     case 0: /* domain */
         sprintf(__addrbuf, "%s:%d", u.dm->sdm_addr, ntohs(u.dm->sdm_port));
         break;
+
+    default:
+        strcpy(__addrbuf, "unkown-addr-type");
+        break;
     }
 
     return __addrbuf;
@@ -193,8 +195,6 @@ const char* addr_to_str(const void* addr)
 
 const char* maddr_to_str(const cmd_t* cmd)
 {
-    __addrbuf[0] = 0;
-
     switch (cmd->cmd) {
     case CMD_CONNECT_IPV4:
         uv_inet_ntop(AF_INET, &cmd->data, __addrbuf, sizeof(__addrbuf));
@@ -215,7 +215,12 @@ const char* maddr_to_str(const cmd_t* cmd)
         break;
 
     case CMD_CONNECT_CLIENT:
+    case CMD_REPORT_DEVID:
         return devid_to_str(cmd->data);
+
+    default:
+        strcpy(__addrbuf, "unkown-cmd-type");
+        break;
     }
 
     return __addrbuf;
@@ -231,6 +236,7 @@ const char* devid_to_str(const u8_t id[DEVICE_ID_SIZE])
         __addrbuf[i * 2 + 1] = tb[id[i] & 0x0F];
     }
 
+    __addrbuf[DEVICE_ID_SIZE * 2] = 0;
     return __addrbuf;
 }
 
