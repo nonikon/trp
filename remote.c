@@ -320,7 +320,7 @@ static void on_connect_cli_remote_timeout(uv_timer_t* timer)
 {
     pending_ctx_t* ctx = xcontainer_of(timer, pending_ctx_t, timer);
 
-    xlog_debug("still no available client after %u seconds, close %zu pending peer(s).",
+    xlog_info("still no available client after %u seconds, close %zu pending peer(s).",
         CONNECT_CLI_TIMEO, xlist_size(&ctx->peers));
 
     do {
@@ -579,11 +579,6 @@ static void on_udp_remote_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf,
     udp_conn_t* conn = io->data;
     io_buf_t* iob = xcontainer_of(buf->base - sizeof(udp_cmd_t) - 2 - conn->alen,
                         io_buf_t, buffer);
-    union {
-        const struct sockaddr*     vx;
-        const struct sockaddr_in*  v4;
-        const struct sockaddr_in6* v6;
-    } _ =  { addr };
 
     if (nread < 0) {
         xlog_warn("udp remote read failed: %s.", uv_err_name((int) nread));
@@ -611,6 +606,11 @@ static void on_udp_remote_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf,
             xlog_debug("drop this udp packet: rctx %p.", rctx);
 
         } else {
+            union {
+                const struct sockaddr*     vx;
+                const struct sockaddr_in*  v4;
+                const struct sockaddr_in6* v6;
+            } _ =  { addr };
             udp_cmd_t* cmd = (udp_cmd_t*) iob->buffer;
             uv_buf_t wbuf;
 
@@ -624,6 +624,7 @@ static void on_udp_remote_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf,
                 cmd->len = htons(4 + 2 + nread);
                 memcpy(cmd->data, &_.v4->sin_addr, 4);
                 memcpy(cmd->data + 4, &_.v4->sin_port, 2);
+
                 wbuf.len = sizeof(udp_cmd_t) + 4 + 2 + nread;
                 break;
             default: /* AF_INET6 */
@@ -631,13 +632,15 @@ static void on_udp_remote_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf,
                 cmd->len = htons(16 + 2 + nread);
                 memcpy(cmd->data, &_.v6->sin6_addr, 16);
                 memcpy(cmd->data + 16, &_.v6->sin6_port, 2);
+
                 wbuf.len = sizeof(udp_cmd_t) + 16 + 2 + nread;
                 break;
             }
             remote.crypto.encrypt(&rctx->u.edctx, (u8_t*) wbuf.base, wbuf.len);
 
             iob->wreq.data = rctx->u.peer;
-            uv_write(&iob->wreq, (uv_stream_t*) &rctx->u.peer->io, &wbuf, 1, on_peer_write);
+            uv_write(&iob->wreq, (uv_stream_t*) &rctx->u.peer->io,
+                &wbuf, 1, on_peer_write);
             /* 'iob' free later. */
             return;
         }
@@ -663,7 +666,7 @@ static void on_udp_remote_rbuf_alloc(uv_handle_t* handle, size_t sg_size, uv_buf
     io_buf_t* iob = xlist_alloc_back(&remote.io_buffers);
     udp_conn_t* conn = handle->data;
 
-    /* leave 'sizeof(udp_cmd_t) + conn->alen + 2' bytes space at the beginnig.  */
+    /* leave 'sizeof(udp_cmd_t) + conn->alen + 2' bytes space at the beginning. */
     buf->base = iob->buffer + conn->alen + 2 + sizeof(udp_cmd_t);
     buf->len = MAX_SOCKBUF_SIZE - sizeof(udp_cmd_t) - 2 - conn->alen;
 }
@@ -675,10 +678,9 @@ static void send_udp_packet(remote_ctx_t* ctx, udp_cmd_t* cmd)
         struct sockaddr_in  v4;
         struct sockaddr_in6 v6;
     } addr;
+    int err;
     uv_buf_t wbuf;
     udp_conn_t* conn;
-    u32_t dlen = ntohs(cmd->len);
-    int err;
 
     switch (cmd->alen) {
     case 4:
@@ -687,7 +689,7 @@ static void send_udp_packet(remote_ctx_t* ctx, udp_cmd_t* cmd)
         memcpy(&addr.v4.sin_port, cmd->data + 4, 2);
 
         wbuf.base = (char*) (cmd->data + 4 + 2);
-        wbuf.len = dlen - 4 - 2;
+        wbuf.len = ntohs(cmd->len) - 4 - 2;
         break;
     case 16:
         addr.v6.sin6_family = AF_INET6;
@@ -695,7 +697,7 @@ static void send_udp_packet(remote_ctx_t* ctx, udp_cmd_t* cmd)
         memcpy(&addr.v6.sin6_port, cmd->data + 16, 2);
 
         wbuf.base = (char*) (cmd->data + 16 + 2);
-        wbuf.len = dlen - 16 - 2;
+        wbuf.len = ntohs(cmd->len) - 16 - 2;
         break;
     default:
         xlog_warn("error udp packet addrlen (%u).", cmd->alen);
