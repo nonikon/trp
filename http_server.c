@@ -4,31 +4,18 @@
  */
 
 #include <stdlib.h>
-#include <stdarg.h>
 #include <string.h>
-#include <uv.h>
 
+#include "http_server.h"
 #include "http_parser.h"
 #include "common.h"
-#include "xlog.h"
 #include "xlist.h"
+#include "xlog.h"
 
-#ifndef HTTP_SERVER_SAVE_HDR
-#define HTTP_SERVER_SAVE_HDR    0   /* save http request header or not */
-#endif
-
-#ifndef HTTP_SERVER_TIMEOUT
-#define HTTP_SERVER_TIMEOUT     0   // (10 * 1000)  /* (ms) */
-#endif
-
-#if HTTP_SERVER_SAVE_HDR
 typedef struct {
-    char* field;
-    char* value;
-    unsigned field_len;
-    unsigned value_len;
-} http_hdr_t;
-#endif
+    uv_write_t wreq;
+    http_response_t pub;
+} http_resp_pri_t;
 
 typedef struct {
     uv_tcp_t io;
@@ -36,96 +23,60 @@ typedef struct {
     uv_timer_t timer;
 #endif
     http_parser parser;
-#if HTTP_SERVER_SAVE_HDR
-    xlist_t headers;    /* http_hdr_t */
-#endif
-    char* url;
-    char* body;
-    unsigned url_len;
-    unsigned body_len;
-    char buf[4096];     /* store HTTP request headers and body */
+    http_request_t pub;
     unsigned buf_len;
-} http_req_t;
+    char buf[4096];     /* store HTTP request headers and body */
+} http_req_pri_t;
 
-typedef struct {
-    uv_write_t wreq;    /* write request for 'uv_write()' */
-    char headers[1024]; /* store HTTP response headers */
-    char body[3072];    /* store HTTP response body */
-    unsigned header_len;
-    unsigned body_len;
-} http_resp_t;
-
-static uv_tcp_t io_server;
-static xlist_t requests;  /* http_req_t */
-static xlist_t responses; /* http_resp_t */
+static uv_tcp_t __ioserver;
+static const http_handler_t* __handlers;
+static xlist_t __requests;  /* http_req_pri_t */
+static xlist_t __responses; /* http_resp_pri_t */
 
 static void on_write(uv_write_t* req, int status)
 {
-    xlist_erase(&responses, xlist_value_iter(req->data));
+    xlist_erase(&__responses, xlist_value_iter(req->data));
 }
 
-static void buf_add_printf(char* buf, unsigned* len, const char* fmt, ...)
+static void send_page(http_req_pri_t* req, const http_handler_t* handler)
 {
-    va_list arg;
-
-    va_start(arg, fmt);
-    *len += vsprintf(buf + *len, fmt, arg);
-    va_end(arg);
-}
-
-static void buf_add_string(char* buf, unsigned* len, const char* src)
-{
-    unsigned l = (unsigned) strlen(src);
-
-    memcpy(buf + *len, src, l);
-    *len += l;
-}
-
-static void handle_request_index(http_req_t* req, http_resp_t* resp)
-{
-    buf_add_string(resp->headers, &resp->header_len, "Content-Type: text/plain\r\n");
-    buf_add_string(resp->body, &resp->body_len, "Hello World!");
-}
-
-static void send_page(http_req_t* req, void (*handle_request)(http_req_t*, http_resp_t*))
-{
-    http_resp_t* resp = xlist_alloc_back(&responses);
     uv_buf_t vbuf[2];
+    http_resp_pri_t* resp = xlist_alloc_back(&__responses);
 
     resp->wreq.data = resp;
-    resp->body_len = 0;
-    resp->header_len = 0;
+    resp->pub.body_len = 0;
+    resp->pub.header_len = 0;
 
-    buf_add_printf(resp->headers, &resp->header_len,
+    http_buf_add_printf(resp->pub.headers, &resp->pub.header_len,
             "HTTP/%d.%d 200 OK\r\n"
             "Server: uv-server/1.0\r\n"
             "Connection: %s\r\n",
                 req->parser.http_major,
                 req->parser.http_minor,
                 http_should_keep_alive(&req->parser) ? "keep-alive" : "close");
-    handle_request(req, resp);
-    buf_add_printf(resp->headers, &resp->header_len,
-        "Content-Length: %d\r\n\r\n", resp->body_len);
+    handler->cb(&req->pub, &resp->pub);
+    http_buf_add_printf(resp->pub.headers, &resp->pub.header_len,
+        "Content-Length: %d\r\n\r\n", resp->pub.body_len);
 
-    vbuf[0].base = resp->headers;
-    vbuf[0].len  = resp->header_len;
-    vbuf[1].base = resp->body;
-    vbuf[1].len  = resp->body_len;
+    vbuf[0].base = resp->pub.headers;
+    vbuf[0].len  = resp->pub.header_len;
+    vbuf[1].base = resp->pub.body;
+    vbuf[1].len  = resp->pub.body_len;
 
     uv_write(&resp->wreq, (uv_stream_t*) &req->io, vbuf, 2, on_write);
 }
 
-static void send_error_page(http_req_t* req, int code, const char* reason)
+static void send_error_page(http_req_pri_t* req, int code, const char* reason)
 {
     uv_buf_t vbuf[2];
-    http_resp_t* resp = xlist_alloc_back(&responses);
+    http_resp_pri_t* resp = xlist_alloc_back(&__responses);
 
     resp->wreq.data = resp;
-    resp->body_len = 0;
-    resp->header_len = 0;
+    resp->pub.body_len = 0;
+    resp->pub.header_len = 0;
 
-    buf_add_string(resp->body, &resp->body_len, reason);
-    buf_add_printf(resp->headers, &resp->header_len,
+    http_buf_add_string(resp->pub.body, &resp->pub.body_len, reason);
+    http_buf_add_printf(resp->pub.headers, &resp->pub.header_len,
             "HTTP/%d.%d %d %s\r\n"
             "Server: uv-server/1.0\r\n"
             "Connection: %s\r\n"
@@ -136,49 +87,49 @@ static void send_error_page(http_req_t* req, int code, const char* reason)
                 code,
                 reason,
                 http_should_keep_alive(&req->parser) ? "keep-alive" : "close",
-                resp->body_len);
+                resp->pub.body_len);
 
-    vbuf[0].base = resp->headers;
-    vbuf[0].len  = resp->header_len;
-    vbuf[1].base = resp->body;
-    vbuf[1].len  = resp->body_len;
+    vbuf[0].base = resp->pub.headers;
+    vbuf[0].len  = resp->pub.header_len;
+    vbuf[1].base = resp->pub.body;
+    vbuf[1].len  = resp->pub.body_len;
 
     uv_write(&resp->wreq, (uv_stream_t*) &req->io, vbuf, 2, on_write);
 }
 
 static int on_http_begin(http_parser* parser)
 {
-    http_req_t* req = parser->data;
+    http_req_pri_t* req = parser->data;
 
-    req->url = NULL;
-    req->body = NULL;
-    req->url_len = 0;
-    req->body_len = 0;
+    req->pub.url = NULL;
+    req->pub.body = NULL;
+    req->pub.url_len = 0;
+    req->pub.body_len = 0;
 
 #if HTTP_SERVER_SAVE_HDR
-    xlist_clear(&req->headers);
+    xlist_clear(&req->pub.headers);
 #endif
     return 0;
 }
 
 static int on_http_url(http_parser* parser, const char* at, size_t length)
 {
-    http_req_t* req = parser->data;
+    http_req_pri_t* req = parser->data;
 
-    if (!req->url)
-        req->url = (char*) at;
-    req->url_len += (unsigned) length;
+    if (!req->pub.url)
+        req->pub.url = (char*) at;
+    req->pub.url_len += (unsigned) length;
     return 0;
 }
 
 #if HTTP_SERVER_SAVE_HDR
 static int on_http_field(http_parser* parser, const char* at, size_t length)
 {
-    http_req_t* req = parser->data;
-    http_hdr_t* hdr = xlist_back(&req->headers);
+    http_req_pri_t* req = parser->data;
+    http_header_t* hdr = xlist_back(&req->pub.headers);
 
-    if (xlist_empty(&req->headers) || hdr->value != NULL) {
-        hdr = xlist_alloc_back(&req->headers);
+    if (xlist_empty(&req->pub.headers) || hdr->value != NULL) {
+        hdr = xlist_alloc_back(&req->pub.headers);
         hdr->field = (char*) at;
         hdr->value = NULL;
         hdr->field_len = (unsigned) length;
@@ -190,8 +141,8 @@ static int on_http_field(http_parser* parser, const char* at, size_t length)
 
 static int on_http_value(http_parser* parser, const char* at, size_t length)
 {
-    http_req_t* req = parser->data;
-    http_hdr_t* hdr = xlist_back(&req->headers);
+    http_req_pri_t* req = parser->data;
+    http_header_t* hdr = xlist_back(&req->pub.headers);
 
     /* no need to check whether 'hdr' is valid. */
     if (!hdr->value) {
@@ -203,12 +154,12 @@ static int on_http_value(http_parser* parser, const char* at, size_t length)
     return 0;
 }
 
-static void dump_headers(http_req_t* req)
+static void dump_headers(http_req_pri_t* req)
 {
-    xlist_iter_t i = xlist_begin(&req->headers);
+    xlist_iter_t i = xlist_begin(&req->pub.headers);
 
-    while (i != xlist_end(&req->headers)) {
-        http_hdr_t* h = xlist_iter_value(i);
+    while (i != xlist_end(&req->pub.headers)) {
+        http_header_t* h = xlist_iter_value(i);
 
         h->field[h->field_len] = '\0';
         h->value[h->value_len] = '\0';
@@ -221,14 +172,14 @@ static void dump_headers(http_req_t* req)
 
 static int on_http_body(http_parser* parser, const char* at, size_t length)
 {
-    http_req_t* req = parser->data;
+    http_req_pri_t* req = parser->data;
 
-    if (!req->body)
-        req->body = (char*) at;
-    else if (req->body + req->body_len != at)
-        memmove(req->body + req->body_len, at, length); /* chunk body */
+    if (!req->pub.body)
+        req->pub.body = (char*) at;
+    else if (req->pub.body + req->pub.body_len != at)
+        memmove(req->pub.body + req->pub.body_len, at, length); /* chunk body */
 
-    req->body_len += (unsigned) length;
+    req->pub.body_len += (unsigned) length;
     return 0;
 }
 
@@ -238,7 +189,7 @@ static int on_http_complete(http_parser* parser)
     return 0;
 }
 
-static const http_parser_settings g_parser_settings = {
+static const http_parser_settings __parser_settings = {
     .on_message_begin = on_http_begin,
     .on_url = on_http_url,
 #if HTTP_SERVER_SAVE_HDR
@@ -251,7 +202,7 @@ static const http_parser_settings g_parser_settings = {
 
 static void on_read_alloc(uv_handle_t* handle, size_t sg_size, uv_buf_t* buf)
 {
-    http_req_t* req = handle->data;
+    http_req_pri_t* req = handle->data;
 
     buf->base = req->buf + req->buf_len;
     buf->len = sizeof(req->buf) - req->buf_len;
@@ -259,18 +210,18 @@ static void on_read_alloc(uv_handle_t* handle, size_t sg_size, uv_buf_t* buf)
 
 static void on_closed(uv_handle_t* handle)
 {
-    http_req_t* req = handle->data;
+    http_req_pri_t* req = handle->data;
 
 #if HTTP_SERVER_SAVE_HDR
-    xlist_destroy(&req->headers);
+    xlist_destroy(&req->pub.headers);
 #endif
-    xlist_erase(&requests, xlist_value_iter(req));
+    xlist_erase(&__requests, xlist_value_iter(req));
 
     xlog_debug("%zu requests and %zu responses left.",
-        xlist_size(&requests), xlist_size(&responses));
+        xlist_size(&__requests), xlist_size(&__responses));
 }
 
-static void inline close_connection(http_req_t* req)
+static void inline close_connection(http_req_pri_t* req)
 {
     uv_close((uv_handle_t*) &req->io, on_closed);
 #if HTTP_SERVER_TIMEOUT > 0
@@ -281,26 +232,33 @@ static void inline close_connection(http_req_t* req)
 
 static void on_read(uv_stream_t* client, ssize_t nread, const uv_buf_t* buf)
 {
-    http_req_t* req = client->data;
+    http_req_pri_t* req = client->data;
 
     if (nread > 0) {
         req->buf_len += (unsigned) nread;
         xlog_debug("%zd bytes from client.", nread);
 
         if (req->buf_len < sizeof(req->buf)) {
-            http_parser_execute(&req->parser, &g_parser_settings, buf->base, nread);
+            http_parser_execute(&req->parser, &__parser_settings, buf->base, nread);
 #if HTTP_SERVER_TIMEOUT > 0
             uv_timer_again(&req->timer);
 #endif
             if (HTTP_PARSER_ERRNO(&req->parser) == HPE_PAUSED) {
-                req->url[req->url_len] = '\0';
-                xlog_debug("request url [%s].", req->url);
+                const http_handler_t* h = __handlers;
+
+                req->pub.url[req->pub.url_len] = '\0';
+                xlog_debug("request url [%s].", req->pub.url);
 #if HTTP_SERVER_SAVE_HDR
                 dump_headers(req);
 #endif
-                if (!strcmp(req->url, "/")) {
-                    send_page(req, handle_request_index);
-                } else {
+                while (h->path) {
+                    if (!strcmp(req->pub.url, h->path)) {
+                        send_page(req, h);
+                        break;
+                    }
+                    ++h;
+                }
+                if (!h->path) {
                     send_error_page(req, 404, "Not Found");
                 }
                 /* uv_timer_stop() and uv_read_stop() when download file, TODO */
@@ -335,7 +293,7 @@ static void on_read(uv_stream_t* client, ssize_t nread, const uv_buf_t* buf)
 #if HTTP_SERVER_TIMEOUT > 0
 static void on_timeout(uv_timer_t* timer)
 {
-    http_req_t* req = timer->data;
+    http_req_pri_t* req = timer->data;
 
     xlog_debug("request timeout, close.");
     close_connection(req);
@@ -344,18 +302,18 @@ static void on_timeout(uv_timer_t* timer)
 
 static void on_connect(uv_stream_t* server, int status)
 {
-    http_req_t* req;
+    http_req_pri_t* req;
 
     if (status < 0) {
         xlog_error("new connection error: %s.", uv_strerror(status));
         return;
     }
-    req = xlist_alloc_back(&requests);
+    req = xlist_alloc_back(&__requests);
 
     uv_tcp_init(server->data, &req->io);
     http_parser_init(&req->parser, HTTP_REQUEST);
 #if HTTP_SERVER_SAVE_HDR
-    xlist_init(&req->headers, sizeof(http_hdr_t), NULL);
+    xlist_init(&req->pub.headers, sizeof(http_header_t), NULL);
 #endif
     req->io.data = req;
     req->parser.data = req;
@@ -376,28 +334,29 @@ static void on_connect(uv_stream_t* server, int status)
     }
 }
 
-int http_server_start(uv_loop_t* loop, const char* str)
+int http_server_start(uv_loop_t* loop, const char* addrstr, const http_handler_t* handlers)
 {
     union { struct sockaddr x; struct sockaddr_in6 d; } addr;
     int error;
 
-    if (parse_ip_str(str, DEF_CSERVER_PORT, &addr.x) != 0) {
-        xlog_error("invalid control server address [%s].", str);
+    if (parse_ip_str(addrstr, DEF_CSERVER_PORT, &addr.x) != 0) {
+        xlog_error("invalid control server address [%s].", addrstr);
         return -1;
     }
-    uv_tcp_init(loop, &io_server);
-    uv_tcp_bind(&io_server, &addr.x, 0);
+    uv_tcp_init(loop, &__ioserver);
+    uv_tcp_bind(&__ioserver, &addr.x, 0);
 
-    error = uv_listen((uv_stream_t*) &io_server, LISTEN_BACKLOG, on_connect);
+    error = uv_listen((uv_stream_t*) &__ioserver, 1024, on_connect);
     if (error) {
         xlog_error("uv_listen [%s] failed: %s.", addr_to_str(&addr), uv_strerror(error));
-        uv_close((uv_handle_t*) &io_server, NULL);
+        uv_close((uv_handle_t*) &__ioserver, NULL);
         return -1;
     }
-    io_server.data = loop;
+    __ioserver.data = loop;
+    __handlers = handlers;
 
-    xlist_init(&requests, sizeof(http_req_t), NULL);
-    xlist_init(&responses, sizeof(http_resp_t), NULL);
+    xlist_init(&__requests, sizeof(http_req_pri_t), NULL);
+    xlist_init(&__responses, sizeof(http_resp_pri_t), NULL);
 
     xlog_info("control server (HTTP) listen at [%s].", addr_to_str(&addr));
     return 0;
