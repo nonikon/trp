@@ -152,7 +152,7 @@ static void on_udp_tclient_rbuf_alloc(uv_handle_t* handle, size_t sg_size, uv_bu
 {
     io_buf_t* iob = xlist_alloc_back(&xclient.io_buffers);
 
-    /* leave 'sizeof(udp_cmd_t) + 2 + tunnel_maddr.m.len' bytes space at the beginnig. */
+    /* leave 'sizeof(udp_cmd_t) + 2 + tunnel_maddr.m.len' bytes space at the beginning. */
     buf->base = iob->buffer + sizeof(udp_cmd_t) + 2 + tunnel_maddr.m.len;
     buf->len = MAX_SOCKBUF_SIZE - sizeof(udp_cmd_t) - 2 - tunnel_maddr.m.len;
 }
@@ -279,7 +279,7 @@ static int init_tunnel_maddr(const char* addrstr, int allow_domain)
 
 static void usage(const char* s)
 {
-    fprintf(stderr, "trp v%d.%d.%d, libuv %s, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, uv_version_string(), s);
+    fprintf(stderr, "trp %d.%d.%d, libuv %s, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, uv_version_string(), s);
     fprintf(stderr, "[options]:\n");
     fprintf(stderr, "  -x <address>  proxy server connect to. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
     fprintf(stderr, "  -b <address>  tunnel server listen at. (default: 127.0.0.1:%d)\n", DEF_TSERVER_PORT);
@@ -288,13 +288,13 @@ static void usage(const char* s)
 #else
     fprintf(stderr, "  -t <address>  target tunnel to.\n");
 #endif
-    fprintf(stderr, "  -d <devid>    device id of client connect to. (default: not connect client)\n");
-    fprintf(stderr, "  -m <method>   crypto method with proxy server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
-    fprintf(stderr, "  -M <METHOD>   crypto method with client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
+    fprintf(stderr, "  -d <devid>    device id (1~16 bytes hex string) of client connect to. (default: not connect client)\n");
     fprintf(stderr, "  -k <password> crypto password with proxy server. (default: none)\n");
     fprintf(stderr, "  -K <PASSWORD> crypto password with client. (default: none)\n");
+    fprintf(stderr, "  -m <method>   crypto method with proxy server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
+    fprintf(stderr, "  -M <METHOD>   crypto method with client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
     fprintf(stderr, "  -u <number>   set the number of UDP-over-TCP connection pools. (default: 0)\n");
-    fprintf(stderr, "  -U <number>   set the number of UDP-over-TCP connection pools and disable TCP tunnel. (default: 0)\n");
+    fprintf(stderr, "  -U <NUMBER>   set the number of UDP-over-TCP connection pools and disable TCP tunnel. (default: 0)\n");
 #ifdef _WIN32
     fprintf(stderr, "  -L <path>     write output to file. (default: write to STDOUT)\n");
 #else
@@ -534,6 +534,8 @@ int main(int argc, char** argv)
     xlist_init(&xclient.io_buffers, sizeof(io_buf_t) + MAX_SOCKBUF_SIZE, NULL);
 
     xlog_info("proxy server [%s].", addr_to_str(&xclient.xserver_addr));
+    if (devid_str)
+        xlog_info("to device id [%s].", devid_to_str(xclient.device_id));
     xlog_info("tunnel server listen at [%s]...", addr_to_str(&taddr));
     uv_run(xclient.loop, UV_RUN_DEFAULT);
 

@@ -310,14 +310,14 @@ static void new_server_connection(uv_timer_t* timer)
 
 static void usage(const char* s)
 {
-    fprintf(stderr, "trp v%d.%d.%d, libuv %s, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, uv_version_string(), s);
+    fprintf(stderr, "trp %d.%d.%d, libuv %s, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, uv_version_string(), s);
     fprintf(stderr, "[options]:\n");
     fprintf(stderr, "  -s <address>  server connect to. (default: 127.0.0.1:%d)\n", DEF_SERVER_PORT);
-    fprintf(stderr, "  -d <devid>    device id of this client. (default: %s)\n", devid_to_str((u8_t*) DEFAULT_DEVICE_ID));
-    fprintf(stderr, "  -m <method>   crypto method with server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
-    fprintf(stderr, "  -M <METHOD>   crypto method with proxy client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
+    fprintf(stderr, "  -d <devid>    device id (1~16 bytes hex string) of this client. (default: %s)\n", devid_to_str((u8_t*) DEFAULT_DEVICE_ID));
     fprintf(stderr, "  -k <password> crypto password with server. (default: none)\n");
     fprintf(stderr, "  -K <PASSWORD> crypto password with proxy client. (default: none)\n");
+    fprintf(stderr, "  -m <method>   crypto method with server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
+    fprintf(stderr, "  -M <METHOD>   crypto method with proxy client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
     fprintf(stderr, "  -c <number>   set the number of connection pools. (default: 1)\n");
 #ifdef _WIN32
     fprintf(stderr, "  -L <path>     write output to file. (default: write to STDOUT)\n");
@@ -474,6 +474,7 @@ int main(int argc, char** argv)
 
     uv_timer_init(remote.loop, &reconnect_timer);
 
+    xlog_info("device id [%s].", devid_to_str(device_id));
     xlog_info("server address [%s], connecting...", addr_to_str(&server_addr));
     new_server_connection(NULL);
     uv_run(remote.loop, UV_RUN_DEFAULT);
