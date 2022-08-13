@@ -13,7 +13,7 @@
 
 #define VERSION_MAJOR       1
 #define VERSION_MINOR       3
-#define VERSION_PATCH       1
+#define VERSION_PATCH       2
 
 #define DEF_SERVER_PORT     9901    /* default server port */
 #define DEF_XSERVER_PORT    9902    /* default proxy server port */

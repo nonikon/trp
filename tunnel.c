@@ -507,7 +507,7 @@ int main(int argc, char** argv)
     } else {
         /* transparent mode. */
 #ifdef __linux__
-        if (!nconnect) {
+        if (nconnect) {
             /* TPROXY, TODO */
             xlog_error("udp transparent proxy mode is not supported.");
             goto end;
