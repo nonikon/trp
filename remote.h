@@ -96,4 +96,8 @@ extern remote_t remote;
 void remote_private_init();
 void remote_private_destroy();
 
+#ifdef WITH_CTRLSERVER
+int start_ctrl_server(uv_loop_t* loop, const char* addrstr);
+#endif
+
 #endif // _REMOTE_H_

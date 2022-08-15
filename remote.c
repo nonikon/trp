@@ -6,6 +6,9 @@
 #include <string.h>
 
 #include "remote.h"
+#ifdef WITH_CTRLSERVER
+#include "http_server.h"
+#endif
 
 remote_t remote;    /* remote public data */
 
@@ -1035,6 +1038,96 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
     xlog_warn("error command (%d) from peer.", cmd->cmd);
     return -1;
 }
+
+#ifdef WITH_CTRLSERVER
+static void handle_request_index(const http_request_t* req, http_response_t* resp);
+static void handle_request_status(const http_request_t* req, http_response_t* resp);
+#ifdef WITH_CLIREMOTE
+static void handle_request_client_list(const http_request_t* req, http_response_t* resp);
+#endif
+
+static const http_handler_t __ctrl_server_handler[] = {
+    { "/", handle_request_index },
+    { "/status", handle_request_status },
+#ifdef WITH_CLIREMOTE
+    { "/client/list", handle_request_client_list },
+#endif
+    { NULL, NULL }
+};
+
+/* get the control server api list. */
+static void handle_request_index(const http_request_t* req, http_response_t* resp)
+{
+    http_handler_t* h = __ctrl_server_handler;
+
+    http_buf_add_string(resp->headers, &resp->header_len,
+        "Content-Type: text/html\r\n");
+
+    http_buf_add_string(resp->body, &resp->body_len,
+        "<html><head><title>API List</title></head><body>\n");
+    while (h->path) {
+        http_buf_add_printf(resp->body, &resp->body_len,
+            "<p><a href=\"%s\"/>%s</p>\n", h->path, h->path);
+        ++h;
+    }
+    http_buf_add_string(resp->body, &resp->body_len, "</body></html>");
+}
+
+static void handle_request_status(const http_request_t* req, http_response_t* resp)
+{
+    http_buf_add_string(resp->headers, &resp->header_len,
+        "Content-Type: application/json\r\n");
+
+    http_buf_add_printf(resp->body, &resp->body_len, "{\n"
+        "\"peer_ctxs\":%zd,\n"
+        "\"remote_ctxs\":%zd,\n"
+#ifdef WITH_CLIREMOTE
+        "\"devices\":%zd,\n"
+#endif
+        "\"udp_sessions\":%zd,\n"
+        "\"io_buffers\":%zd\n}",
+        xlist_size(&remote.peer_ctxs),
+        xlist_size(&remote_pri.remote_ctxs),
+#ifdef WITH_CLIREMOTE
+        xhash_size(&remote_pri.pending_ctxs),
+#endif
+        xhash_size(&remote_pri.udp_sessions),
+        xlist_size(&remote.io_buffers));
+}
+
+#ifdef WITH_CLIREMOTE
+static void handle_request_client_list(const http_request_t* req, http_response_t* resp)
+{
+    http_buf_add_string(resp->headers, &resp->header_len,
+        "Content-Type: application/json\r\n");
+
+    http_buf_add_string(resp->body, &resp->body_len, "[\n");
+
+    if (!xhash_empty(&remote_pri.pending_ctxs)) {
+        xhash_iter_t iter = xhash_begin(&remote_pri.pending_ctxs);
+
+        do {
+            pending_ctx_t* c = xhash_iter_data(iter);
+
+            http_buf_add_printf(resp->body, &resp->body_len,
+                "{\"devid\":\"%s\",\"nclients\":%zd,\"npeers\":%zd},\n",
+                devid_to_str(c->devid), xlist_size(&c->clients), xlist_size(&c->peers));
+
+            iter = xhash_iter_next(&remote_pri.pending_ctxs, iter);
+        }
+        while (xhash_iter_valid(iter) && resp->body_len + 64 <= sizeof(resp->body));
+
+        resp->body_len -= 2; /* delete ',\n' at the end of 'resp->body'. */
+    }
+    http_buf_add_string(resp->body, &resp->body_len, "\n]");
+}
+#endif // WITH_CLIREMOTE
+
+int start_ctrl_server(uv_loop_t* loop, const char* addrstr)
+{
+    return http_server_start(loop, addrstr, __ctrl_server_handler);
+}
+#endif // WITH_CTRLSERVER
 
 #ifdef WITH_CLIREMOTE
 static unsigned __pending_ctx_hash(void* v)

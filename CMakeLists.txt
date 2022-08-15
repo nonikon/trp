@@ -36,7 +36,8 @@ set(server_sources
 set(server_defines
     ${generic_defines}
     HTTP_PARSER_STRICT=0
-    WITH_CLIREMOTE=1
+    WITH_CLIREMOTE
+    WITH_CTRLSERVER
 )
 
 # client
@@ -47,6 +48,7 @@ set(client_sources
 )
 set(client_defines
     ${generic_defines}
+    #WITH_CTRLSERVER
 )
 
 # tunnel

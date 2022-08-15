@@ -174,7 +174,9 @@ static void usage(const char* s)
     fprintf(stderr, "  -s <address>  server listen at. (default: 127.0.0.1:%d)\n", DEF_SERVER_PORT);
 #endif
     fprintf(stderr, "  -x <address>  proxy server listen at. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
-    fprintf(stderr, "  -c <address>  control server listen at. (default: disabled)\n");
+#ifdef WITH_CTRLSERVER
+    fprintf(stderr, "  -c <address>  HTTP control server listen at. (default: disabled)\n");
+#endif
     fprintf(stderr, "  -k <password> crypto password. (default: none)\n");
     fprintf(stderr, "  -m <method>   crypto method, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
 #ifdef _WIN32
@@ -211,6 +213,9 @@ int main(int argc, char** argv)
     const char* server_str = "127.0.0.1";
 #endif
     const char* xserver_str = "127.0.0.1";
+#ifdef WITH_CTRLSERVER
+    const char* cserver_str = NULL;
+#endif
     const char* logfile = NULL;
     const char* passwd = NULL;
     int method = CRYPTO_CHACHA20;
@@ -252,6 +257,9 @@ int main(int argc, char** argv)
         case 's':  server_str = arg; continue;
 #endif
         case 'x': xserver_str = arg; continue;
+#ifdef WITH_CTRLSERVER
+        case 'c': cserver_str = arg; continue;
+#endif
         case 'm':      method = atoi(arg); continue;
         case 'k':      passwd = arg; continue;
 #ifndef _WIN32
@@ -342,8 +350,10 @@ int main(int argc, char** argv)
         goto end;
     }
 
-    // http_server_start(loop, "127.0.0.1"); // TODO
-
+#ifdef WITH_CTRLSERVER
+    if (cserver_str && start_ctrl_server(remote.loop, cserver_str) != 0)
+        // goto end;
+#endif
     xlist_init(&remote.peer_ctxs, sizeof(peer_ctx_t), NULL);
     xlist_init(&remote.io_buffers, sizeof(io_buf_t) + MAX_SOCKBUF_SIZE, NULL);
     xlist_init(&remote.conn_reqs, sizeof(uv_connect_t), NULL);
