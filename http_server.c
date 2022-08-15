@@ -358,6 +358,6 @@ int http_server_start(uv_loop_t* loop, const char* addrstr, const http_handler_t
     xlist_init(&__requests, sizeof(http_req_pri_t), NULL);
     xlist_init(&__responses, sizeof(http_resp_pri_t), NULL);
 
-    xlog_info("control server (HTTP) listen at [%s].", addr_to_str(&addr));
+    xlog_info("control server (HTTP) listen at [%s]...", addr_to_str(&addr));
     return 0;
 }

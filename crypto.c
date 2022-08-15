@@ -72,7 +72,7 @@ static int chacha20_crypt(crypto_ctx_t* _, u8_t* data, u32_t len)
         for (; i < 64 / sizeof(size_t); ++i)
             ((size_t*) data)[i] ^= ((size_t*) &ctx->kstream)[i];
 
-        len -=64;
+        len -= 64;
         data += 64;
         i = 0;
     }
