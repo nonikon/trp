@@ -1043,14 +1043,14 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 static void handle_request_index(const http_request_t* req, http_response_t* resp);
 static void handle_request_status(const http_request_t* req, http_response_t* resp);
 #ifdef WITH_CLIREMOTE
-static void handle_request_client_list(const http_request_t* req, http_response_t* resp);
+static void handle_request_device_list(const http_request_t* req, http_response_t* resp);
 #endif
 
 static const http_handler_t __ctrl_server_handler[] = {
     { "/", handle_request_index },
     { "/status", handle_request_status },
 #ifdef WITH_CLIREMOTE
-    { "/client/list", handle_request_client_list },
+    { "/device/list", handle_request_device_list },
 #endif
     { NULL, NULL }
 };
@@ -1058,7 +1058,7 @@ static const http_handler_t __ctrl_server_handler[] = {
 /* get the control server api list. */
 static void handle_request_index(const http_request_t* req, http_response_t* resp)
 {
-    http_handler_t* h = __ctrl_server_handler;
+    const http_handler_t* h = __ctrl_server_handler;
 
     http_buf_add_string(resp->headers, &resp->header_len,
         "Content-Type: text/html\r\n");
@@ -1096,7 +1096,7 @@ static void handle_request_status(const http_request_t* req, http_response_t* re
 }
 
 #ifdef WITH_CLIREMOTE
-static void handle_request_client_list(const http_request_t* req, http_response_t* resp)
+static void handle_request_device_list(const http_request_t* req, http_response_t* resp)
 {
     http_buf_add_string(resp->headers, &resp->header_len,
         "Content-Type: application/json\r\n");
