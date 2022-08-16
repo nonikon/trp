@@ -351,8 +351,10 @@ int main(int argc, char** argv)
     }
 
 #ifdef WITH_CTRLSERVER
-    if (cserver_str && start_ctrl_server(remote.loop, cserver_str) != 0)
+    if (cserver_str && start_ctrl_server(remote.loop, cserver_str) != 0) {
+        // xlog_warn("start HTTP control server failed.");
         // goto end;
+    }
 #endif
     xlist_init(&remote.peer_ctxs, sizeof(peer_ctx_t), NULL);
     xlist_init(&remote.io_buffers, sizeof(io_buf_t) + MAX_SOCKBUF_SIZE, NULL);
