@@ -34,16 +34,22 @@ struct pending_ctx {
     xlist_t clients;            /* remote_ctx_t, the clients which at COMMAND stage */
     xlist_t peers;              /* peer_ctx_t, the peers which is connecting to a client */
     uv_timer_t timer;           /* peers connect timeout timer */
+    size_t nconnect;
 };
 #endif
 
 /* remote private data */
 static struct {
     xlist_t remote_ctxs;    /* remote_ctx_t */
+    xhash_t udp_sessions;   /* udp_session_t */
 #ifdef WITH_CLIREMOTE
     xhash_t pending_ctxs;   /* pending_ctx_t */
+    size_t nconnect_cli;
 #endif
-    xhash_t udp_sessions;   /* udp_session_t */
+    size_t nconnect_ipv4;
+    size_t nconnect_ipv6;
+    size_t nconnect_dm;
+    size_t nconnect_udp;
 } remote_pri;
 
 #ifdef WITH_CLIREMOTE
@@ -201,6 +207,7 @@ static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u3
                 xlist_init(&pdctx->peers, sizeof(peer_ctx_t), NULL);
 
                 uv_timer_init(remote.loop, &pdctx->timer);
+                pdctx->nconnect = 0;
             }
 
             if (xlist_empty(&pdctx->peers)) {
@@ -215,6 +222,7 @@ static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u3
                 xlog_debug("pending peer match, associate.");
 
                 connect_cli_remote(xlist_front(&pdctx->peers), ctx);
+                ++pdctx->nconnect;
                 /* move peer node from 'pdctx->peers' to 'peer_ctxs' */
                 xlist_paste_back(&remote.peer_ctxs, xlist_cut_front(&pdctx->peers));
 
@@ -919,6 +927,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         /* find an online client. */
         pending_ctx_t* pdctx = xhash_get_data(&remote_pri.pending_ctxs, cmd->data);
 
+        ++remote_pri.nconnect_cli;
         xlog_debug("CONNECT_CLIENT cmd (%s) from peer, process.",
             devid_to_str(cmd->data));
 
@@ -929,6 +938,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
                 xlog_debug("found an available client, connect.");
 
                 connect_cli_remote(ctx, xlist_front(&pdctx->clients));
+                ++pdctx->nconnect;
                 /* move client node from 'pdctx->clients' to 'remote_ctxs' */
                 xlist_paste_back(&remote_pri.remote_ctxs, xlist_cut_front(&pdctx->clients));
 
@@ -970,6 +980,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 
         memcpy(&addr.sin_addr, cmd->data, 4);
 
+        ++remote_pri.nconnect_ipv4;
         xlog_debug("CONNECT_IPV4 cmd (%s) from peer, process.", addr_to_str(&addr));
 
         /* stop reading from peer until remote connected. */
@@ -996,6 +1007,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         cmd->data[MAX_DOMAIN_LEN - 1] = 0;
 
         sprintf(portstr, "%d", ntohs(cmd->port));
+        ++remote_pri.nconnect_dm;
         xlog_debug("CONNECT_DOMAIN cmd (%s) from peer, process.", maddr_to_str(cmd));
 
         /* stop reading from peer until remote connected. */
@@ -1018,6 +1030,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 
         memcpy(&addr.sin6_addr, cmd->data, 16);
 
+        ++remote_pri.nconnect_ipv6;
         xlog_debug("CONNECT_IPV6 cmd (%s) from peer, process.", addr_to_str(&addr));
 
         /* stop reading from peer until remote connected. */
@@ -1030,6 +1043,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
     }
 
     if (cmd->cmd == CMD_CONNECT_UDP) {
+        ++remote_pri.nconnect_udp;
         xlog_debug("CONNECT_UDP cmd (%s) from peer, process.", maddr_to_str(cmd));
         connect_udp_remote(ctx, cmd->data);
         return 0;
@@ -1042,16 +1056,26 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 #ifdef WITH_CTRLSERVER
 static void handle_request_index(const http_request_t* req, http_response_t* resp);
 static void handle_request_status(const http_request_t* req, http_response_t* resp);
+static void handle_request_usession_list(const http_request_t* req, http_response_t* resp);
 #ifdef WITH_CLIREMOTE
 static void handle_request_device_list(const http_request_t* req, http_response_t* resp);
+static void handle_request_dconnect_on(const http_request_t* req, http_response_t* resp);
+static void handle_request_dconnect_off(const http_request_t* req, http_response_t* resp);
 #endif
+static void handle_request_log_verbose_on(const http_request_t* req, http_response_t* resp);
+static void handle_request_log_verbose_off(const http_request_t* req, http_response_t* resp);
 
 static const http_handler_t __ctrl_server_handler[] = {
     { "/", handle_request_index },
     { "/status", handle_request_status },
+    { "/usession/list", handle_request_usession_list },
 #ifdef WITH_CLIREMOTE
     { "/device/list", handle_request_device_list },
+    { "/dconnect/on", handle_request_dconnect_on },
+    { "/dconnect/off", handle_request_dconnect_off },
 #endif
+    { "/log/verbose/on", handle_request_log_verbose_on },
+    { "/log/verbose/off", handle_request_log_verbose_off },
     { NULL, NULL }
 };
 
@@ -1081,18 +1105,54 @@ static void handle_request_status(const http_request_t* req, http_response_t* re
     http_buf_add_printf(resp->body, &resp->body_len, "{\n"
         "\"peer_ctxs\":%zd,\n"
         "\"remote_ctxs\":%zd,\n"
+        "\"io_buffers\":%zd,\n"
+        "\"udp_sessions\":%zd,\n"
 #ifdef WITH_CLIREMOTE
         "\"devices\":%zd,\n"
+        "\"nconnect_cli\":%zd,\n"
 #endif
-        "\"udp_sessions\":%zd,\n"
-        "\"io_buffers\":%zd\n}",
+        "\"nconnect_ipv4\":%zd,\n"
+        "\"nconnect_ipv6\":%zd,\n"
+        "\"nconnect_dm\":%zd,\n"
+        "\"nconnect_udp\":%zd\n}",
         xlist_size(&remote.peer_ctxs),
         xlist_size(&remote_pri.remote_ctxs),
+        xlist_size(&remote.io_buffers),
+        xhash_size(&remote_pri.udp_sessions),
 #ifdef WITH_CLIREMOTE
         xhash_size(&remote_pri.pending_ctxs),
+        remote_pri.nconnect_cli,
 #endif
-        xhash_size(&remote_pri.udp_sessions),
-        xlist_size(&remote.io_buffers));
+        remote_pri.nconnect_ipv4,
+        remote_pri.nconnect_ipv6,
+        remote_pri.nconnect_dm,
+        remote_pri.nconnect_udp);
+}
+
+static void handle_request_usession_list(const http_request_t* req, http_response_t* resp)
+{
+    http_buf_add_string(resp->headers, &resp->header_len,
+        "Content-Type: application/json\r\n");
+
+    http_buf_add_string(resp->body, &resp->body_len, "[\n");
+
+    if (!xhash_empty(&remote_pri.udp_sessions)) {
+        xhash_iter_t iter = xhash_begin(&remote_pri.udp_sessions);
+
+        do {
+            udp_session_t* s = xhash_iter_data(iter);
+
+            http_buf_add_printf(resp->body, &resp->body_len,
+                "{\"sid\":\"%x\",\"nrctxs\":%zd,\"nconns\":%zd},\n",
+                *(u32_t*) s->sid, xlist_size(&s->rctxs), xhash_size(&s->conns));
+
+            iter = xhash_iter_next(&remote_pri.udp_sessions, iter);
+        }
+        while (xhash_iter_valid(iter) && resp->body_len + 64 <= sizeof(resp->body));
+
+        resp->body_len -= 2; /* delete ',\n' at the end of 'resp->body'. */
+    }
+    http_buf_add_string(resp->body, &resp->body_len, "\n]");
 }
 
 #ifdef WITH_CLIREMOTE
@@ -1110,18 +1170,59 @@ static void handle_request_device_list(const http_request_t* req, http_response_
             pending_ctx_t* c = xhash_iter_data(iter);
 
             http_buf_add_printf(resp->body, &resp->body_len,
-                "{\"devid\":\"%s\",\"nclients\":%zd,\"npeers\":%zd},\n",
-                devid_to_str(c->devid), xlist_size(&c->clients), xlist_size(&c->peers));
+                "{\"devid\":\"%s\",\"nclients\":%zd,\"npeers\":%zd,\"nconnect\":%zd},\n",
+                devid_to_str(c->devid), xlist_size(&c->clients), xlist_size(&c->peers),
+                c->nconnect);
 
             iter = xhash_iter_next(&remote_pri.pending_ctxs, iter);
         }
-        while (xhash_iter_valid(iter) && resp->body_len + 64 <= sizeof(resp->body));
+        while (xhash_iter_valid(iter) && resp->body_len + 120 <= sizeof(resp->body));
 
         resp->body_len -= 2; /* delete ',\n' at the end of 'resp->body'. */
     }
     http_buf_add_string(resp->body, &resp->body_len, "\n]");
 }
+
+static void handle_request_dconnect_on(const http_request_t* req, http_response_t* resp)
+{
+    remote.dconnect_off = 0;
+    xlog_warn("direct connect [ON].");
+
+    http_buf_add_string(resp->headers, &resp->header_len,
+        "Content-Type: application/json\r\n");
+    http_buf_add_string(resp->body, &resp->body_len, "{\"code\":0}\n");
+}
+
+static void handle_request_dconnect_off(const http_request_t* req, http_response_t* resp)
+{
+    remote.dconnect_off = 1;
+    xlog_warn("direct connect [OFF].");
+
+    http_buf_add_string(resp->headers, &resp->header_len,
+        "Content-Type: application/json\r\n");
+    http_buf_add_string(resp->body, &resp->body_len, "{\"code\":0}\n");
+}
 #endif // WITH_CLIREMOTE
+
+static void handle_request_log_verbose_on(const http_request_t* req, http_response_t* resp)
+{
+    xlog_ctrl(XLOG_DEBUG, 0, 0);
+    xlog_warn("output verbosely [ON].");
+
+    http_buf_add_string(resp->headers, &resp->header_len,
+        "Content-Type: application/json\r\n");
+    http_buf_add_string(resp->body, &resp->body_len, "{\"code\":0}\n");
+}
+
+static void handle_request_log_verbose_off(const http_request_t* req, http_response_t* resp)
+{
+    xlog_ctrl(XLOG_INFO, 0, 0);
+    xlog_warn("output verbosely [OFF].");
+
+    http_buf_add_string(resp->headers, &resp->header_len,
+        "Content-Type: application/json\r\n");
+    http_buf_add_string(resp->body, &resp->body_len, "{\"code\":0}\n");
+}
 
 int start_ctrl_server(uv_loop_t* loop, const char* addrstr)
 {
