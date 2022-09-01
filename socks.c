@@ -322,23 +322,21 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
             switch (socks_handshake(ctx, &wbuf)) {
             case 0:
                 /* write response to socks client. */
-                uv_write(&iob->wreq, (uv_stream_t*) &ctx->xclient.t.io,
-                    &wbuf, 1, on_xclient_write);
+                uv_write(&iob->wreq, stream, &wbuf, 1, on_xclient_write);
                 /* 'iob' free later. */
                 return;
             case 1:
                 /* write response to socks client. */
-                uv_write(&iob->wreq, (uv_stream_t*) &ctx->xclient.t.io,
-                    &wbuf, 1, on_xclient_write);
+                uv_write(&iob->wreq, stream, &wbuf, 1, on_xclient_write);
                 /* close this connection. */
                 uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
-                uv_close((uv_handle_t*) stream, NULL);
+                uv_close((uv_handle_t*) stream, on_io_closed);
                 /* 'iob' free later. */
                 return;
             case -1:
                 /* error packet from client, close connection. */
                 uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
-                uv_close((uv_handle_t*) stream, NULL);
+                uv_close((uv_handle_t*) stream, on_io_closed);
                 break;
             }
         }
@@ -350,10 +348,8 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
         if (ctx->stage == STAGE_NOOP) {
             /* terminate associated udp connection, TODO. */
         }
-
         uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
-        /* 'stream' with NULL 'close_cb' MUST be closed after 'io_xserver'. */
-        uv_close((uv_handle_t*) stream, NULL);
+        uv_close((uv_handle_t*) stream, on_io_closed);
 
         /* 'buf->base' may be 'NULL' when 'nread' < 0. */
         if (!buf->base) return;
@@ -377,6 +373,7 @@ static void on_sclient_connect(uv_stream_t* stream, int status)
     ctx->xclient.t.io.data = ctx;
     ctx->io_xserver.data = ctx;
     ctx->pending_iob = NULL;
+    ctx->ref_count = 1;
     ctx->is_udp = 0;
     ctx->xclient_blocked = 0;
     ctx->xserver_blocked = 0;
@@ -388,6 +385,8 @@ static void on_sclient_connect(uv_stream_t* stream, int status)
         uv_read_start((uv_stream_t*) &ctx->xclient.t.io, on_iobuf_alloc, on_xclient_read);
         /* keepalive with socks client. */
         uv_tcp_keepalive(&ctx->xclient.t.io, 1, KEEPIDLE_TIME);
+        /* 'ctx->io_xserver' need to be closed, increase refcount. */
+        ctx->ref_count = 2;
     } else {
         xlog_error("uv_accept failed.");
         uv_close((uv_handle_t*) &ctx->xclient.t.io, on_io_closed);

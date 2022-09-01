@@ -64,8 +64,7 @@ static uv_udp_t io_utserver; /* udp tunnel server listen io */
         xlog_debug("disconnected from tunnel client: %s.", uv_err_name((int) nread));
 
         uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
-        /* 'stream' with NULL 'close_cb' MUST be closed after 'io_xserver'. */
-        uv_close((uv_handle_t*) stream, NULL);
+        uv_close((uv_handle_t*) stream, on_io_closed);
 
         /* 'buf->base' may be 'NULL' when 'nread' < 0. */
         if (!buf->base) return;
@@ -88,6 +87,7 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
 
     ctx->xclient.t.io.data = ctx;
     ctx->io_xserver.data = ctx;
+    ctx->ref_count = 1;
     ctx->is_udp = 0;
     ctx->pending_iob = NULL;
     ctx->xclient_blocked = 0;
@@ -132,12 +132,13 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
         }
 #endif
         uv_tcp_init(xclient.loop, &ctx->io_xserver);
+        /* 'ctx->io_xserver' need to be closed, increase refcount. */
+        ctx->ref_count = 2;
 
         if (connect_xserver(ctx) != 0) {
             /* connect failed immediately, just close this connection. */
             uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
-            /* 'xclient.t.io' with NULL 'close_cb' MUST be closed after 'io_xserver'. */
-            uv_close((uv_handle_t*) &ctx->xclient.t.io, NULL);
+            uv_close((uv_handle_t*) &ctx->xclient.t.io, on_io_closed);
         } else {
             /* keepalive with tunnel client. */
             uv_tcp_keepalive(&ctx->xclient.t.io, 1, KEEPIDLE_TIME);

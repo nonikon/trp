@@ -25,6 +25,7 @@ typedef struct {
     http_parser parser;
     http_request_t pub;
     unsigned buf_len;
+    unsigned ref_count;
     char buf[4096];     /* store HTTP request headers and body */
 } http_req_pri_t;
 
@@ -212,6 +213,7 @@ static void on_closed(uv_handle_t* handle)
 {
     http_req_pri_t* req = handle->data;
 
+    if (--req->ref_count) return; /* req free later */
 #if HTTP_SERVER_SAVE_HDR
     xlist_destroy(&req->pub.headers);
 #endif
@@ -225,8 +227,7 @@ static void inline close_connection(http_req_pri_t* req)
 {
     uv_close((uv_handle_t*) &req->io, on_closed);
 #if HTTP_SERVER_TIMEOUT > 0
-    /* 'timer' with NULL 'close_cb' MUST be closed after 'client'. */
-    uv_close((uv_handle_t*) &req->timer, NULL);
+    uv_close((uv_handle_t*) &req->timer, on_closed);
 #endif
 }
 
@@ -318,12 +319,15 @@ static void on_connect(uv_stream_t* server, int status)
     req->io.data = req;
     req->parser.data = req;
     req->buf_len = 0;
+    req->ref_count = 1;
 
     if (uv_accept(server, (uv_stream_t*) &req->io) == 0) {
         xlog_debug("http client connected.");
         uv_read_start((uv_stream_t*) &req->io, on_read_alloc, on_read);
 #if HTTP_SERVER_TIMEOUT > 0
         req->timer.data = req;
+        /* 'req->timer' need to be closed, increase refcount. */
+        req->ref_count = 2;
         uv_timer_init(server->data, &req->timer);
         uv_timer_start(&req->timer, on_timeout, HTTP_SERVER_TIMEOUT,
             HTTP_SERVER_TIMEOUT);

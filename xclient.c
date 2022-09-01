@@ -49,6 +49,8 @@ void on_io_closed(uv_handle_t* handle)
 {
     xclient_ctx_t* ctx = handle->data;
 
+    if (--ctx->ref_count) return; /* ctx free later */
+
     if (ctx->is_udp) {
         if (ctx->xclient.u.last_iob) {
             xlist_erase(&xclient.io_buffers,
@@ -174,8 +176,7 @@ static inline void close_xclient(xclient_ctx_t* ctx)
 {
     uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
     if (!ctx->is_udp) {
-        /* 'xclient.t.io' with NULL 'close_cb' MUST be closed after 'io_xserver'. */
-        uv_close((uv_handle_t*) &ctx->xclient.t.io, NULL);
+        uv_close((uv_handle_t*) &ctx->xclient.t.io, on_io_closed);
     } else {
         /* move 'ctx' node from 'u_xclient_ctxs' to 'xclient_ctxs'. */
         xlist_paste_back(&xclient.xclient_ctxs,
@@ -459,6 +460,7 @@ void send_udp_packet(io_buf_t* iob)
         ctx->xclient.u.pending_pkts[0] = iob;
         ctx->xclient.u.npending = 1;
         ctx->io_xserver.data = ctx;
+        ctx->ref_count = 1;
         ctx->is_udp = 1;
         ctx->xclient_blocked = 0;
         ctx->xserver_blocked = 0;

@@ -16,6 +16,7 @@ typedef struct {
     u32_t id;       /* (must be the first member) */
     u8_t alen;      /* addr length */
     u8_t alive;
+    u8_t refs;
     uv_udp_t io;
     uv_timer_t timer;
     udp_session_t* parent;
@@ -527,6 +528,8 @@ static void on_udp_conn_closed(uv_handle_t* handle)
     udp_conn_t* conn = handle->data;
     udp_session_t* sess = conn->parent;
 
+    if (--conn->refs) return; /* conn free later */
+
     xlog_debug("free udp connection %x, %zu left in current session.", conn->id,
         xhash_size(&sess->conns) - 1);
 
@@ -540,8 +543,7 @@ static void on_udp_conn_closed(uv_handle_t* handle)
 static inline void close_udp_conn(udp_conn_t* conn)
 {
     uv_close((uv_handle_t*) &conn->io, on_udp_conn_closed);
-    /* 'timer' with NULL 'close_cb' MUST be closed after 'io'. */
-    uv_close((uv_handle_t*) &conn->timer, NULL);
+    uv_close((uv_handle_t*) &conn->timer, on_udp_conn_closed);
 }
 
 void close_udp_remote(remote_ctx_t* ctx)
@@ -734,6 +736,7 @@ static void send_udp_packet(remote_ctx_t* ctx, udp_cmd_t* cmd)
 
         conn->alen = cmd->alen;
         conn->alive = 0;
+        conn->refs = 2;
         conn->io.data = conn;
         conn->timer.data = conn;
         conn->parent = ctx->u.parent;
@@ -1091,7 +1094,7 @@ static void handle_request_index(const http_request_t* req, http_response_t* res
         "<html><head><title>API List</title></head><body>\n");
     while (h->path) {
         http_buf_add_printf(resp->body, &resp->body_len,
-            "<p><a href=\"%s\"/>%s</p>\n", h->path, h->path);
+            "<p><a href=\"%s\">%s</a></p>\n", h->path, h->path);
         ++h;
     }
     http_buf_add_string(resp->body, &resp->body_len, "</body></html>");

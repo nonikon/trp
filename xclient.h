@@ -39,6 +39,7 @@ typedef struct {
     u8_t is_udp;
     u8_t xclient_blocked;
     u8_t xserver_blocked;
+    u8_t ref_count;
     u8_t stage;
 } xclient_ctx_t;
 
