@@ -143,6 +143,8 @@ int resolve_domain_sync(uv_loop_t* loop,
     char portstr[8];
     uv_getaddrinfo_t req;
 
+    memset(&hints, 0, sizeof(hints));
+
     hints.ai_family = AF_UNSPEC; /* ipv4 and ipv6 */
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;

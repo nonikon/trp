@@ -1000,6 +1000,8 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         char portstr[8];
         uv_getaddrinfo_t* req = xlist_alloc_back(&remote.addrinfo_reqs);
 
+        memset(&hints, 0, sizeof(hints));
+
         hints.ai_family = AF_UNSPEC; /* ipv4 and ipv6 */
         hints.ai_socktype = SOCK_STREAM;
         hints.ai_protocol = IPPROTO_TCP;
