@@ -315,6 +315,9 @@ static void usage(const char* s)
     fprintf(stderr, "trp %d.%d.%d, libuv %s, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, uv_version_string(), s);
     fprintf(stderr, "[options]:\n");
     fprintf(stderr, "  -s <address>  server connect to. (default: 127.0.0.1:%d)\n", DEF_SERVER_PORT);
+#ifdef WITH_CTRLSERVER
+    fprintf(stderr, "  -r <address>  HTTP control server listen at. (default: disabled)\n");
+#endif
     fprintf(stderr, "  -d <devid>    device id (1~16 bytes hex string) of this client. (default: %s)\n", devid_to_str((u8_t*) DEFAULT_DEVICE_ID));
     fprintf(stderr, "  -k <password> crypto password with server. (default: none)\n");
     fprintf(stderr, "  -K <PASSWORD> crypto password with proxy client. (default: none)\n");
@@ -345,6 +348,9 @@ static void usage(const char* s)
 int main(int argc, char** argv)
 {
     const char* server_str = "127.0.0.1";
+#ifdef WITH_CTRLSERVER
+    const char* cserver_str = NULL;
+#endif
     const char* devid_str = NULL;
     const char* logfile = NULL;
     const char* passwd = NULL;
@@ -379,17 +385,20 @@ int main(int argc, char** argv)
         arg = argv[i][2] ? argv[i] + 2 : (++i < argc ? argv[i] : NULL);
 
         if (arg) switch (opt) {
-        case 's': server_str = arg; continue;
-        case 'd':  devid_str = arg; continue;
-        case 'm':     method = atoi(arg); continue;
-        case 'M':    methodx = atoi(arg); continue;
-        case 'k':     passwd = arg; continue;
-        case 'K':    passwdx = arg; continue;
-        case 'c':   nconnect = atoi(arg); continue;
-#ifndef _WIN32
-        case 'n':     nofile = atoi(arg); continue;
+        case 's':  server_str = arg; continue;
+#ifdef WITH_CTRLSERVER
+        case 'r': cserver_str = arg; continue;
 #endif
-        case 'L':    logfile = arg; continue;
+        case 'd':   devid_str = arg; continue;
+        case 'm':      method = atoi(arg); continue;
+        case 'M':     methodx = atoi(arg); continue;
+        case 'k':      passwd = arg; continue;
+        case 'K':     passwdx = arg; continue;
+        case 'c':    nconnect = atoi(arg); continue;
+#ifndef _WIN32
+        case 'n':      nofile = atoi(arg); continue;
+#endif
+        case 'L':     logfile = arg; continue;
         }
 
         fprintf(stderr, "invalid option [-%c].\n", opt);
@@ -469,6 +478,12 @@ int main(int argc, char** argv)
         goto end;
     }
 
+#ifdef WITH_CTRLSERVER
+    if (cserver_str && start_ctrl_server(remote.loop, cserver_str) != 0) {
+        // xlog_warn("start HTTP control server failed.");
+        // goto end;
+    }
+#endif
     xlist_init(&remote.peer_ctxs, sizeof(peer_ctx_t), NULL);
     xlist_init(&remote.io_buffers, sizeof(io_buf_t) + MAX_SOCKBUF_SIZE, NULL);
     xlist_init(&remote.conn_reqs, sizeof(uv_connect_t), NULL);

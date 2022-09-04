@@ -43,12 +43,15 @@ set(server_defines
 # client
 set(client_sources
     ${generic_sources}
+    http_parser.c
+    http_server.c
     client.c
     remote.c
 )
 set(client_defines
     ${generic_defines}
-    #WITH_CTRLSERVER
+    HTTP_PARSER_STRICT=0
+    WITH_CTRLSERVER
 )
 
 # tunnel
