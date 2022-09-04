@@ -175,7 +175,7 @@ static void usage(const char* s)
 #endif
     fprintf(stderr, "  -x <address>  proxy server listen at. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
 #ifdef WITH_CTRLSERVER
-    fprintf(stderr, "  -c <address>  HTTP control server listen at. (default: disabled)\n");
+    fprintf(stderr, "  -r <address>  HTTP control server listen at. (default: disabled)\n");
 #endif
     fprintf(stderr, "  -k <password> crypto password. (default: none)\n");
     fprintf(stderr, "  -m <method>   crypto method, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
@@ -258,7 +258,7 @@ int main(int argc, char** argv)
 #endif
         case 'x': xserver_str = arg; continue;
 #ifdef WITH_CTRLSERVER
-        case 'c': cserver_str = arg; continue;
+        case 'r': cserver_str = arg; continue;
 #endif
         case 'm':      method = atoi(arg); continue;
         case 'k':      passwd = arg; continue;
