@@ -65,6 +65,7 @@ typedef struct {
         struct sockaddr x;
         struct sockaddr_in6 d;
     } xserver_addr;
+    u8_t utimeo;            /* udp connection timeout (seconds) */
     u32_t n_uconnect;       /* max udp-over-tcp connection size */
     xlist_t xclient_ctxs;   /* xclient_ctx_t */
     xlist_t io_buffers;     /* io_buf_t */

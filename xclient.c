@@ -121,9 +121,8 @@ static int forward_xserver_udp_packets(xclient_ctx_t* ctx, io_buf_t* iob)
         cmd = (udp_cmd_t*) last_iob->buffer;
         need = ntohs(cmd->len) + sizeof(udp_cmd_t);
 
-        if (cmd->tag != CMD_TAG || need > MAX_SOCKBUF_SIZE
-                || need < cmd->alen + 2 + sizeof(udp_cmd_t)) {
-            xlog_warn("error udp packet tag/length (%u/%u).", cmd->tag, need);
+        if (need > MAX_SOCKBUF_SIZE || need < cmd->alen + 2 + sizeof(udp_cmd_t)) {
+            xlog_warn("error udp packet length (%u).", need);
 
             ctx->xclient.u.last_iob = NULL;
             xlist_erase(&xclient.io_buffers, xlist_value_iter(last_iob));
@@ -143,9 +142,8 @@ static int forward_xserver_udp_packets(xclient_ctx_t* ctx, io_buf_t* iob)
         cmd = (udp_cmd_t*) (iob->buffer + iob->idx);
         need = ntohs(cmd->len) + sizeof(udp_cmd_t);
 
-        if (cmd->tag != CMD_TAG || need > MAX_SOCKBUF_SIZE
-                || need < cmd->alen + 2 + sizeof(udp_cmd_t)) {
-            xlog_warn("error udp packet tag/length (%u/%u).", cmd->tag, need);
+        if (need > MAX_SOCKBUF_SIZE || need < cmd->alen + 2 + sizeof(udp_cmd_t)) {
+            xlog_warn("error udp packet length (%u).", need);
             return 0;
         }
         if (iob->len < need) {
@@ -422,9 +420,9 @@ u32_t get_udp_packet_id(const struct sockaddr* saddr)
             saddr, sizeof(ai->addr))); /* 'sizeof(ai->addr)' mybe unsafe in the future, TODO. */
 
     uv_timer_init(xclient.loop, &ai->timer);
-    /* check if this id is still alive every 'UDPCONN_TIMEO' seconds. */
-    uv_timer_start(&ai->timer, on_udp_packet_id_check, UDPCONN_TIMEO * 1000,
-        UDPCONN_TIMEO * 1000);
+    /* check if this id is still alive every 'xclient.utimeo' seconds. */
+    uv_timer_start(&ai->timer, on_udp_packet_id_check, xclient.utimeo * 1000,
+        xclient.utimeo * 1000);
 
     ai->timer.data = ai;
     ai->alive = 0;

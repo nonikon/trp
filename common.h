@@ -13,7 +13,7 @@
 
 #define VERSION_MAJOR       1
 #define VERSION_MINOR       3
-#define VERSION_PATCH       2
+#define VERSION_PATCH       3
 
 #define DEF_SERVER_PORT     9901    /* default server port */
 #define DEF_XSERVER_PORT    9902    /* default proxy server port */
@@ -25,6 +25,7 @@
 #define MAX_NONCE_LEN       16
 #define MAX_DOMAIN_LEN      64
 #define MAX_PENDING_UPKTS   16
+#define MAX_UDPCONN_TIMEO   40      /* s */
 #define MAX_WQUEUE_SIZE     0       /* bytes */
 #define MAX_SOCKBUF_SIZE    (4096 - sizeof(io_buf_t) - sizeof(xlist_node_t))
 
@@ -32,7 +33,7 @@
 #define DEVICE_ID_SIZE      8       /* client device id size */
 
 #define CONNECT_CLI_TIMEO   (10)    /* s */
-#define UDPCONN_TIMEO       (40)    /* s */
+#define UDPCONN_TIMEO       (20)    /* s */
 #define KEEPIDLE_TIME       (40)    /* s */
 
 typedef unsigned char   u8_t;
@@ -66,7 +67,7 @@ typedef struct {
 } cmd_t;
 
 typedef struct {
-    u8_t tag;
+    u8_t flag;      /* 1 bit CLOSE_ON_RECV flag, 7 bits UDP connection timeout (seconds) */
     u8_t alen;      /* daddr length */
     u16_t len;      /* data length (daddr + dport + payload) */
     u32_t id;       /* packet id (source address) */

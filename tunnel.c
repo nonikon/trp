@@ -177,7 +177,7 @@ static void on_udp_tclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
     } else {
         udp_cmd_t* cmd = (udp_cmd_t*) iob->buffer;
 
-        cmd->tag = CMD_TAG;
+        cmd->flag = xclient.utimeo;
         cmd->id = get_udp_packet_id(addr);
 
         switch (tunnel_maddr.m.len) {
@@ -197,7 +197,7 @@ static void on_udp_tclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
             break;
         }
 
-        xlog_debug("send udp packet to proxy server, %u bytes, id %x.",
+        xlog_debug("%u udp bytes from tunnel client, to proxy server id %x.",
             iob->len, cmd->id);
         send_udp_packet(iob);
         /* 'iob' free later. */
@@ -219,8 +219,7 @@ static void on_udp_tclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
     wbuf.base = (char*) cmd + cmd->alen + 2 + sizeof(udp_cmd_t);
     wbuf.len = ntohs(cmd->len) - cmd->alen - 2;
 
-    xlog_debug("send udp packet to tunnel client [%s], %u bytes.",
-        addr_to_str(addr), wbuf.len);
+    xlog_debug("%u udp bytes to tunel client [%s].", wbuf.len, addr_to_str(addr));
 
     if (uv_udp_try_send(&io_utserver, &wbuf, 1, addr) < 0) {
         xlog_debug("send udp packet to tunnel client failed.");
@@ -296,6 +295,7 @@ static void usage(const char* s)
     fprintf(stderr, "  -M <METHOD>   crypto method with client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
     fprintf(stderr, "  -u <number>   set the number of UDP-over-TCP connection pools. (default: 0)\n");
     fprintf(stderr, "  -U <NUMBER>   set the number of UDP-over-TCP connection pools and disable TCP tunnel. (default: 0)\n");
+    fprintf(stderr, "  -O <number>   set UDP connection timeout seconds. (default: %d)\n", UDPCONN_TIMEO);
 #ifdef _WIN32
     fprintf(stderr, "  -L <path>     write output to file. (default: write to STDOUT)\n");
 #else
@@ -333,6 +333,7 @@ int main(int argc, char** argv)
 #ifndef _WIN32
     int nofile = 0;
 #endif
+    int utimeo = UDPCONN_TIMEO;
     int nconnect = 0; /* the number of UDP-over-TCP connections */
     int tcpoff = 0;
     int verbose = 0;
@@ -370,6 +371,7 @@ int main(int argc, char** argv)
         case 'K':     passwdx = arg; continue;
         case 'u':    nconnect = atoi(arg); tcpoff = 0; continue;
         case 'U':    nconnect = atoi(arg); tcpoff = 1; continue;
+        case 'O':      utimeo = atoi(arg); continue;
 #ifndef _WIN32
         case 'n':      nofile = atoi(arg); continue;
 #endif
@@ -416,6 +418,13 @@ int main(int argc, char** argv)
         xlog_warn("invalid connection pool size [%d], reset to [1].", nconnect);
         nconnect = 1;
     }
+
+    if (utimeo <= 0 || utimeo > MAX_UDPCONN_TIMEO) {
+        xlog_warn("invalid UDP connection timeout [%d], reset to [%d].",
+            utimeo, UDPCONN_TIMEO);
+        utimeo = UDPCONN_TIMEO;
+    }
+    xclient.utimeo = (u8_t) utimeo;
 
     if (devid_str && str_to_devid(xclient.device_id, devid_str) != 0) {
         xlog_error("invalid device id string [%s].", devid_str);
