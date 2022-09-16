@@ -364,45 +364,70 @@ int main(int argc, char** argv)
     int i;
 
     for (i = 1; i < argc; ++i) {
-        char opt;
+        char* opt = argv[i];
         char* arg;
 
-        if (argv[i][0] != '-' || argv[i][1] == '\0') {
-            fprintf(stderr, "wrong args [%s].\n", argv[i]);
-            usage(argv[0]);
+        if (opt[0] != '-') {
+            /* argument only. (opt) */
+            fprintf(stderr, "%s: invalid parameter [%s].\n", argv[0], opt);
             return 1;
         }
 
-        opt = argv[i][1];
+        if (opt[1] != '-') {
+            opt = opt + 1;
 
-        switch (opt) {
-        case 'v': verbose = 1; continue;
-        case 'h':
-            usage(argv[0]);
-            return 1;
-        }
+            /* short option without argument. (-opt[0]) */
+            switch (opt[0]) {
+            case 'v': verbose = 1; continue;
+            case 'h':
+                usage(argv[0]);
+                return 1;
+            case '\0':
+                fprintf(stderr, "%s: invalid parameter [-].\n", argv[0]);
+                return 1;
+            }
 
-        arg = argv[i][2] ? argv[i] + 2 : (++i < argc ? argv[i] : NULL);
+            arg = opt[1] ? opt + 1 : (++i < argc ? argv[i] : NULL);
+            if (!arg) {
+                fprintf(stderr, "%s: invalid parameter [-%c].\n", argv[0], opt[0]);
+                return 1;
+            }
 
-        if (arg) switch (opt) {
-        case 's':  server_str = arg; continue;
+            /* short option with argument. (-opt[0] arg) */
+            switch (opt[0]) {
+            case 's':  server_str = arg; continue;
 #ifdef WITH_CTRLSERVER
-        case 'r': cserver_str = arg; continue;
+            case 'r': cserver_str = arg; continue;
 #endif
-        case 'd':   devid_str = arg; continue;
-        case 'm':      method = atoi(arg); continue;
-        case 'M':     methodx = atoi(arg); continue;
-        case 'k':      passwd = arg; continue;
-        case 'K':     passwdx = arg; continue;
-        case 'c':    nconnect = atoi(arg); continue;
+            case 'd':   devid_str = arg; continue;
+            case 'm':      method = atoi(arg); continue;
+            case 'M':     methodx = atoi(arg); continue;
+            case 'k':      passwd = arg; continue;
+            case 'K':     passwdx = arg; continue;
+            case 'c':    nconnect = atoi(arg); continue;
 #ifndef _WIN32
-        case 'n':      nofile = atoi(arg); continue;
+            case 'n':      nofile = atoi(arg); continue;
 #endif
-        case 'L':     logfile = arg; continue;
+            case 'L':     logfile = arg; continue;
+            }
+
+            fprintf(stderr, "%s: invalid parameter [-%c %s].\n", argv[0], opt[0], arg);
+            return 1;
         }
 
-        fprintf(stderr, "invalid option [-%c].\n", opt);
-        usage(argv[0]);
+        opt = opt + 2;
+
+        /* long option without argument. (--opt) */
+
+        arg = ++i < argc ? argv[i] : NULL;
+        if (!arg) {
+            fprintf(stderr, "%s: invalid parameter [--%s].\n", argv[0], opt);
+            return 1;
+        }
+
+        /* long option with argument. (--opt arg) */
+
+        fprintf(stderr, "%s: invalid parameter [--%s %s].\n", argv[0], opt, arg);
         return 1;
     }
 
