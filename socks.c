@@ -725,23 +725,34 @@ int main(int argc, char** argv)
     }
 
     uv_tcp_init(xclient.loop, &io_sserver);
-    uv_tcp_bind(&io_sserver, &saddr.x, 0);
 
+    error = uv_tcp_bind(&io_sserver, &saddr.x, 0);
+    if (error) {
+        xlog_error("tcp bind [%s] failed: %s.", addr_to_str(&saddr),
+            uv_strerror(error));
+        goto end;
+    }
     error = uv_listen((uv_stream_t*) &io_sserver, LISTEN_BACKLOG, on_sclient_connect);
     if (error) {
-        xlog_error("uv_listen [%s] failed: %s.", addr_to_str(&saddr), uv_strerror(error));
+        xlog_error("tcp listen [%s] failed: %s.", addr_to_str(&saddr),
+            uv_strerror(error));
         goto end;
     }
 
     if (nconnect) {
         xlog_info("enable udp relay.");
         uv_udp_init(xclient.loop, &io_usserver);
-        uv_udp_bind(&io_usserver, &saddr.x, 0);
         /* start socks5 udp listen io. */
+        error = uv_udp_bind(&io_usserver, &saddr.x, 0);
+        if (error) {
+            xlog_error("udp bind [%s] failed: %s.", addr_to_str(&saddr),
+                uv_strerror(error));
+            goto end;
+        }
         error = uv_udp_recv_start(&io_usserver, on_udp_sclient_rbuf_alloc,
                     on_udp_sclient_read);
         if (error) {
-            xlog_error("uv_udp_recv_start [%s] failed: %s.", addr_to_str(&saddr),
+            xlog_error("udp listen [%s] failed: %s.", addr_to_str(&saddr),
                 uv_strerror(error));
             goto end;
         }

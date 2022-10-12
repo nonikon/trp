@@ -348,14 +348,22 @@ int http_server_start(uv_loop_t* loop, const char* addrstr, const http_handler_t
         return -1;
     }
     uv_tcp_init(loop, &__ioserver);
-    uv_tcp_bind(&__ioserver, &addr.x, 0);
 
-    error = uv_listen((uv_stream_t*) &__ioserver, 1024, on_connect);
+    error = uv_tcp_bind(&__ioserver, &addr.x, 0);
     if (error) {
-        xlog_error("uv_listen [%s] failed: %s.", addr_to_str(&addr), uv_strerror(error));
+        xlog_error("tcp bind [%s] failed: %s.", addr_to_str(&addr),
+            uv_strerror(error));
         uv_close((uv_handle_t*) &__ioserver, NULL);
         return -1;
     }
+    error = uv_listen((uv_stream_t*) &__ioserver, 1024, on_connect);
+    if (error) {
+        xlog_error("tcp listen [%s] failed: %s.", addr_to_str(&addr),
+            uv_strerror(error));
+        uv_close((uv_handle_t*) &__ioserver, NULL);
+        return -1;
+    }
+
     __ioserver.data = loop;
     __handlers = handlers;
 

@@ -358,20 +358,32 @@ int main(int argc, char** argv)
 
 #ifdef WITH_CLIREMOTE
     uv_tcp_init(remote.loop, &io_server);
-    uv_tcp_bind(&io_server, &addr.x, 0);
 
+    error = uv_tcp_bind(&io_server, &addr.x, 0);
+    if (error) {
+        xlog_error("tcp bind [%s] failed: %s.", addr_to_str(&addr),
+            uv_strerror(error));
+        goto end;
+    }
     error = uv_listen((uv_stream_t*) &io_server, LISTEN_BACKLOG, on_cli_remote_connect);
     if (error) {
-        xlog_error("uv_listen [%s] failed: %s.", addr_to_str(&addr), uv_strerror(error));
+        xlog_error("tcp listen [%s] failed: %s.", addr_to_str(&addr),
+            uv_strerror(error));
         goto end;
     }
 #endif
     uv_tcp_init(remote.loop, &io_xserver);
-    uv_tcp_bind(&io_xserver, &xaddr.x, 0);
 
+    error = uv_tcp_bind(&io_xserver, &xaddr.x, 0);
+    if (error) {
+        xlog_error("tcp bind [%s] failed: %s.", addr_to_str(&xaddr),
+            uv_strerror(error));
+        goto end;
+    }
     error = uv_listen((uv_stream_t*) &io_xserver, LISTEN_BACKLOG, on_xclient_connect);
     if (error) {
-        xlog_error("uv_listen [%s] failed: %s.", addr_to_str(&xaddr), uv_strerror(error));
+        xlog_error("tcp listen [%s] failed: %s.", addr_to_str(&xaddr),
+            uv_strerror(error));
         goto end;
     }
 

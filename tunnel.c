@@ -511,12 +511,17 @@ int main(int argc, char** argv)
         if (nconnect) {
             xlog_info("enable UDP tunnel mode.");
             uv_udp_init(xclient.loop, &io_utserver);
-            uv_udp_bind(&io_utserver, &taddr.x, 0);
 
+            error = uv_udp_bind(&io_utserver, &taddr.x, 0);
+            if (error) {
+                xlog_error("udp bind [%s] failed: %s.", addr_to_str(&taddr),
+                    uv_strerror(error));
+                goto end;
+            }
             error = uv_udp_recv_start(&io_utserver, on_udp_tclient_rbuf_alloc,
                         on_udp_tclient_read);
             if (error) {
-                xlog_error("uv_udp_recv_start [%s] failed: %s.", addr_to_str(&taddr),
+                xlog_error("udp listen [%s] failed: %s.", addr_to_str(&taddr),
                     uv_strerror(error));
                 goto end;
             }
@@ -528,12 +533,17 @@ int main(int argc, char** argv)
         if (!tcpoff) {
             xlog_info("enable TCP tunnel mode.");
             uv_tcp_init(xclient.loop, &io_tserver);
-            uv_tcp_bind(&io_tserver, &taddr.x, 0);
 
+            error = uv_tcp_bind(&io_tserver, &taddr.x, 0);
+            if (error) {
+                xlog_error("tcp bind [%s] failed: %s.", addr_to_str(&taddr),
+                    uv_strerror(error));
+                goto end;
+            }
             error = uv_listen((uv_stream_t*) &io_tserver, LISTEN_BACKLOG,
                         on_tclient_connect);
             if (error) {
-                xlog_error("uv_listen [%s] failed: %s.", addr_to_str(&taddr),
+                xlog_error("tcp listen [%s] failed: %s.", addr_to_str(&taddr),
                     uv_strerror(error));
                 goto end;
             }
@@ -550,12 +560,17 @@ int main(int argc, char** argv)
         xlog_info("enable tcp transparent proxy mode.");
 
         uv_tcp_init(xclient.loop, &io_tserver);
-        uv_tcp_bind(&io_tserver, &taddr.x, 0);
 
+        error = uv_tcp_bind(&io_tserver, &taddr.x, 0);
+        if (error) {
+            xlog_error("tcp bind [%s] failed: %s.", addr_to_str(&taddr),
+                uv_strerror(error));
+            goto end;
+        }
         error = uv_listen((uv_stream_t*) &io_tserver, LISTEN_BACKLOG,
                     on_tclient_connect);
         if (error) {
-            xlog_error("uv_listen [%s] failed: %s.", addr_to_str(&taddr),
+            xlog_error("tcp listen [%s] failed: %s.", addr_to_str(&taddr),
                 uv_strerror(error));
             goto end;
         }
