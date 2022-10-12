@@ -64,6 +64,7 @@ static inline void http_buf_add_string(char* buf, unsigned* len, const char* src
     *len += (unsigned) l;
 }
 
-int http_server_start(uv_loop_t* loop, const char* addrstr, const http_handler_t* handlers);
+int http_server_start(uv_loop_t* loop, const struct sockaddr* addr,
+        const http_handler_t* handlers);
 
 #endif // _HTTP_SERVER_H_

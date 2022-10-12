@@ -1243,7 +1243,17 @@ static void handle_request_log_verbose_off(const http_request_t* req, http_respo
 
 int start_ctrl_server(uv_loop_t* loop, const char* addrstr)
 {
-    return http_server_start(loop, addrstr, __ctrl_server_handler);
+    union {
+        struct sockaddr x;
+        struct sockaddr_in6 d;
+    } addr;
+
+    if (parse_ip_str(addrstr, DEF_CSERVER_PORT, &addr.x) != 0) {
+        xlog_error("invalid control server address [%s].", addrstr);
+        return -1;
+    }
+
+    return http_server_start(loop, &addr.x, __ctrl_server_handler);
 }
 #endif // WITH_CTRLSERVER
 

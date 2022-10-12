@@ -338,27 +338,24 @@ static void on_connect(uv_stream_t* server, int status)
     }
 }
 
-int http_server_start(uv_loop_t* loop, const char* addrstr, const http_handler_t* handlers)
+int http_server_start(uv_loop_t* loop, const struct sockaddr* addr,
+        const http_handler_t* handlers)
 {
-    union { struct sockaddr x; struct sockaddr_in6 d; } addr;
     int error;
 
-    if (parse_ip_str(addrstr, DEF_CSERVER_PORT, &addr.x) != 0) {
-        xlog_error("invalid control server address [%s].", addrstr);
-        return -1;
-    }
     uv_tcp_init(loop, &__ioserver);
 
-    error = uv_tcp_bind(&__ioserver, &addr.x, 0);
+    error = uv_tcp_bind(&__ioserver, addr, 0);
     if (error) {
-        xlog_error("tcp bind [%s] failed: %s.", addr_to_str(&addr),
+        xlog_error("tcp bind [%s] failed: %s.", addr_to_str(addr),
             uv_strerror(error));
         uv_close((uv_handle_t*) &__ioserver, NULL);
         return -1;
     }
+
     error = uv_listen((uv_stream_t*) &__ioserver, 1024, on_connect);
     if (error) {
-        xlog_error("tcp listen [%s] failed: %s.", addr_to_str(&addr),
+        xlog_error("tcp listen [%s] failed: %s.", addr_to_str(addr),
             uv_strerror(error));
         uv_close((uv_handle_t*) &__ioserver, NULL);
         return -1;
@@ -370,6 +367,6 @@ int http_server_start(uv_loop_t* loop, const char* addrstr, const http_handler_t
     xlist_init(&__requests, sizeof(http_req_pri_t), NULL);
     xlist_init(&__responses, sizeof(http_resp_pri_t), NULL);
 
-    xlog_info("control server (HTTP) listen at [%s]...", addr_to_str(&addr));
+    xlog_info("control server (HTTP) listen at [%s]...", addr_to_str(addr));
     return 0;
 }

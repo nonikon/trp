@@ -505,7 +505,7 @@ int main(int argc, char** argv)
 
 #ifdef WITH_CTRLSERVER
     if (cserver_str && start_ctrl_server(remote.loop, cserver_str) != 0) {
-        // xlog_warn("start HTTP control server failed.");
+        xlog_warn("start HTTP control server failed.");
         // goto end;
     }
 #endif
