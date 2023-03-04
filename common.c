@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 nonikon@qq.com.
+ * Copyright (C) 2021-2023 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -265,4 +265,83 @@ int str_to_devid(u8_t id[DEVICE_ID_SIZE], const char* str)
     }
 
     return is_valid_devid(id) ? 0 : -1;
+}
+
+static inline void mmhash64(unsigned char h[8], const unsigned char* d, unsigned l)
+{
+    unsigned h1 = 0 ^ l;    /* seed ^ len */
+    unsigned h2 = 0;        /* seed >> 32 */
+    unsigned k1;
+    unsigned k2;
+
+    while (l >= 8) {
+        k1 = d[0] | d[1] << 8 | d[2] << 16 | d[3] << 24;
+        k2 = d[4] | d[5] << 8 | d[6] << 16 | d[7] << 24;
+
+        k1 *= 0x5bd1e995;
+        k1 ^= k1 >> 24;
+        k1 *= 0x5bd1e995;
+        h1 *= 0x5bd1e995;
+        h1 ^= k1;
+
+        k2 *= 0x5bd1e995;
+        k2 ^= k2 >> 24;
+        k2 *= 0x5bd1e995;
+        h2 *= 0x5bd1e995;
+        h2 ^= k2;
+
+        l -= 8;
+        d += 8;
+    }
+
+    if (l >= 4) {
+        k1 = d[0] | d[1] << 8 | d[2] << 16 | d[3] << 24;
+
+        k1 *= 0x5bd1e995;
+        k1 ^= k1 >> 24;
+        k1 *= 0x5bd1e995;
+        h1 *= 0x5bd1e995;
+        h1 ^= k1;
+
+        l -= 4;
+        d += 4;
+    }
+
+    switch (l) {
+    case 3: h2 ^= d[2] << 16;
+    case 2: h2 ^= d[1] << 8;
+    case 1: h2 ^= d[0];
+            h2 *= 0x5bd1e995;
+    }
+
+    h1 ^= h2 >> 18;
+    h1 *= 0x5bd1e995;
+    h2 ^= h1 >> 22;
+    h2 *= 0x5bd1e995;
+    h1 ^= h2 >> 17;
+    h1 *= 0x5bd1e995;
+    h2 ^= h1 >> 19;
+    h2 *= 0x5bd1e995;
+
+    h[0] = (h1 >>  0) & 0xff;
+    h[1] = (h1 >>  8) & 0xff;
+    h[2] = (h1 >> 16) & 0xff;
+    h[3] = (h1 >> 24) & 0xff;
+    h[4] = (h2 >>  0) & 0xff;
+    h[5] = (h2 >>  8) & 0xff;
+    h[6] = (h2 >> 16) & 0xff;
+    h[7] = (h2 >> 24) & 0xff;
+}
+
+void fill_command_md(cmd_t* cmd)
+{
+    mmhash64(cmd->md, cmd->md + CMD_MD_SIZE, CMD_MAX_SIZE - CMD_MD_SIZE);
+}
+
+int check_command_md(cmd_t* cmd)
+{
+    u8_t md[CMD_MD_SIZE];
+
+    mmhash64(md, cmd->md + CMD_MD_SIZE, CMD_MAX_SIZE - CMD_MD_SIZE);
+    return memcmp(md, cmd->md, CMD_MD_SIZE) == 0;
 }

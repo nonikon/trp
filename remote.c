@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 nonikon@qq.com.
+ * Copyright (C) 2021-2023 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -185,8 +185,13 @@ static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u3
     remote.crypto.init(&ctx->c.edctx, remote.crypto_key, (u8_t*) data);
     remote.crypto.decrypt(&ctx->c.edctx, (u8_t*) cmd, CMD_MAX_SIZE);
 
+    if (!check_command_md(cmd)) {
+        xlog_warn("error packet from client (digest).");
+        return -1;
+    }
+
     if (!is_valid_command(cmd)) {
-        xlog_warn("error packet from client (header).");
+        xlog_warn("invalid version: %02X [%u.%u].", cmd->tag, cmd->major, cmd->minor);
         return -1;
     }
 
@@ -932,8 +937,13 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
     iob->idx = CMD_MAX_SIZE + MAX_NONCE_LEN;
     iob->len -= CMD_MAX_SIZE + MAX_NONCE_LEN;
 
+    if (!check_command_md(cmd)) {
+        xlog_warn("error packet from client (digest).");
+        return -1;
+    }
+
     if (!is_valid_command(cmd)) {
-        xlog_warn("error packet from peer (header).");
+        xlog_warn("invalid version: %02X [%u.%u].", cmd->tag, cmd->major, cmd->minor);
         return -1;
     }
 

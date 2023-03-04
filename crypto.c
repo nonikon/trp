@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 nonikon@qq.com.
+ * Copyright (C) 2021-2023 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -184,11 +184,11 @@ void derive_key(u8_t key[16], const char* str)
         h = 16;
     } else {
         memcpy(key, str, h);
-        memset(key + h, 0, 16 - h);
+        memset(key + h, 16 - h, 16 - h);
     }
 
     for (i = 0; i < 16; i += 4) {
-        u32_t u = (key[i])
+        u32_t u = (key[i + 0] <<  0)
                 | (key[i + 1] <<  8)
                 | (key[i + 2] << 16)
                 | (key[i + 3] << 24);
@@ -206,11 +206,17 @@ void derive_key(u8_t key[16], const char* str)
     }
 }
 
-void convert_nonce(u8_t nonce[16])
+void generate_nonce(u8_t nonce[MAX_NONCE_LEN])
+{
+    // TODO
+    rand_bytes(nonce, MAX_NONCE_LEN);
+}
+
+void convert_nonce(u8_t nonce[MAX_NONCE_LEN])
 {
     // TODO
     int i;
-    for (i = 0; i < 16; ++i) {
+    for (i = 0; i < MAX_NONCE_LEN; ++i) {
         nonce[i] = ~nonce[i];
     }
 }

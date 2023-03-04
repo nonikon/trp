@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 nonikon@qq.com.
+ * Copyright (C) 2021-2023 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -141,7 +141,7 @@ static void report_device_id(peer_ctx_t* ctx)
     wbuf.len = CMD_MAX_SIZE + MAX_NONCE_LEN;
 
     /* generate and prepend iv in the first packet */
-    rand_bytes((u8_t*) iob->buffer, MAX_NONCE_LEN);
+    generate_nonce((u8_t*) iob->buffer);
 
     cmd->tag = CMD_TAG;
     cmd->major = VERSION_MAJOR;
@@ -151,6 +151,7 @@ static void report_device_id(peer_ctx_t* ctx)
 
     memcpy(cmd->data, device_id, DEVICE_ID_SIZE);
 
+    fill_command_md(cmd);
     /* use 'ctx->edctx' temporarily. */
     crypto.init(&ctx->edctx, crypto_key, (u8_t*) iob->buffer);
     crypto.encrypt(&ctx->edctx, (u8_t*) cmd, CMD_MAX_SIZE);

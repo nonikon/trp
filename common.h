@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 nonikon@qq.com.
+ * Copyright (C) 2021-2023 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -12,8 +12,8 @@
             ((type*) ((char*) (ptr) - offsetof(type, member)))
 
 #define VERSION_MAJOR       1
-#define VERSION_MINOR       3
-#define VERSION_PATCH       3
+#define VERSION_MINOR       4
+#define VERSION_PATCH       0
 
 #define DEF_SERVER_PORT     9901    /* default server port */
 #define DEF_XSERVER_PORT    9902    /* default proxy server port */
@@ -53,9 +53,11 @@ enum {
 };
 
 #define CMD_TAG         0x7E
+#define CMD_MD_SIZE     8
 #define CMD_MAX_SIZE    (sizeof(cmd_t) + MAX_DOMAIN_LEN)
 
 typedef struct {
+    u8_t md[CMD_MD_SIZE];
     u8_t tag;
     u8_t major;
     u8_t minor;
@@ -127,5 +129,10 @@ const char* maddr_to_str(const cmd_t* cmd);
 const char* devid_to_str(const u8_t id[DEVICE_ID_SIZE]);
 /* ... */
 int str_to_devid(u8_t id[DEVICE_ID_SIZE], const char* str);
+
+/* fill 'cmd->md'. */
+void fill_command_md(cmd_t* cmd);
+/* validate 'cmd->md'. */
+int check_command_md(cmd_t* cmd);
 
 #endif // _COMMON_H_

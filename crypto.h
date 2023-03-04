@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 nonikon@qq.com.
+ * Copyright (C) 2021-2023 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -26,6 +26,7 @@ typedef struct crypto {
 
 int crypto_init(crypto_t* c, int method);
 void derive_key(u8_t key[16], const char* str);
-void convert_nonce(u8_t nonce[16]);
+void generate_nonce(u8_t nonce[MAX_NONCE_LEN]);
+void convert_nonce(u8_t nonce[MAX_NONCE_LEN]);
 
 #endif // _CRYPTO_H_

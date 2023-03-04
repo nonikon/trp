@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 nonikon@qq.com.
+ * Copyright (C) 2021-2023 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -339,7 +339,7 @@ void init_connect_command(xclient_ctx_t* ctx,
 
     if (is_valid_devid(xclient.device_id)) {
         /* generate and prepend iv in the first packet */
-        rand_bytes(pbuf, MAX_NONCE_LEN);
+        generate_nonce(pbuf);
 
         cmd = (cmd_t*) (pbuf + MAX_NONCE_LEN);
 
@@ -351,6 +351,7 @@ void init_connect_command(xclient_ctx_t* ctx,
 
         memcpy(cmd->data, xclient.device_id, DEVICE_ID_SIZE);
 
+        fill_command_md(cmd);
         xclient.crypto.init(&ctx->ectx, xclient.crypto_key, pbuf);
         xclient.crypto.encrypt(&ctx->ectx, (u8_t*) cmd, CMD_MAX_SIZE);
 
@@ -358,7 +359,7 @@ void init_connect_command(xclient_ctx_t* ctx,
     }
 
     /* generate and prepend iv in the first packet */
-    rand_bytes(pbuf, MAX_NONCE_LEN);
+    generate_nonce(pbuf);
 
     cmd = (cmd_t*) (pbuf + MAX_NONCE_LEN);
 
@@ -376,6 +377,7 @@ void init_connect_command(xclient_ctx_t* ctx,
     memcpy(dnonce, pbuf, MAX_NONCE_LEN);
     convert_nonce(dnonce);
 
+    fill_command_md(cmd);
     xclient.cryptox.init(&ctx->ectx, xclient.cryptox_key, pbuf);
     xclient.cryptox.init(&ctx->dctx, xclient.cryptox_key, dnonce);
     xclient.cryptox.encrypt(&ctx->ectx, (u8_t*) cmd, CMD_MAX_SIZE);
