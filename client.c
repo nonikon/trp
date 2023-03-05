@@ -175,7 +175,10 @@ static void on_server_connected(uv_connect_t* req, int status)
             uv_timer_start(&reconnect_timer, new_server_connection,
                 RECONNECT_SERVER_INTERVAL, 0);
         }
-        if (!retry_displayed) {
+        if (retry_displayed) {
+            xlog_debug("connect server failed: %s, retry every %d seconds.",
+                uv_err_name(status), RECONNECT_SERVER_INTERVAL / 1000);
+        } else {
             xlog_error("connect server failed: %s, retry every %d seconds.",
                 uv_err_name(status), RECONNECT_SERVER_INTERVAL / 1000);
             retry_displayed = 1;
@@ -240,9 +243,17 @@ static void connect_server(struct sockaddr* addr)
 static void on_server_domain_resolved(
         uv_getaddrinfo_t* req, int status, struct addrinfo* res)
 {
-    if (status < 0) {
-        xlog_warn("resolve server domain failed: %s.", uv_err_name(status));
+    static int retry_displayed = 1;
 
+    if (status < 0) {
+        if (retry_displayed) {
+            xlog_debug("resolve server domain failed: %s, retry every %d seconds.",
+                uv_err_name(status), RECONNECT_SERVER_INTERVAL / 1000);
+        } else {
+            xlog_error("resolve server domain failed: %s, retry every %d seconds.",
+                uv_err_name(status), RECONNECT_SERVER_INTERVAL / 1000);
+            retry_displayed = 1;
+        }
         ++nconnect;
         if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
             /* reconnect after RECONNECT_SERVER_INTERVAL ms. */
@@ -251,8 +262,14 @@ static void on_server_domain_resolved(
         }
 
     } else {
-        xlog_debug("resolve server domain result [%s], connect.",
-            addr_to_str(res->ai_addr));
+        if (!retry_displayed) {
+            xlog_debug("resolve server domain result [%s], connecting...",
+                addr_to_str(res->ai_addr));
+        } else {
+            xlog_info("resolve server domain result [%s], connecting...",
+                addr_to_str(res->ai_addr));
+            retry_displayed = 0;
+        }
 
         /* save resolved server domain. */
         memcpy(&server_addr_r, res->ai_addr, res->ai_addrlen);
