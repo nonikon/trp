@@ -296,6 +296,7 @@ static void usage(const char* s)
     fprintf(stderr, "  -u <number>   set the number of UDP-over-TCP connection pools. (default: 0)\n");
     fprintf(stderr, "  -U <NUMBER>   set the number of UDP-over-TCP connection pools and disable TCP tunnel. (default: 0)\n");
     fprintf(stderr, "  -O <number>   set UDP connection timeout seconds. (default: %d)\n", UDPCONN_TIMEO);
+    fprintf(stderr, "                set a negative number to enable close-on-recv feature. (recommended for DNS relay)\n");
 #ifdef _WIN32
     fprintf(stderr, "  -L <path>     write output to file. (default: write to STDOUT)\n");
 #else
@@ -444,12 +445,19 @@ int main(int argc, char** argv)
         nconnect = 1;
     }
 
-    if (utimeo <= 0 || utimeo > MAX_UDPCONN_TIMEO) {
+    if (utimeo < 0) {
+        xlog_info("UDP flag close-on-recv ON.");
+        utimeo = -utimeo;
+        xclient.utimeo = 0x80;
+    } else {
+        xclient.utimeo = 0;
+    }
+    if (utimeo > MAX_UDPCONN_TIMEO) {
         xlog_warn("invalid UDP connection timeout [%d], reset to [%d].",
             utimeo, UDPCONN_TIMEO);
         utimeo = UDPCONN_TIMEO;
     }
-    xclient.utimeo = (u8_t) utimeo;
+    xclient.utimeo |= (u8_t) utimeo; /* utimeo == 0 is allowed */
 
     if (devid_str && str_to_devid(xclient.device_id, devid_str) != 0) {
         xlog_error("invalid device id string [%s].", devid_str);
