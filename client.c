@@ -16,7 +16,7 @@
 #include "remote.h"
 
 #define RECONNECT_SERVER_INTERVAL   (10 * 1000) /* ms */
-#define DEFAULT_DEVICE_ID           "\x11\x22\x33\x44\x55\x66\x77\x88"
+#define DEFAULT_DEVID_STR           "test"
 
 /*  --------         --------         --------
  * | remote | <---> | client | <---> | server |
@@ -336,7 +336,7 @@ static void usage(const char* s)
 #ifdef WITH_CTRLSERVER
     fprintf(stderr, "  -r <address>  HTTP control server listen at. (default: disabled)\n");
 #endif
-    fprintf(stderr, "  -d <devid>    device id (1~16 bytes hex string) of this client. (default: %s)\n", devid_to_str((u8_t*) DEFAULT_DEVICE_ID));
+    fprintf(stderr, "  -d <devid>    device id (1~16 bytes string) of this client. (default: %s)\n", DEFAULT_DEVID_STR);
     fprintf(stderr, "  -k <password> crypto password with server. (default: none)\n");
     fprintf(stderr, "  -K <PASSWORD> crypto password with proxy client. (default: none)\n");
     fprintf(stderr, "  -m <method>   crypto method with server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
@@ -487,8 +487,9 @@ int main(int argc, char** argv)
 
     if (!devid_str) {
         xlog_info("device id not set, use default.");
-        memcpy(device_id, DEFAULT_DEVICE_ID, DEVICE_ID_SIZE);
-    } else if (str_to_devid(device_id, devid_str) != 0) {
+        devid_str = DEFAULT_DEVID_STR;
+    }
+    if (str_to_devid(device_id, devid_str) != 0) {
         xlog_error("invalid device id string [%s].", devid_str);
         goto end;
     }

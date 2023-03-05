@@ -1281,7 +1281,7 @@ static int __pending_ctx_equal(void* l, void* r)
 static unsigned __udp_session_hash(void* v)
 {
     /* first 4 bytes of session id. */
-    return xhash_data_hash(v, 4);
+    return xhash_improve_hash(*(unsigned*) v);
 }
 static int __udp_session_equal(void* l, void* r)
 {

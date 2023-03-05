@@ -30,7 +30,7 @@
 #define MAX_SOCKBUF_SIZE    (4096 - sizeof(io_buf_t) - sizeof(xlist_node_t))
 
 #define SESSION_ID_SIZE     16      /* proxy-client session id size */
-#define DEVICE_ID_SIZE      8       /* client device id size */
+#define DEVICE_ID_SIZE      16      /* client device id size, MUST <= MAX_DOMAIN_LEN */
 
 #define CONNECT_CLI_TIMEO   (10)    /* s */
 #define UDPCONN_TIMEO       (20)    /* s */
@@ -91,7 +91,7 @@ struct sockaddr_dm {
      char sdm_addr[MAX_DOMAIN_LEN]; /* null-terminated domain */
 };
 
-#define is_valid_devid(s)   (*(u32_t*) (s))
+#define is_valid_devid(s)   (*(u8_t*) (s))
 
 #define is_valid_command(c) ( \
             (c)->tag == CMD_TAG && \

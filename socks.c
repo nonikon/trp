@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 nonikon@qq.com.
+ * Copyright (C) 2021-2023 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -516,7 +516,7 @@ static void usage(const char* s)
     fprintf(stderr, "[options]:\n");
     fprintf(stderr, "  -x <address>  proxy server connect to. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
     fprintf(stderr, "  -b <address>  SOCKS4/SOCKS5 server listen at. (default: 127.0.0.1:%d)\n", DEF_SSERVER_PORT);
-    fprintf(stderr, "  -d <devid>    device id (1~16 bytes hex string) of client connect to. (default: not connect client)\n");
+    fprintf(stderr, "  -d <devid>    device id (1~16 bytes string) of client connect to. (default: not connect client)\n");
     fprintf(stderr, "  -k <password> crypto password with proxy server. (default: none)\n");
     fprintf(stderr, "  -K <PASSWORD> crypto password with client. (default: none)\n");
     fprintf(stderr, "  -m <method>   crypto method with proxy server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");

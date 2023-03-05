@@ -230,41 +230,25 @@ const char* maddr_to_str(const cmd_t* cmd)
 
 const char* devid_to_str(const u8_t id[DEVICE_ID_SIZE])
 {
-    static const char tb[16] = "0123456789ABCDEF";
-    int i;
-
-    for (i = 0; i < DEVICE_ID_SIZE; ++i) {
-        __addrbuf[i * 2] = tb[id[i] >> 4];
-        __addrbuf[i * 2 + 1] = tb[id[i] & 0x0F];
-    }
-
-    __addrbuf[DEVICE_ID_SIZE * 2] = 0;
+    __addrbuf[DEVICE_ID_SIZE] = 0;
+    memcpy(__addrbuf, id, DEVICE_ID_SIZE);
     return __addrbuf;
 }
 
 int str_to_devid(u8_t id[DEVICE_ID_SIZE], const char* str)
 {
-    int i, c, l = (int) strlen(str);
+    int i, l = (int) strlen(str);
 
-    if (!l || l > DEVICE_ID_SIZE * 2)
+    if (!l || l > DEVICE_ID_SIZE)
         return -1;
 
-    memset(id, 0, DEVICE_ID_SIZE);
+    memcpy(id, str, l);
 
-    for (i = 0; i < l; ++i) {
-        if (str[i] >= '0' && str[i] <= '9')
-            c = str[i] - '0';
-        else if (str[i] >= 'a' && str[i] <= 'f')
-            c = str[i] - 'a' + 10;
-        else if (str[i] >= 'A' && str[i] <= 'F')
-            c = str[i] - 'A' + 10;
-        else
-            return -1;
-
-        id[i / 2] = id[i / 2] << 4 | c;
+    for (i = l; i < DEVICE_ID_SIZE; ++i) {
+        id[i] = i - l;
     }
 
-    return is_valid_devid(id) ? 0 : -1;
+    return 0;
 }
 
 static inline void mmhash64(unsigned char h[8], const unsigned char* d, unsigned l)
