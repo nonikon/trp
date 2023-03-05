@@ -57,12 +57,13 @@ enum {
 #define CMD_MAX_SIZE    (sizeof(cmd_t) + MAX_DOMAIN_LEN)
 
 typedef struct {
-    u8_t md[CMD_MD_SIZE];
-    u8_t tag;
-    u8_t major;
-    u8_t minor;
-    u8_t cmd;
+    u8_t md[CMD_MD_SIZE]; /* digest of cmd_t (MUST be the first member) */
+
+    u8_t tag;   /* CMD_TAG */
+    u8_t major; /* VERSION_MAJOR */
+    u8_t minor; /* VERSION_MINOR */
     u8_t rsv;   /* reserved */
+    u8_t cmd;   /* CMD_CONNECT_IPV4, ... */
     u8_t len;   /* data length */
     u16_t port; /* big endian port */
     u8_t data[0];
@@ -92,10 +93,10 @@ struct sockaddr_dm {
 
 #define is_valid_devid(s)   (*(u32_t*) (s))
 
-#define is_valid_command(c)     ( \
+#define is_valid_command(c) ( \
+            (c)->tag == CMD_TAG && \
             (c)->major == VERSION_MAJOR && \
-            (c)->minor == VERSION_MINOR && \
-            (c)->tag == CMD_TAG)
+            (c)->minor == VERSION_MINOR)
 
 void seed_rand(u32_t seed);
 void rand_bytes(u8_t* data, u32_t len);
