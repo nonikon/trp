@@ -329,3 +329,21 @@ int check_command_md(cmd_t* cmd)
     mmhash64(md, cmd->md + CMD_MD_SIZE, CMD_MAX_SIZE - CMD_MD_SIZE);
     return memcmp(md, cmd->md, CMD_MD_SIZE) == 0;
 }
+
+const char* version_string()
+{
+#define __STRINGIFY_HELPER(v) #v
+#define __STRINGIFY(v) __STRINGIFY_HELPER(v)
+
+#define __VERSION_STRING __STRINGIFY(VERSION_MAJOR) \
+                    "."  __STRINGIFY(VERSION_MINOR) \
+                    "."  __STRINGIFY(VERSION_PATCH)
+
+#if VERSION_ISREL
+    return __VERSION_STRING "-release";
+#elif defined(GIT_COMMIT_ID)
+    return __VERSION_STRING "-" GIT_COMMIT_ID;
+#else
+    return __VERSION_STRING "-dev";
+#endif
+}

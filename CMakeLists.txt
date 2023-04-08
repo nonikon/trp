@@ -10,6 +10,18 @@ if(LIBUV_EMBEDDED)
     add_subdirectory(${LIBUV_SRC_PATH})
 endif()
 
+# get Git current commit id
+find_package(Git QUIET)
+if(GIT_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE GIT_COMMIT_ID
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+endif()
+
 set(generic_sources
     xhash.c
     xlist.c
@@ -24,6 +36,11 @@ set(generic_defines
     XLIST_ENABLE_CACHE=1
     XLOG_OUT_CTRL=4
 )
+if(NOT ${GIT_COMMIT_ID})
+    list(APPEND generic_defines
+        GIT_COMMIT_ID="${GIT_COMMIT_ID}"
+    )
+endif()
 
 # server
 set(server_sources

@@ -13,7 +13,8 @@
 
 #define VERSION_MAJOR       1
 #define VERSION_MINOR       4
-#define VERSION_PATCH       0
+#define VERSION_PATCH       1
+#define VERSION_ISREL       0
 
 #define DEF_SERVER_PORT     9901    /* default server port */
 #define DEF_XSERVER_PORT    9902    /* default proxy server port */
@@ -135,5 +136,7 @@ int str_to_devid(u8_t id[DEVICE_ID_SIZE], const char* str);
 void fill_command_md(cmd_t* cmd);
 /* validate 'cmd->md'. */
 int check_command_md(cmd_t* cmd);
+
+const char* version_string();
 
 #endif // _COMMON_H_

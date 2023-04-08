@@ -512,7 +512,7 @@ static void on_udp_sclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
 
 static void usage(const char* s)
 {
-    fprintf(stderr, "trp %d.%d.%d, libuv %s, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, uv_version_string(), s);
+    fprintf(stderr, "trp %s libuv %s, usage: %s [option]...\n", version_string(), uv_version_string(), s);
     fprintf(stderr, "[options]:\n");
     fprintf(stderr, "  -x <address>  proxy server connect to. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
     fprintf(stderr, "  -b <address>  SOCKS4/SOCKS5 server listen at. (default: 127.0.0.1:%d)\n", DEF_SSERVER_PORT);
@@ -530,6 +530,7 @@ static void usage(const char* s)
     fprintf(stderr, "  -L <path>     write output to file and run as daemon. (default: write to STDOUT)\n");
 #endif
     fprintf(stderr, "  -v            output verbosely.\n");
+    fprintf(stderr, "  -V            output version string.\n");
     fprintf(stderr, "  -h            print this help message.\n");
     fprintf(stderr, "[address]:\n");
     fprintf(stderr, "  1.2.3.4:8080  IPV4 string with port.\n");
@@ -580,6 +581,9 @@ int main(int argc, char** argv)
             /* short option without argument. (-opt[0]) */
             switch (opt[0]) {
             case 'v': verbose = 1; continue;
+            case 'V':
+                fprintf(stderr, "trp %s libuv %s.\n", version_string(), uv_version_string());
+                return 1;
             case 'h':
                 usage(argv[0]);
                 return 1;
@@ -740,7 +744,7 @@ int main(int argc, char** argv)
     }
 
     if (nconnect) {
-        xlog_info("enable udp relay.");
+        xlog_info("enable UDP relay, connections [%d], timeout [%d].", nconnect, utimeo);
         uv_udp_init(xclient.loop, &io_usserver);
         /* start socks5 udp listen io. */
         error = uv_udp_bind(&io_usserver, &saddr.x, 0);

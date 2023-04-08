@@ -168,7 +168,7 @@ static void on_xclient_connect(uv_stream_t* stream, int status)
 
 static void usage(const char* s)
 {
-    fprintf(stderr, "trp %d.%d.%d, libuv %s, usage: %s [option]...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, uv_version_string(), s);
+    fprintf(stderr, "trp %s libuv %s, usage: %s [option]...\n", version_string(), uv_version_string(), s);
     fprintf(stderr, "[options]:\n");
 #ifdef WITH_CLIREMOTE
     fprintf(stderr, "  -s <address>  server listen at. (default: 127.0.0.1:%d)\n", DEF_SERVER_PORT);
@@ -189,6 +189,7 @@ static void usage(const char* s)
     fprintf(stderr, "  -D            disable direct connect (connect tcp or udp remote directly).\n");
 #endif
     fprintf(stderr, "  -v            output verbosely.\n");
+    fprintf(stderr, "  -V            output version string.\n");
     fprintf(stderr, "  -h            print this help message.\n");
     fprintf(stderr, "[address]:\n");
     fprintf(stderr, "  1.2.3.4:8080  IPV4 string with port.\n");
@@ -247,6 +248,9 @@ int main(int argc, char** argv)
 #ifdef WITH_CLIREMOTE
             case 'D': dconnoff = 1; continue;
 #endif
+            case 'V':
+                fprintf(stderr, "trp %s libuv %s.\n", version_string(), uv_version_string());
+                return 1;
             case 'h':
                 usage(argv[0]);
                 return 1;
