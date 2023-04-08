@@ -16,6 +16,8 @@
 #define VERSION_PATCH       1
 #define VERSION_ISREL       0
 
+#define DEF_CONFIG_FILE     "trp.ini"
+
 #define DEF_SERVER_PORT     9901    /* default server port */
 #define DEF_XSERVER_PORT    9902    /* default proxy server port */
 #define DEF_CSERVER_PORT    9903    /* default control server (http) port */
@@ -85,6 +87,12 @@ typedef struct {
     char buffer[0];
 } io_buf_t;
 
+typedef struct {
+    char* name;
+    char* value;
+    char buffer[0];
+} config_item_t;
+
 /* domain struct which compatible with 'struct sockaddr' */
 struct sockaddr_dm {
     u16_t sdm_family; /* (always '0') */
@@ -132,11 +140,17 @@ const char* devid_to_str(const u8_t id[DEVICE_ID_SIZE]);
 /* ... */
 int str_to_devid(u8_t id[DEVICE_ID_SIZE], const char* str);
 
+/* load config file from 'path' with section 'sec'. */
+int load_config_file(const char* path, const char* sec);
+/* get the next config item. */
+config_item_t* get_config_item(config_item_t* prev);
+
 /* fill 'cmd->md'. */
 void fill_command_md(cmd_t* cmd);
 /* validate 'cmd->md'. */
 int check_command_md(cmd_t* cmd);
 
+/* get current version string. */
 const char* version_string();
 
 #endif // _COMMON_H_

@@ -30,11 +30,14 @@ set(generic_sources
     crypto.c
     sm4.c
     chacha.c
+    ini.c
 )
 set(generic_defines
     XHASH_ENABLE_CACHE=1
     XLIST_ENABLE_CACHE=1
     XLOG_OUT_CTRL=4
+    INI_ALLOW_MULTILINE=0
+    INI_MAX_LINE=512
 )
 if(NOT ${GIT_COMMIT_ID})
     list(APPEND generic_defines

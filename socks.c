@@ -529,6 +529,8 @@ static void usage(const char* s)
     fprintf(stderr, "  -n <number>   set max number of open files.\n");
     fprintf(stderr, "  -L <path>     write output to file and run as daemon. (default: write to STDOUT)\n");
 #endif
+    fprintf(stderr, "  -C <path>     set config file path. (default: trp.ini)\n");
+    fprintf(stderr, "  -S <section>  set config section name. (default: socks)\n");
     fprintf(stderr, "  -v            output verbosely.\n");
     fprintf(stderr, "  -V            output version string.\n");
     fprintf(stderr, "  -h            print this help message.\n");
@@ -549,6 +551,8 @@ int main(int argc, char** argv)
 {
     uv_tcp_t io_sserver; /* socks server listen io */
     union { struct sockaddr x; struct sockaddr_in6 d; } saddr;
+    const char* cfg_path = DEF_CONFIG_FILE;
+    const char* cfg_sec = "socks";
     const char* xserver_str = "127.0.0.1";
     const char* sserver_str = "127.0.0.1";
     const char* devid_str = NULL;
@@ -613,6 +617,8 @@ int main(int argc, char** argv)
             case 'n':      nofile = atoi(arg); continue;
 #endif
             case 'L':     logfile = arg; continue;
+            case 'C':    cfg_path = arg; continue;
+            case 'S':     cfg_sec = arg; continue;
             }
 
             fprintf(stderr, "%s: invalid parameter [-%c %s].\n", argv[0], opt[0], arg);
@@ -635,6 +641,46 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    if (load_config_file(cfg_path, cfg_sec) != 0) {
+        fprintf(stderr, "error when parse config file [%s], ignore configs.\n", cfg_path);
+    } else {
+        config_item_t* i = NULL;
+
+        while (!!(i = get_config_item(i))) {
+            if (!i->name[0] || !i->value[0]) {
+                fprintf(stderr, "invalid config item [%s=%s], ignore.\n", i->name, i->value);
+            } else if (!strcmp(i->name, "v")) {
+                verbose = atoi(i->value);
+            } else if (!strcmp(i->name, "x")) {
+                xserver_str = i->value;
+            } else if (!strcmp(i->name, "b")) {
+                sserver_str = i->value;
+            } else if (!strcmp(i->name, "d")) {
+                devid_str = i->value;
+            } else if (!strcmp(i->name, "m")) {
+                method = atoi(i->value);
+            } else if (!strcmp(i->name, "M")) {
+                methodx = atoi(i->value);
+            } else if (!strcmp(i->name, "k")) {
+                passwd = i->value;
+            } else if (!strcmp(i->name, "K")) {
+                passwdx = i->value;
+            } else if (!strcmp(i->name, "u")) {
+                nconnect = atoi(i->value);
+            } else if (!strcmp(i->name, "O")) {
+                utimeo = atoi(i->value);
+#ifndef _WIN32
+            } else if (!strcmp(i->name, "n")) {
+                nofile = atoi(i->value);
+#endif
+            } else if (!strcmp(i->name, "L")) {
+                logfile = i->value;
+            } else {
+                fprintf(stderr, "invalid config item name [%s], ignore.\n", i->name);
+            }
+        }
+    }
+
     if (xlog_init(logfile) != 0) {
         fprintf(stderr, "open logfile failed.\n");
     }
@@ -655,9 +701,9 @@ int main(int argc, char** argv)
         struct rlimit limit = { nofile, nofile };
 
         if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
-            xlog_warn("set NOFILE limit to %d failed: %s.", nofile, strerror(errno));
+            xlog_warn("set NOFILE limit to [%d] failed: %s.", nofile, strerror(errno));
         } else {
-            xlog_info("set NOFILE limit to %d.", nofile);
+            xlog_info("set NOFILE limit to [%d].", nofile);
         }
     }
 #endif
@@ -705,13 +751,14 @@ int main(int argc, char** argv)
     }
 
     if (crypto_init(&xclient.crypto, method) != 0) {
-        xlog_error("invalid crypto method: %d.", method);
+        xlog_error("invalid crypto method: [%d].", method);
         goto end;
     }
     if (crypto_init(&xclient.cryptox, methodx) != 0) {
-        xlog_error("invalid crypto METHOD: %d.", methodx);
+        xlog_error("invalid crypto METHOD: [%d].", methodx);
         goto end;
     }
+    xlog_info("crypto method [%d], METHOD [%d].", method, methodx);
 
     if (parse_ip_str(xserver_str, DEF_XSERVER_PORT, &xclient.xserver_addr.x) != 0) {
         struct sockaddr_dm dm;

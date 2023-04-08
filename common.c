@@ -7,7 +7,10 @@
 #include <stdlib.h>
 
 #include "common.h"
+#include "ini.h"
+#include "xlist.h"
 
+static xlist_t __config_items; /* sizeof(config_item_t) + INI_MAX_LINE */
 static u32_t __seed;
 static char __addrbuf[MAX_DOMAIN_LEN + 8]; /* long enough to store ipv4/ipv6/domain string and port. */
 
@@ -249,6 +252,64 @@ int str_to_devid(u8_t id[DEVICE_ID_SIZE], const char* str)
     }
 
     return 0;
+}
+
+static int on_config_item(void* user, const char* section,
+                const char* name, const char* value)
+{
+    unsigned nlen, vlen;
+    config_item_t* item;
+
+    if (strcmp(section, user) != 0) {
+        return 1;
+    }
+
+    item = xlist_alloc_back(&__config_items);
+    nlen = (int) strlen(name);
+    vlen = (int) strlen(value);
+
+    if (nlen + vlen > INI_MAX_LINE - 2) {
+        return 0;
+    }
+
+    item->name = item->buffer;
+    item->value = item->buffer + nlen + 1;
+    memcpy(item->name, name, nlen + 1);
+    memcpy(item->value, value, vlen + 1);
+
+    return 1;
+}
+
+int load_config_file(const char* path, const char* sec)
+{
+    if (__config_items.val_size == 0) {
+        xlist_init(&__config_items, sizeof(config_item_t) + INI_MAX_LINE, NULL);
+    } else {
+        xlist_clear(&__config_items);
+    }
+
+    if (ini_parse(path, on_config_item, (void*) sec) <= 0)
+        return 0;
+
+    /* ini_parse() > 0 means config file content error. */
+    return -1;
+}
+
+config_item_t* get_config_item(config_item_t* i)
+{
+    /* NOTE: load_config() must be called before. */
+    xlist_iter_t iter;
+
+    if (i) {
+        iter = xlist_iter_next(xlist_value_iter(i));
+    } else {
+        iter = xlist_begin(&__config_items);
+    }
+
+    if (xlist_iter_valid(&__config_items, iter)) {
+        return xlist_iter_value(iter);
+    }
+    return NULL;
 }
 
 static inline void mmhash64(unsigned char h[8], const unsigned char* d, unsigned l)
