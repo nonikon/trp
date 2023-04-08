@@ -21,15 +21,11 @@ typedef struct sm4_ctx {
     u32_t idx;
 } sm4_ctx_t;
 
-/* expand key from 16 bytes to 32 bytes */
-static void key_expand(u8_t key[32])
-{
-    // TODO
-    int i;
-    for (i = 0; i < 16; ++i) {
-        key[i + 16] = ~key[i];
-    }
-}
+#define LOAD_U32_LE(p, n) ( \
+            (p)[4 * n + 0] <<  0 | \
+            (p)[4 * n + 1] <<  8 | \
+            (p)[4 * n + 2] << 16 | \
+            (p)[4 * n + 3] << 24 )
 
 static int chacha20_ctx_init(crypto_ctx_t* _, const u8_t key[16], const u8_t iv[16])
 {
@@ -41,12 +37,23 @@ static int chacha20_ctx_init(crypto_ctx_t* _, const u8_t key[16], const u8_t iv[
     ctx->state[2] = 0x79622d32;
     ctx->state[3] = 0x6b206574;
 
-    /* set key */
-    memcpy(ctx->state + 4, key, 16);
-    key_expand((u8_t*) (ctx->state + 4));
+    /* set key (first 16 bytes) */
+    ctx->state[4] = LOAD_U32_LE(key, 0);
+    ctx->state[5] = LOAD_U32_LE(key, 1);
+    ctx->state[6] = LOAD_U32_LE(key, 2);
+    ctx->state[7] = LOAD_U32_LE(key, 3);
+
+    /* fill the left 16 bytes key (TODO...) */
+    ctx->state[8]  = ~ctx->state[4];
+    ctx->state[9]  = ~ctx->state[5];
+    ctx->state[10] = ~ctx->state[6];
+    ctx->state[11] = ~ctx->state[7];
 
     /* set counter and nonce */
-    memcpy(ctx->state + 12, iv, 16);
+    ctx->state[12] = LOAD_U32_LE(iv, 0);
+    ctx->state[13] = LOAD_U32_LE(iv, 1);
+    ctx->state[14] = LOAD_U32_LE(iv, 2);
+    ctx->state[15] = LOAD_U32_LE(iv, 3);
 
     memset(&ctx->kstream, 0, sizeof(ctx->kstream));
     ctx->idx = 0;
