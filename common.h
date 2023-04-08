@@ -17,6 +17,7 @@
 #define VERSION_ISREL       0
 
 #define DEF_CONFIG_FILE     "trp.ini"
+#define DEF_DEVID_STRING    "test"
 
 #define DEF_SERVER_PORT     9901    /* default server port */
 #define DEF_XSERVER_PORT    9902    /* default proxy server port */
@@ -35,6 +36,7 @@
 #define SESSION_ID_SIZE     16      /* proxy-client session id size */
 #define DEVICE_ID_SIZE      16      /* client device id size, MUST <= MAX_DOMAIN_LEN */
 
+#define RECONNECT_SRV_INTVL (10)    /* s */
 #define CONNECT_CLI_TIMEO   (10)    /* s */
 #define UDPCONN_TIMEO       (20)    /* s */
 #define KEEPIDLE_TIME       (40)    /* s */

@@ -15,9 +15,6 @@
 
 #include "remote.h"
 
-#define RECONNECT_SERVER_INTERVAL   (10 * 1000) /* ms */
-#define DEFAULT_DEVID_STR           "test"
-
 /*  --------         --------         --------
  * | remote | <---> | client | <---> | server |
  *  --------         --------         --------
@@ -113,9 +110,9 @@ static void new_server_connection(uv_timer_t* handle);
             xlog_warn("connection closed by server at COMMAND stage.");
             ++nconnect;
             if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
-                /* reconnect after RECONNECT_SERVER_INTERVAL ms. */
+                /* reconnect after RECONNECT_SRV_INTVL seconds. */
                 uv_timer_start(&reconnect_timer, new_server_connection,
-                    RECONNECT_SERVER_INTERVAL, 0);
+                    RECONNECT_SRV_INTVL * 1000, 0);
             }
         } else if (ctx->stage == STAGE_FORWARDTCP) {
             uv_close((uv_handle_t*) &ctx->remote->t.io, on_tcp_remote_closed);
@@ -171,16 +168,16 @@ static void on_server_connected(uv_connect_t* req, int status)
         server_addr_r.x.sa_family = 0;
         ++nconnect;
         if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
-            /* reconnect after RECONNECT_SERVER_INTERVAL ms. */
+            /* reconnect after RECONNECT_SRV_INTVL seconds. */
             uv_timer_start(&reconnect_timer, new_server_connection,
-                RECONNECT_SERVER_INTERVAL, 0);
+                RECONNECT_SRV_INTVL * 1000, 0);
         }
         if (retry_displayed) {
             xlog_debug("connect server failed: %s, retry every %d seconds.",
-                uv_err_name(status), RECONNECT_SERVER_INTERVAL / 1000);
+                uv_err_name(status), RECONNECT_SRV_INTVL);
         } else {
             xlog_error("connect server failed: %s, retry every %d seconds.",
-                uv_err_name(status), RECONNECT_SERVER_INTERVAL / 1000);
+                uv_err_name(status), RECONNECT_SRV_INTVL);
             retry_displayed = 1;
         }
     } else {
@@ -230,9 +227,9 @@ static void connect_server(struct sockaddr* addr)
 
         ++nconnect;
         if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
-            /* reconnect after RECONNECT_SERVER_INTERVAL ms. */
+            /* reconnect after RECONNECT_SRV_INTVL seconds. */
             uv_timer_start(&reconnect_timer, new_server_connection,
-                RECONNECT_SERVER_INTERVAL, 0);
+                RECONNECT_SRV_INTVL * 1000, 0);
         }
 
         uv_close((uv_handle_t*) &ctx->io, on_peer_closed);
@@ -248,17 +245,17 @@ static void on_server_domain_resolved(
     if (status < 0) {
         if (retry_displayed) {
             xlog_debug("resolve server domain failed: %s, retry every %d seconds.",
-                uv_err_name(status), RECONNECT_SERVER_INTERVAL / 1000);
+                uv_err_name(status), RECONNECT_SRV_INTVL);
         } else {
             xlog_error("resolve server domain failed: %s, retry every %d seconds.",
-                uv_err_name(status), RECONNECT_SERVER_INTERVAL / 1000);
+                uv_err_name(status), RECONNECT_SRV_INTVL);
             retry_displayed = 1;
         }
         ++nconnect;
         if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
-            /* reconnect after RECONNECT_SERVER_INTERVAL ms. */
+            /* reconnect after RECONNECT_SRV_INTVL seconds. */
             uv_timer_start(&reconnect_timer, new_server_connection,
-                RECONNECT_SERVER_INTERVAL, 0);
+                RECONNECT_SRV_INTVL * 1000, 0);
         }
 
     } else {
@@ -314,13 +311,13 @@ static void new_server_connection(uv_timer_t* timer)
 
             ++nconnect;
             if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
-                /* reconnect after RECONNECT_SERVER_INTERVAL ms.
+                /* reconnect after RECONNECT_SRV_INTVL seconds.
                  * 'reconnect_timer' is inactive when 'new_server_connection'
                  * is invoked by 'reconnect_timer'. so,
                  * 'uv_timer_start' will not be called twice anyway.
                  */
                 uv_timer_start(&reconnect_timer, new_server_connection,
-                    RECONNECT_SERVER_INTERVAL, 0);
+                    RECONNECT_SRV_INTVL * 1000, 0);
             }
 
             xlist_erase(&remote.addrinfo_reqs, xlist_value_iter(req));
@@ -336,7 +333,7 @@ static void usage(const char* s)
 #ifdef WITH_CTRLSERVER
     fprintf(stderr, "  -r <address>  HTTP control server listen at. (default: disabled)\n");
 #endif
-    fprintf(stderr, "  -d <devid>    device id (1~16 bytes string) of this client. (default: %s)\n", DEFAULT_DEVID_STR);
+    fprintf(stderr, "  -d <devid>    device id (1~16 bytes string) of this client. (default: %s)\n", DEF_DEVID_STRING);
     fprintf(stderr, "  -k <password> crypto password with server. (default: none)\n");
     fprintf(stderr, "  -K <PASSWORD> crypto password with proxy client. (default: none)\n");
     fprintf(stderr, "  -m <method>   crypto method with server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
@@ -537,7 +534,7 @@ int main(int argc, char** argv)
 
     if (!devid_str) {
         xlog_info("device id not set, use default.");
-        devid_str = DEFAULT_DEVID_STR;
+        devid_str = DEF_DEVID_STRING;
     }
     if (str_to_devid(device_id, devid_str) != 0) {
         xlog_error("invalid device id string [%s].", devid_str);
