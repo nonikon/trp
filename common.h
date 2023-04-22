@@ -13,8 +13,8 @@
 
 #define VERSION_MAJOR       1
 #define VERSION_MINOR       4
-#define VERSION_PATCH       1
-#define VERSION_ISREL       1
+#define VERSION_PATCH       2
+#define VERSION_ISREL       0
 
 #define DEF_CONFIG_FILE     "trp.ini"
 #define DEF_DEVID_STRING    "test"
@@ -108,6 +108,10 @@ struct sockaddr_dm {
             (c)->tag == CMD_TAG && \
             (c)->major == VERSION_MAJOR && \
             (c)->minor == VERSION_MINOR)
+
+#ifdef _WIN32
+int daemon(int argc, char** argv);
+#endif
 
 void seed_rand(u32_t seed);
 void rand_bytes(u8_t* data, u32_t len);

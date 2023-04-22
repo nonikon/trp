@@ -14,6 +14,48 @@ static xlist_t __config_items; /* sizeof(config_item_t) + INI_MAX_LINE */
 static u32_t __seed;
 static char __addrbuf[MAX_DOMAIN_LEN + 8]; /* long enough to store ipv4/ipv6/domain string and port. */
 
+#ifdef _WIN32
+int daemon(int argc, char** argv)
+{
+    CHAR path[MAX_PATH];
+    CHAR cmdline[4096];
+    STARTUPINFOA sinfo;
+    PROCESS_INFORMATION pinfo;
+    DWORD sz;
+    int i;
+
+    sz = GetModuleFileNameA(NULL, path, sizeof(path));
+    if (sz >= sizeof(path)) {
+        return -1;
+    }
+
+    for (sz = 0, i = 0; i < argc; ++i) {
+        DWORD l = (DWORD) strlen(argv[i]);
+        if (sz + l + 1 >= sizeof(cmdline) - 8) { /* --child, 7+1 bytes */
+            return -1;
+        }
+        memcpy(cmdline + sz, argv[i], l);
+        cmdline[sz + l] = ' ';
+        sz += l + 1;
+    }
+    strcpy(cmdline + sz, "--child");
+
+    memset(&sinfo, 0, sizeof(sinfo));
+    sinfo.cb = sizeof(sinfo);
+    memset(&pinfo, 0, sizeof(pinfo));
+    if (!CreateProcessA(path, cmdline, NULL, NULL, FALSE,
+            DETACHED_PROCESS, NULL, NULL, &sinfo, &pinfo)) {
+        return -1;
+    }
+    WaitForInputIdle(pinfo.hProcess, INFINITE);
+    // WaitForSingleObject(pinfo.hProcess, INFINITE);
+
+    CloseHandle(pinfo.hThread);
+    CloseHandle(pinfo.hProcess);
+    exit(0);
+}
+#endif
+
 void seed_rand(u32_t seed)
 {
     __seed = seed;

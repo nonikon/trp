@@ -179,12 +179,10 @@ static void usage(const char* s)
 #endif
     fprintf(stderr, "  -k <password> crypto password. (default: none)\n");
     fprintf(stderr, "  -m <method>   crypto method, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
-#ifdef _WIN32
-    fprintf(stderr, "  -L <path>     write output to file. (default: write to STDOUT)\n");
-#else
+#ifndef _WIN32
     fprintf(stderr, "  -n <number>   set max number of open files.\n");
-    fprintf(stderr, "  -L <path>     write output to file and run as daemon. (default: write to STDOUT)\n");
 #endif
+    fprintf(stderr, "  -L <path>     write output to file and run as daemon. (default: write to STDOUT)\n");
     fprintf(stderr, "  -C <path>     set config file path. (default: trp.ini)\n");
     fprintf(stderr, "  -S <section>  set config section name. (default: server)\n");
 #ifdef WITH_CLIREMOTE
@@ -224,7 +222,9 @@ int main(int argc, char** argv)
     const char* logfile = NULL;
     const char* passwd = NULL;
     int method = CRYPTO_CHACHA20;
-#ifndef _WIN32
+#ifdef _WIN32
+    int is_childproc = 0;
+#else
     int nofile = 0;
 #endif
 #ifdef WITH_CLIREMOTE
@@ -295,6 +295,12 @@ int main(int argc, char** argv)
         opt = opt + 2;
 
         /* long option without argument. (--opt) */
+#ifdef _WIN32
+        if (!strcmp(opt, "child")) { /* --child is for internal use only */
+            is_childproc = 1;
+            continue;
+        }
+#endif
 
         arg = ++i < argc ? argv[i] : NULL;
         if (!arg) {
@@ -349,7 +355,7 @@ int main(int argc, char** argv)
     }
 
     if (xlog_init(logfile) != 0) {
-        fprintf(stderr, "open logfile failed.\n");
+        fprintf(stderr, "open logfile failed, switch to stdout.\n");
     }
 
     if (!verbose) {
@@ -358,9 +364,21 @@ int main(int argc, char** argv)
         xlog_info("enable verbose output.");
     }
 
-#ifndef _WIN32
-    if (logfile && daemon(1, 0) != 0) {
-        xlog_error("run as daemon failed: %s.", strerror(errno));
+#ifdef _WIN32
+    if (logfile && !is_childproc) {
+        xlog_exit(logfile); /* close log file */
+        if (daemon(argc, argv) != 0) {
+            xlog_init(logfile); /* reopen log file when daemon failed */
+            xlog_error("run as daemon failed: %u", GetLastError());
+        }
+    }
+#else
+    if (logfile) {
+        xlog_exit(logfile);
+        if (daemon(1, 0) != 0) {
+            xlog_init(logfile);
+            xlog_error("run as daemon failed: %s.", strerror(errno));
+        }
     }
     signal(SIGPIPE, SIG_IGN);
 
