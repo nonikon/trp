@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2021 nonikon@qq.com.
+ * Copyright (C) 2019-2023 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -17,11 +17,11 @@
 #endif
 
 #ifndef XLOG_MULTITHREAD
-#define XLOG_MULTITHREAD    0   /* multi-thread support */
+#define XLOG_MULTITHREAD    1   /* multi-thread support */
 #endif
 
 #ifndef XLOG_WITH_TID
-#define XLOG_WITH_TID       0   /* output thread identification */
+#define XLOG_WITH_TID       1   /* output thread identification */
 #endif
 
 #ifndef XLOG_WITH_EXTRA
@@ -45,10 +45,7 @@ extern unsigned xlog_out_level;
 #endif
 
 #if XLOG_WITH_EXTRA
-// #define XLOG_MACRO_N2S_(x)  #x
-// #define XLOG_MACRO_N2S(x)   XLOG_MACRO_N2S_(x)
-// #define XLOG_FORMAT(fmt)    "[" __FILE__ ":" XLOG_MACRO_N2S(__LINE__) "] " fmt
-#define XLOG_FORMAT(fmt)    "[%s:%d] " fmt, __FUNCTION__, __LINE__
+#define XLOG_FORMAT(fmt)    "%s:%d " fmt, __FUNCTION__, __LINE__
 #else
 #define XLOG_FORMAT(fmt)    fmt
 #endif

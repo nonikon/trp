@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2021 nonikon@qq.com.
+ * Copyright (C) 2019-2023 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -14,9 +14,9 @@
 
 unsigned xlog_out_level = XLOG_DEBUG;
 
-static unsigned rotate_ctrl = 3;
+static unsigned rotate_ctrl = 8;
 static unsigned out_bytes = 0;
-static unsigned out_max_bytes = 5 * 1024 * 1024;
+static unsigned out_max_bytes = 10 * 1024 * 1024;
 static unsigned out_name_idx = 0;
 static char*    out_file_path = NULL;
 static char     out_buf[XLOG_LINE_MAX];
@@ -29,16 +29,6 @@ static HANDLE out_fd = INVALID_HANDLE_VALUE;
 #if XLOG_MULTITHREAD
 static CRITICAL_SECTION lock;
 #endif
-
-static void init_out_bytes()
-{
-    DWORD sz = GetFileSize(out_fd, NULL);
-
-    if (sz != INVALID_FILE_SIZE)
-        out_bytes = (unsigned) sz;
-    else
-        out_bytes = 0;
-}
 
 static void init_out_name_idx()
 {
@@ -143,14 +133,18 @@ int xlog_init(const char* file_path)
 #if XLOG_MULTITHREAD
         InitializeCriticalSection(&lock);
 #endif
-        /* seek to end (append) */
-        SetFilePointer(out_fd, 0, 0, FILE_END);
+        if (GetFileType(out_fd) == FILE_TYPE_DISK) {
+            /* seek to end (append) */
+            SetFilePointer(out_fd, 0, 0, FILE_END);
 
-        out_file_path = _strdup(file_path);
+            out_file_path = _strdup(file_path);
+            out_bytes = (unsigned) GetFileSize(out_fd, NULL);
 
-        init_out_bytes();
-        init_out_name_idx();
-
+            if (out_bytes == INVALID_FILE_SIZE)
+                out_bytes = 0;
+            init_out_name_idx();
+        }
+        /* FILE_TYPE_CHAR when file_path is "nul"... */
         return 0;
     }
 
@@ -196,10 +190,10 @@ void xlog_println(const char* tag, const char* fmt, ...)
 
     GetLocalTime(&t);
 #if XLOG_WITH_TID
-    off = snprintf(out_buf, XLOG_LINE_MAX, "[%02d/%02d %02d:%02d:%02d] [%s] [%u] ",
+    off = snprintf(out_buf, XLOG_LINE_MAX, "%02d/%02d %02d:%02d:%02d %s %u ",
         t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, tag, (unsigned) GetCurrentThreadId());
 #else
-    off = snprintf(out_buf, XLOG_LINE_MAX, "[%02d/%02d %02d:%02d:%02d] [%s] ",
+    off = snprintf(out_buf, XLOG_LINE_MAX, "%02d/%02d %02d:%02d:%02d %s ",
         t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, tag);
 #endif
     va_start(ap, fmt);
@@ -209,17 +203,15 @@ void xlog_println(const char* tag, const char* fmt, ...)
     out_buf[off++] = '\r';
     out_buf[off++] = '\n';
 
-    if (WriteFile(out_fd, out_buf, off, &nw, NULL)) {
-        out_bytes += nw;
-
-        if (out_file_path) {
+    if (WriteFile(out_fd, out_buf, off, &nw, NULL) && out_file_path) {
+        /* output is a file, do rotate check */
 #if XLOG_SYNC_WRITE
-            FlushFileBuffers(out_fd);
+        FlushFileBuffers(out_fd);
 #endif
-            if (out_bytes > out_max_bytes) {
-                logfile_rotate();
-                out_bytes = 0;
-            }
+        out_bytes += nw;
+        if (out_bytes > out_max_bytes) {
+            logfile_rotate();
+            out_bytes = 0;
         }
     }
 
@@ -234,7 +226,7 @@ void xlog_printhex(const unsigned char* data, unsigned int len)
 
     unsigned int i = 0;
     unsigned int j = 0;
-
+    unsigned int bytes = 0;
     DWORD nw;
 
 #if XLOG_MULTITHREAD
@@ -251,7 +243,7 @@ void xlog_printhex(const unsigned char* data, unsigned int len)
             out_buf[j++] = '\n';
 
             if (WriteFile(out_fd, out_buf, j, &nw, NULL))
-                out_bytes += nw;
+                bytes += nw;
 
             j = 0;
         }
@@ -262,13 +254,14 @@ void xlog_printhex(const unsigned char* data, unsigned int len)
         out_buf[j++] = '\n';
 
         if (WriteFile(out_fd, out_buf, j, &nw, NULL))
-            out_bytes += nw;
+            bytes += nw;
     }
 
     if (out_file_path) {
 #if XLOG_SYNC_WRITE
         FlushFileBuffers(out_fd);
 #endif
+        out_bytes += bytes;
         if (out_bytes > out_max_bytes) {
             logfile_rotate();
             out_bytes = 0;
@@ -300,16 +293,6 @@ static int out_fd = STDOUT_FILENO;
 #if XLOG_MULTITHREAD
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 #endif
-
-static void init_out_bytes()
-{
-    struct stat s;
-
-    if (fstat(out_fd, &s) == 0)
-        out_bytes = (unsigned) s.st_size;
-    else
-        out_bytes = 0;
-}
 
 static void init_out_name_idx()
 {
@@ -385,6 +368,8 @@ static void logfile_rotate()
 
 int xlog_init(const char* file_path)
 {
+    struct stat fst;
+
     xlog_exit();
 
     if (!file_path) return 0;
@@ -403,11 +388,14 @@ int xlog_init(const char* file_path)
     fcntl(out_fd, F_SETFD, fcntl(out_fd, F_GETFD) | FD_CLOEXEC);
 #endif
 
-    out_file_path = strdup(file_path);
+    if (fstat(out_fd, &fst) == 0 && S_ISREG(fst.st_mode)) {
+        out_bytes = (unsigned) fst.st_size;
+        out_file_path = strdup(file_path);
 
-    init_out_bytes();
-    init_out_name_idx();
+        init_out_name_idx();
+    }
 
+    /* S_ISCHR when file_path is "/dev/null"...*/
     return 0;
 }
 
@@ -423,10 +411,12 @@ void xlog_ctrl(unsigned level, unsigned max_size, unsigned rotate)
 
 void xlog_exit()
 {
-    if (out_file_path) {
+    if (out_fd > STDERR_FILENO) {
         close(out_fd);
-        free(out_file_path);
         out_fd = STDOUT_FILENO;
+    }
+    if (out_file_path) {
+        free(out_file_path);
         out_file_path = NULL;
     }
 }
@@ -446,10 +436,10 @@ void xlog_println(const char* tag, const char* fmt, ...)
     time(&s);
     localtime_r(&s, &t);
 #if XLOG_WITH_TID
-    off = sprintf(out_buf, "[%02d/%02d %02d:%02d:%02d] [%s] [%u] ",
+    off = sprintf(out_buf, "%02d/%02d %02d:%02d:%02d %s %u ",
         t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec, tag, (unsigned) syscall(SYS_gettid));
 #else
-    off = sprintf(out_buf, "[%02d/%02d %02d:%02d:%02d] [%s] ",
+    off = sprintf(out_buf, "%02d/%02d %02d:%02d:%02d %s ",
         t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec, tag);
 #endif
     va_start(ap, fmt);
@@ -460,17 +450,14 @@ void xlog_println(const char* tag, const char* fmt, ...)
 
     nw = (int) write(out_fd, out_buf, off);
 
-    if (nw > 0) {
-        out_bytes += nw;
-
-        if (out_file_path) {
+    if (nw > 0 && out_file_path) {
 #if XLOG_SYNC_WRITE
-            fdatasync(out_fd);
+        fdatasync(out_fd);
 #endif
-            if (out_bytes > out_max_bytes) {
-                logfile_rotate();
-                out_bytes = 0;
-            }
+        out_bytes += nw;
+        if (out_bytes > out_max_bytes) {
+            logfile_rotate();
+            out_bytes = 0;
         }
     }
 
@@ -485,6 +472,7 @@ void xlog_printhex(const unsigned char* data, unsigned int len)
 
     unsigned int i = 0;
     unsigned int j = 0;
+    unsigned int bytes = 0;
 
     int nw;
 
@@ -502,7 +490,7 @@ void xlog_printhex(const unsigned char* data, unsigned int len)
 
             nw = (int) write(out_fd, out_buf, j);
             if (nw > 0)
-                out_bytes += nw;
+                bytes += nw;
 
             j = 0;
         }
@@ -513,13 +501,14 @@ void xlog_printhex(const unsigned char* data, unsigned int len)
 
         nw = (int) write(out_fd, out_buf, j);
         if (nw > 0)
-            out_bytes += nw;
+            bytes += nw;
     }
 
     if (out_file_path) {
 #if XLOG_SYNC_WRITE
         fdatasync(out_fd);
 #endif
+        out_bytes += bytes;
         if (out_bytes > out_max_bytes) {
             logfile_rotate();
             out_bytes = 0;
