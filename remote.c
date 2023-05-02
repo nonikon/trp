@@ -191,7 +191,7 @@ static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u3
     }
 
     if (!is_valid_command(cmd)) {
-        xlog_warn("invalid version: %02X [%u.%u].", cmd->tag, cmd->major, cmd->minor);
+        xlog_warn("invalid version: %02X (%u.%u).", cmd->tag, cmd->major, cmd->minor);
         return -1;
     }
 
@@ -204,7 +204,7 @@ static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u3
                 devid_to_str(cmd->data));
 
             if (pdctx == XHASH_INVALID_DATA) {
-                xlog_info("device_id [%s] not exist, insert.", devid_to_str(cmd->data));
+                xlog_info("device id (%s) not exist, insert.", devid_to_str(cmd->data));
 
                 /* create if not exist maybe unsafe, TODO */
                 pdctx = xhash_iter_data(xhash_put_ex(&remote_pri.pending_ctxs,
@@ -507,7 +507,7 @@ static void on_tcp_remote_domain_resolved(
         uv_close((uv_handle_t*) &ctx->io, on_peer_closed);
 
     } else {
-        xlog_debug("resolve result [%s], connect.", addr_to_str(res->ai_addr));
+        xlog_debug("resolve result: %s, connect.", addr_to_str(res->ai_addr));
 
         if (connect_tcp_remote(ctx, res->ai_addr) != 0) {
             /* connect failed immediately, just close this connection. */
@@ -615,7 +615,7 @@ static void on_udp_remote_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf,
         remote_ctx_t* rctx;
 
         conn->alive = 1;
-        xlog_debug("%zd bytes from udp remote [%s], id %x, to peer.", nread,
+        xlog_debug("%zd bytes from udp remote (%s), id %x, to peer.", nread,
             addr_to_str(addr), conn->id);
 
         rctx = choose_udp_remote_ctx(conn->parent);
@@ -729,7 +729,7 @@ static void send_udp_packet(remote_ctx_t* ctx, udp_cmd_t* cmd)
     }
     /* 'wbuf.len' == 0 is allowed. */
 
-    xlog_debug("udp packet to [%s] %u bytes, id %x.", addr_to_str(&addr),
+    xlog_debug("udp packet to %s %u bytes, id %x.", addr_to_str(&addr),
         wbuf.len, cmd->id);
 
     conn = xhash_get_data(&ctx->u.parent->conns, &cmd->id);
@@ -943,7 +943,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
     }
 
     if (!is_valid_command(cmd)) {
-        xlog_warn("invalid version: %02X [%u.%u].", cmd->tag, cmd->major, cmd->minor);
+        xlog_warn("invalid version: %02X (%u.%u).", cmd->tag, cmd->major, cmd->minor);
         return -1;
     }
 
@@ -986,12 +986,12 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
             return 0;
         }
 
-        xlog_warn("device_id not exist for peer.");
+        xlog_warn("device id (%s) not exist for peer.", devid_to_str(cmd->data));
         return -1;
     }
 
     if (remote.dconnect_off) {
-        xlog_debug("attempt to connect [%s] directly but function is disabled.",
+        xlog_debug("attempt to connect %s directly but function is disabled.",
             maddr_to_str(cmd));
         return -1;
     }
@@ -1259,7 +1259,7 @@ int start_ctrl_server(uv_loop_t* loop, const char* addrstr)
     } addr;
 
     if (parse_ip_str(addrstr, DEF_CSERVER_PORT, &addr.x) != 0) {
-        xlog_error("invalid control server address [%s].", addrstr);
+        xlog_error("invalid control server address (%s).", addrstr);
         return -1;
     }
 

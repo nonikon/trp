@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 nonikon@qq.com.
+ * Copyright (C) 2021-2023 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -314,43 +314,47 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    i = 0;
     if (load_config_file(cfg_path, cfg_sec) != 0) {
         fprintf(stderr, "error when parse config file [%s], ignore configs.\n", cfg_path);
     } else {
-        config_item_t* i = NULL;
+        config_item_t* item = NULL;
 
-        while (!!(i = get_config_item(i))) {
-            if (!i->name[0] || !i->value[0]) {
-                fprintf(stderr, "invalid config item [%s=%s], ignore.\n", i->name, i->value);
-            } else if (!strcmp(i->name, "v")) {
-                verbose = atoi(i->value);
+        while (!!(item = get_config_item(item))) {
+            if (!item->name[0] || !item->value[0]) {
+                fprintf(stderr, "invalid config item [%s=%s], ignore.\n", item->name, item->value);
+                continue;
+            } else if (!strcmp(item->name, "v")) {
+                verbose = atoi(item->value);
 #ifdef WITH_CLIREMOTE
-            } else if (!strcmp(i->name, "D")) {
-                dconnoff = atoi(i->value);
+            } else if (!strcmp(item->name, "D")) {
+                dconnoff = atoi(item->value);
 #endif
 #ifdef WITH_CLIREMOTE
-            } else if (!strcmp(i->name, "s")) {
-                server_str = i->value;
+            } else if (!strcmp(item->name, "s")) {
+                server_str = item->value;
 #endif
-            } else if (!strcmp(i->name, "x")) {
-                xserver_str = i->value;
+            } else if (!strcmp(item->name, "x")) {
+                xserver_str = item->value;
 #ifdef WITH_CTRLSERVER
-            } else if (!strcmp(i->name, "r")) {
-                cserver_str = i->value;
+            } else if (!strcmp(item->name, "r")) {
+                cserver_str = item->value;
 #endif
-            } else if (!strcmp(i->name, "m")) {
-                method = atoi(i->value);
-            } else if (!strcmp(i->name, "k")) {
-                passwd = i->value;
+            } else if (!strcmp(item->name, "m")) {
+                method = atoi(item->value);
+            } else if (!strcmp(item->name, "k")) {
+                passwd = item->value;
 #ifndef _WIN32
-            } else if (!strcmp(i->name, "n")) {
-                nofile = atoi(i->value);
+            } else if (!strcmp(item->name, "n")) {
+                nofile = atoi(item->value);
 #endif
-            } else if (!strcmp(i->name, "L")) {
-                logfile = i->value;
+            } else if (!strcmp(item->name, "L")) {
+                logfile = item->value;
             } else {
-                fprintf(stderr, "invalid config item name [%s], ignore.\n", i->name);
+                fprintf(stderr, "invalid config item name [%s], ignore.\n", item->name);
+                continue;
             }
+            ++i;
         }
     }
 
@@ -363,6 +367,9 @@ int main(int argc, char** argv)
     } else {
         xlog_info("enable verbose output.");
     }
+    if (i > 0) {
+        xlog_info("load %d item(s) from config file (%s).", i, cfg_path);
+    }
 
 #ifdef _WIN32
     if (logfile && !is_childproc) {
@@ -373,12 +380,8 @@ int main(int argc, char** argv)
         }
     }
 #else
-    if (logfile) {
-        xlog_exit(logfile);
-        if (daemon(1, 0) != 0) {
-            xlog_init(logfile);
-            xlog_error("run as daemon failed: %s.", strerror(errno));
-        }
+    if (logfile && daemon(1, 0) != 0) {
+        xlog_error("run as daemon failed: %s.", strerror(errno));
     }
     signal(SIGPIPE, SIG_IGN);
 
@@ -386,9 +389,9 @@ int main(int argc, char** argv)
         struct rlimit limit = { nofile, nofile };
 
         if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
-            xlog_warn("set NOFILE limit to [%d] failed: %s.", nofile, strerror(errno));
+            xlog_warn("set NOFILE limit to %d failed: %s.", nofile, strerror(errno));
         } else {
-            xlog_info("set NOFILE limit to [%d].", nofile);
+            xlog_info("set NOFILE limit to %d.", nofile);
         }
     }
 #endif
@@ -405,10 +408,10 @@ int main(int argc, char** argv)
     }
 
     if (crypto_init(&remote.crypto, method) != 0) {
-        xlog_error("invalid crypto method: [%d].", method);
+        xlog_error("invalid crypto method (%d).", method);
         goto end;
     }
-    xlog_info("crypto method [%d].", method);
+    xlog_info("crypto method %d.", method);
 
 #ifdef WITH_CLIREMOTE
     if (dconnoff) {
@@ -416,12 +419,12 @@ int main(int argc, char** argv)
         remote.dconnect_off = 1;
     }
     if (parse_ip_str(server_str, DEF_SERVER_PORT, &addr.x) != 0) {
-        xlog_error("invalid server address [%s].", server_str);
+        xlog_error("invalid server address (%s).", server_str);
         goto end;
     }
 #endif
     if (parse_ip_str(xserver_str, DEF_XSERVER_PORT, &xaddr.x) != 0) {
-        xlog_error("invalid proxy server address [%s].", xserver_str);
+        xlog_error("invalid proxy server address (%s).", xserver_str);
         goto end;
     }
 
@@ -430,13 +433,13 @@ int main(int argc, char** argv)
 
     error = uv_tcp_bind(&io_server, &addr.x, 0);
     if (error) {
-        xlog_error("tcp bind [%s] failed: %s.", addr_to_str(&addr),
+        xlog_error("tcp bind %s failed: %s.", addr_to_str(&addr),
             uv_strerror(error));
         goto end;
     }
     error = uv_listen((uv_stream_t*) &io_server, LISTEN_BACKLOG, on_cli_remote_connect);
     if (error) {
-        xlog_error("tcp listen [%s] failed: %s.", addr_to_str(&addr),
+        xlog_error("tcp listen %s failed: %s.", addr_to_str(&addr),
             uv_strerror(error));
         goto end;
     }
@@ -445,13 +448,13 @@ int main(int argc, char** argv)
 
     error = uv_tcp_bind(&io_xserver, &xaddr.x, 0);
     if (error) {
-        xlog_error("tcp bind [%s] failed: %s.", addr_to_str(&xaddr),
+        xlog_error("tcp bind %s failed: %s.", addr_to_str(&xaddr),
             uv_strerror(error));
         goto end;
     }
     error = uv_listen((uv_stream_t*) &io_xserver, LISTEN_BACKLOG, on_xclient_connect);
     if (error) {
-        xlog_error("tcp listen [%s] failed: %s.", addr_to_str(&xaddr),
+        xlog_error("tcp listen %s failed: %s.", addr_to_str(&xaddr),
             uv_strerror(error));
         goto end;
     }
@@ -468,9 +471,9 @@ int main(int argc, char** argv)
     xlist_init(&remote.addrinfo_reqs, sizeof(uv_getaddrinfo_t), NULL);
 
 #ifdef WITH_CLIREMOTE
-    xlog_info("server listen at [%s]...", addr_to_str(&addr));
+    xlog_info("server listen at %s...", addr_to_str(&addr));
 #endif
-    xlog_info("proxy server listen at [%s]...", addr_to_str(&xaddr));
+    xlog_info("proxy server listen at %s...", addr_to_str(&xaddr));
     uv_run(remote.loop, UV_RUN_DEFAULT);
 
     xlist_destroy(&remote.addrinfo_reqs);

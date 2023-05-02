@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 nonikon@qq.com.
+ * Copyright (C) 2021-2023 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -248,7 +248,7 @@ static void on_read(uv_stream_t* client, ssize_t nread, const uv_buf_t* buf)
                 const http_handler_t* h = __handlers;
 
                 req->pub.url[req->pub.url_len] = '\0';
-                xlog_debug("request url [%s].", req->pub.url);
+                xlog_debug("request url: %s.", req->pub.url);
 #if HTTP_SERVER_SAVE_HDR
                 dump_headers(req);
 #endif
@@ -347,7 +347,7 @@ int http_server_start(uv_loop_t* loop, const struct sockaddr* addr,
 
     error = uv_tcp_bind(&__ioserver, addr, 0);
     if (error) {
-        xlog_error("tcp bind [%s] failed: %s.", addr_to_str(addr),
+        xlog_error("tcp bind (%s) failed: %s.", addr_to_str(addr),
             uv_strerror(error));
         uv_close((uv_handle_t*) &__ioserver, NULL);
         return -1;
@@ -355,7 +355,7 @@ int http_server_start(uv_loop_t* loop, const struct sockaddr* addr,
 
     error = uv_listen((uv_stream_t*) &__ioserver, 1024, on_connect);
     if (error) {
-        xlog_error("tcp listen [%s] failed: %s.", addr_to_str(addr),
+        xlog_error("tcp listen (%s) failed: %s.", addr_to_str(addr),
             uv_strerror(error));
         uv_close((uv_handle_t*) &__ioserver, NULL);
         return -1;
@@ -367,6 +367,6 @@ int http_server_start(uv_loop_t* loop, const struct sockaddr* addr,
     xlist_init(&__requests, sizeof(http_req_pri_t), NULL);
     xlist_init(&__responses, sizeof(http_resp_pri_t), NULL);
 
-    xlog_info("control server (HTTP) listen at [%s]...", addr_to_str(addr));
+    xlog_info("control server (HTTP) listen at %s...", addr_to_str(addr));
     return 0;
 }

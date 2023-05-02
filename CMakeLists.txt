@@ -32,6 +32,8 @@ set(generic_sources
     ini.c
 )
 set(generic_defines
+    XLOG_MULTITHREAD=0
+    XLOG_WITH_TID=0
     XHASH_ENABLE_CACHE=1
     XLIST_ENABLE_CACHE=1
     XLOG_OUT_CTRL=4

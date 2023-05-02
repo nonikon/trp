@@ -219,7 +219,7 @@ static void on_udp_tclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
     wbuf.base = (char*) cmd + cmd->alen + 2 + sizeof(udp_cmd_t);
     wbuf.len = ntohs(cmd->len) - cmd->alen - 2;
 
-    xlog_debug("%u udp bytes to tunel client [%s].", wbuf.len, addr_to_str(addr));
+    xlog_debug("%u udp bytes to tunel client (%s).", wbuf.len, addr_to_str(addr));
 
     if (uv_udp_try_send(&io_utserver, &wbuf, 1, addr) < 0) {
         xlog_debug("send udp packet to tunnel client failed.");
@@ -244,7 +244,7 @@ static int init_tunnel_maddr(const char* addrstr, int allow_domain)
             xlog_info("UDP tunnel to domain is not supported, resolve it...");
 
             if (resolve_domain_sync(xclient.loop, &_.dm, &_.dx) != 0) {
-                xlog_error("resolve domain [%s] failed.", _.dm.sdm_addr);
+                xlog_error("resolve domain (%s) failed.", _.dm.sdm_addr);
                 return -1;
             }
         }
@@ -425,49 +425,53 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    i = 0;
     if (load_config_file(cfg_path, cfg_sec) != 0) {
         fprintf(stderr, "error when parse config file [%s], ignore configs.\n", cfg_path);
     } else {
-        config_item_t* i = NULL;
+        config_item_t* item = NULL;
 
-        while (!!(i = get_config_item(i))) {
-            if (!i->name[0] || !i->value[0]) {
-                fprintf(stderr, "invalid config item [%s=%s], ignore.\n", i->name, i->value);
-            } else if (!strcmp(i->name, "v")) {
-                verbose = atoi(i->value);
-            } else if (!strcmp(i->name, "x")) {
-                xserver_str = i->value;
-            } else if (!strcmp(i->name, "b")) {
-                tserver_str = i->value;
-            } else if (!strcmp(i->name, "t")) {
-                tunnel_str = i->value;
-            } else if (!strcmp(i->name, "d")) {
-                devid_str = i->value;
-            } else if (!strcmp(i->name, "m")) {
-                method = atoi(i->value);
-            } else if (!strcmp(i->name, "M")) {
-                methodx = atoi(i->value);
-            } else if (!strcmp(i->name, "k")) {
-                passwd = i->value;
-            } else if (!strcmp(i->name, "K")) {
-                passwdx = i->value;
-            } else if (!strcmp(i->name, "u")) {
-                nconnect = atoi(i->value);
+        while (!!(item = get_config_item(item))) {
+            if (!item->name[0] || !item->value[0]) {
+                fprintf(stderr, "invalid config item [%s=%s], ignore.\n", item->name, item->value);
+                continue;
+            } else if (!strcmp(item->name, "v")) {
+                verbose = atoi(item->value);
+            } else if (!strcmp(item->name, "x")) {
+                xserver_str = item->value;
+            } else if (!strcmp(item->name, "b")) {
+                tserver_str = item->value;
+            } else if (!strcmp(item->name, "t")) {
+                tunnel_str = item->value;
+            } else if (!strcmp(item->name, "d")) {
+                devid_str = item->value;
+            } else if (!strcmp(item->name, "m")) {
+                method = atoi(item->value);
+            } else if (!strcmp(item->name, "M")) {
+                methodx = atoi(item->value);
+            } else if (!strcmp(item->name, "k")) {
+                passwd = item->value;
+            } else if (!strcmp(item->name, "K")) {
+                passwdx = item->value;
+            } else if (!strcmp(item->name, "u")) {
+                nconnect = atoi(item->value);
                 tcpoff = 0;
-            } else if (!strcmp(i->name, "U")) {
-                nconnect = atoi(i->value);
+            } else if (!strcmp(item->name, "U")) {
+                nconnect = atoi(item->value);
                 tcpoff = 1;
-            } else if (!strcmp(i->name, "O")) {
-                utimeo = atoi(i->value);
+            } else if (!strcmp(item->name, "O")) {
+                utimeo = atoi(item->value);
 #ifndef _WIN32
-            } else if (!strcmp(i->name, "n")) {
-                nofile = atoi(i->value);
+            } else if (!strcmp(item->name, "n")) {
+                nofile = atoi(item->value);
 #endif
-            } else if (!strcmp(i->name, "L")) {
-                logfile = i->value;
+            } else if (!strcmp(item->name, "L")) {
+                logfile = item->value;
             } else {
-                fprintf(stderr, "invalid config item name [%s], ignore.\n", i->name);
+                fprintf(stderr, "invalid config item name [%s], ignore.\n", item->name);
+                continue;
             }
+            ++i;
         }
     }
 
@@ -480,6 +484,9 @@ int main(int argc, char** argv)
     } else {
         xlog_info("enable verbose output.");
     }
+    if (i > 0) {
+        xlog_info("load %d item(s) from config file (%s).", i, cfg_path);
+    }
 
 #ifdef _WIN32
     if (logfile && !is_childproc) {
@@ -490,12 +497,8 @@ int main(int argc, char** argv)
         }
     }
 #else
-    if (logfile) {
-        xlog_exit(logfile);
-        if (daemon(1, 0) != 0) {
-            xlog_init(logfile);
-            xlog_error("run as daemon failed: %s.", strerror(errno));
-        }
+    if (logfile && daemon(1, 0) != 0) {
+        xlog_error("run as daemon failed: %s.", strerror(errno));
     }
     signal(SIGPIPE, SIG_IGN);
 
@@ -503,9 +506,9 @@ int main(int argc, char** argv)
         struct rlimit limit = { nofile, nofile };
 
         if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
-            xlog_warn("set NOFILE limit to [%d] failed: %s.", nofile, strerror(errno));
+            xlog_warn("set NOFILE limit to %d failed: %s.", nofile, strerror(errno));
         } else {
-            xlog_info("set NOFILE limit to [%d].", nofile);
+            xlog_info("set NOFILE limit to %d.", nofile);
         }
     }
 #endif
@@ -515,7 +518,7 @@ int main(int argc, char** argv)
     xclient.loop = uv_default_loop();
 
     if (nconnect < 0 || nconnect > 1024) {
-        xlog_warn("invalid connection pool size [%d], reset to [1].", nconnect);
+        xlog_warn("invalid connection pool size (%d), reset to 1.", nconnect);
         nconnect = 1;
     }
 
@@ -527,14 +530,14 @@ int main(int argc, char** argv)
         xclient.utimeo = 0;
     }
     if (utimeo > MAX_UDPCONN_TIMEO) {
-        xlog_warn("invalid UDP connection timeout [%d], reset to [%d].",
+        xlog_warn("invalid UDP connection timeout (%d), reset to %d.",
             utimeo, UDPCONN_TIMEO);
         utimeo = UDPCONN_TIMEO;
     }
     xclient.utimeo |= (u8_t) utimeo; /* utimeo == 0 is allowed */
 
     if (devid_str && str_to_devid(xclient.device_id, devid_str) != 0) {
-        xlog_error("invalid device id string [%s].", devid_str);
+        xlog_error("invalid device id string (%s).", devid_str);
         goto end;
     }
 
@@ -560,51 +563,51 @@ int main(int argc, char** argv)
     }
 
     if (crypto_init(&xclient.crypto, method) != 0) {
-        xlog_error("invalid crypto method: [%d].", method);
+        xlog_error("invalid crypto method (%d).", method);
         goto end;
     }
     if (crypto_init(&xclient.cryptox, methodx) != 0) {
-        xlog_error("invalid crypto METHOD: [%d].", methodx);
+        xlog_error("invalid crypto METHOD (%d).", methodx);
         goto end;
     }
-    xlog_info("crypto method [%d], METHOD [%d].", method, methodx);
+    xlog_info("crypto method %d, METHOD %d.", method, methodx);
 
     if (parse_ip_str(xserver_str, DEF_XSERVER_PORT, &xclient.xserver_addr.x) != 0) {
         struct sockaddr_dm dm;
 
         if (parse_domain_str(xserver_str, DEF_XSERVER_PORT, &dm) != 0
                 || resolve_domain_sync(xclient.loop, &dm, &xclient.xserver_addr.x) != 0) {
-            xlog_error("invalid proxy server address [%s].", xserver_str);
+            xlog_error("invalid proxy server address (%s).", xserver_str);
             goto end;
         }
     }
 
     if (parse_ip_str(tserver_str, DEF_TSERVER_PORT, &taddr.x) != 0) {
-        xlog_error("invalid tunnel server address [%s].", tserver_str);
+        xlog_error("invalid tunnel server address (%s).", tserver_str);
         goto end;
     }
 
     if (tunnel_str) {
         /* tunnel mode. (udp tunnel to domain is not allowed) */
         if (init_tunnel_maddr(tunnel_str, 0 == nconnect) != 0) {
-            xlog_error("invalid tunnel address [%s].", tunnel_str);
+            xlog_error("invalid tunnel address (%s).", tunnel_str);
             goto end;
         }
 
         if (nconnect) {
-            xlog_info("enable UDP tunnel mode, connections [%d], timeout [%d].", nconnect, utimeo);
+            xlog_info("enable UDP tunnel mode, connections %d, timeout %d.", nconnect, utimeo);
             uv_udp_init(xclient.loop, &io_utserver);
 
             error = uv_udp_bind(&io_utserver, &taddr.x, 0);
             if (error) {
-                xlog_error("udp bind [%s] failed: %s.", addr_to_str(&taddr),
+                xlog_error("udp bind (%s) failed: %s.", addr_to_str(&taddr),
                     uv_strerror(error));
                 goto end;
             }
             error = uv_udp_recv_start(&io_utserver, on_udp_tclient_rbuf_alloc,
                         on_udp_tclient_read);
             if (error) {
-                xlog_error("udp listen [%s] failed: %s.", addr_to_str(&taddr),
+                xlog_error("udp listen (%s) failed: %s.", addr_to_str(&taddr),
                     uv_strerror(error));
                 goto end;
             }
@@ -619,19 +622,19 @@ int main(int argc, char** argv)
 
             error = uv_tcp_bind(&io_tserver, &taddr.x, 0);
             if (error) {
-                xlog_error("tcp bind [%s] failed: %s.", addr_to_str(&taddr),
+                xlog_error("tcp bind (%s) failed: %s.", addr_to_str(&taddr),
                     uv_strerror(error));
                 goto end;
             }
             error = uv_listen((uv_stream_t*) &io_tserver, LISTEN_BACKLOG,
                         on_tclient_connect);
             if (error) {
-                xlog_error("tcp listen [%s] failed: %s.", addr_to_str(&taddr),
+                xlog_error("tcp listen (%s) failed: %s.", addr_to_str(&taddr),
                     uv_strerror(error));
                 goto end;
             }
         }
-        xlog_info("tunnel to [%s].", maddr_to_str(&tunnel_maddr.m));
+        xlog_info("tunnel to %s.", maddr_to_str(&tunnel_maddr.m));
     } else {
         /* transparent mode. */
 #ifdef __linux__
@@ -646,14 +649,14 @@ int main(int argc, char** argv)
 
         error = uv_tcp_bind(&io_tserver, &taddr.x, 0);
         if (error) {
-            xlog_error("tcp bind [%s] failed: %s.", addr_to_str(&taddr),
+            xlog_error("tcp bind (%s) failed: %s.", addr_to_str(&taddr),
                 uv_strerror(error));
             goto end;
         }
         error = uv_listen((uv_stream_t*) &io_tserver, LISTEN_BACKLOG,
                     on_tclient_connect);
         if (error) {
-            xlog_error("tcp listen [%s] failed: %s.", addr_to_str(&taddr),
+            xlog_error("tcp listen (%s) failed: %s.", addr_to_str(&taddr),
                 uv_strerror(error));
             goto end;
         }
@@ -666,10 +669,10 @@ int main(int argc, char** argv)
     xlist_init(&xclient.xclient_ctxs, sizeof(xclient_ctx_t), NULL);
     xlist_init(&xclient.io_buffers, sizeof(io_buf_t) + MAX_SOCKBUF_SIZE, NULL);
 
-    xlog_info("proxy server [%s].", addr_to_str(&xclient.xserver_addr));
+    xlog_info("proxy server: %s.", addr_to_str(&xclient.xserver_addr));
     if (devid_str)
-        xlog_info("to device id [%s].", devid_to_str(xclient.device_id));
-    xlog_info("tunnel server listen at [%s]...", addr_to_str(&taddr));
+        xlog_info("to device id: %s.", devid_to_str(xclient.device_id));
+    xlog_info("tunnel server listen at %s...", addr_to_str(&taddr));
     uv_run(xclient.loop, UV_RUN_DEFAULT);
 
     xlist_destroy(&xclient.io_buffers);

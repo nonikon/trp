@@ -298,7 +298,7 @@ int connect_xserver(xclient_ctx_t* ctx)
 {
     uv_connect_t* req = xlist_alloc_back(&xclient_pri.conn_reqs);
 
-    xlog_debug("connecting porxy server [%s]...", addr_to_str(&xclient.xserver_addr));
+    xlog_debug("connecting porxy server (%s)...", addr_to_str(&xclient.xserver_addr));
     req->data = ctx;
 
     if (uv_tcp_connect(req, &ctx->io_xserver, &xclient.xserver_addr.x,
@@ -372,7 +372,7 @@ void init_connect_command(xclient_ctx_t* ctx,
 
     memcpy(cmd->data, addr, addrlen);
 
-    xlog_debug("proxy to [%s].", maddr_to_str(cmd));
+    xlog_debug("proxy to %s.", maddr_to_str(cmd));
 
     memcpy(dnonce, pbuf, MAX_NONCE_LEN);
     convert_nonce(dnonce);

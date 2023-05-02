@@ -220,7 +220,7 @@ static void connect_server(struct sockaddr* addr)
 
     req->data = ctx;
 
-    xlog_debug("connecting server [%s]...", addr_to_str(addr));
+    xlog_debug("connecting server %s...", addr_to_str(addr));
 
     if (uv_tcp_connect(req, &ctx->io, addr, on_server_connected) != 0) {
         xlog_error("connect server failed immediately.");
@@ -260,10 +260,10 @@ static void on_server_domain_resolved(
 
     } else {
         if (!retry_displayed) {
-            xlog_debug("resolve server domain result [%s], connecting...",
+            xlog_debug("resolve server domain result: %s, connecting...",
                 addr_to_str(res->ai_addr));
         } else {
-            xlog_info("resolve server domain result [%s], connecting...",
+            xlog_info("resolve server domain result: %s, connecting...",
                 addr_to_str(res->ai_addr));
             retry_displayed = 0;
         }
@@ -462,43 +462,47 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    i = 0;
     if (load_config_file(cfg_path, cfg_sec) != 0) {
         fprintf(stderr, "error when parse config file [%s], ignore configs.\n", cfg_path);
     } else {
-        config_item_t* i = NULL;
+        config_item_t* item = NULL;
 
-        while (!!(i = get_config_item(i))) {
-            if (!i->name[0] || !i->value[0]) {
-                fprintf(stderr, "invalid config item [%s=%s], ignore.\n", i->name, i->value);
-            } else if (!strcmp(i->name, "v")) {
-                verbose = atoi(i->value);
-            } else if (!strcmp(i->name, "s")) {
-                server_str = i->value;
+        while (!!(item = get_config_item(item))) {
+            if (!item->name[0] || !item->value[0]) {
+                fprintf(stderr, "invalid config item [%s=%s], ignore.\n", item->name, item->value);
+                continue;
+            } else if (!strcmp(item->name, "v")) {
+                verbose = atoi(item->value);
+            } else if (!strcmp(item->name, "s")) {
+                server_str = item->value;
 #ifdef WITH_CTRLSERVER
-            } else if (!strcmp(i->name, "r")) {
-                cserver_str = i->value;
+            } else if (!strcmp(item->name, "r")) {
+                cserver_str = item->value;
 #endif
-            } else if (!strcmp(i->name, "d")) {
-                devid_str = i->value;
-            } else if (!strcmp(i->name, "m")) {
-                method = atoi(i->value);
-            } else if (!strcmp(i->name, "M")) {
-                methodx = atoi(i->value);
-            } else if (!strcmp(i->name, "k")) {
-                passwd = i->value;
-            } else if (!strcmp(i->name, "K")) {
-                passwdx = i->value;
-            } else if (!strcmp(i->name, "c")) {
-                nconnect = atoi(i->value);
+            } else if (!strcmp(item->name, "d")) {
+                devid_str = item->value;
+            } else if (!strcmp(item->name, "m")) {
+                method = atoi(item->value);
+            } else if (!strcmp(item->name, "M")) {
+                methodx = atoi(item->value);
+            } else if (!strcmp(item->name, "k")) {
+                passwd = item->value;
+            } else if (!strcmp(item->name, "K")) {
+                passwdx = item->value;
+            } else if (!strcmp(item->name, "c")) {
+                nconnect = atoi(item->value);
 #ifndef _WIN32
-            } else if (!strcmp(i->name, "n")) {
-                nofile = atoi(i->value);
+            } else if (!strcmp(item->name, "n")) {
+                nofile = atoi(item->value);
 #endif
-            } else if (!strcmp(i->name, "L")) {
-                logfile = i->value;
+            } else if (!strcmp(item->name, "L")) {
+                logfile = item->value;
             } else {
-                fprintf(stderr, "invalid config item name [%s], ignore.\n", i->name);
+                fprintf(stderr, "invalid config item name [%s], ignore.\n", item->name);
+                continue;
             }
+            ++i;
         }
     }
 
@@ -511,6 +515,9 @@ int main(int argc, char** argv)
     } else {
         xlog_info("enable verbose output.");
     }
+    if (i > 0) {
+        xlog_info("load %d item(s) from config file (%s).", i, cfg_path);
+    }
 
 #ifdef _WIN32
     if (logfile && !is_childproc) {
@@ -521,12 +528,8 @@ int main(int argc, char** argv)
         }
     }
 #else
-    if (logfile) {
-        xlog_exit(logfile);
-        if (daemon(1, 0) != 0) {
-            xlog_init(logfile);
-            xlog_error("run as daemon failed: %s.", strerror(errno));
-        }
+    if (logfile && daemon(1, 0) != 0) {
+        xlog_error("run as daemon failed: %s.", strerror(errno));
     }
     signal(SIGPIPE, SIG_IGN);
 
@@ -534,9 +537,9 @@ int main(int argc, char** argv)
         struct rlimit limit = { nofile, nofile };
 
         if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
-            xlog_warn("set NOFILE limit to [%d] failed: %s.", nofile, strerror(errno));
+            xlog_warn("set NOFILE limit to %d failed: %s.", nofile, strerror(errno));
         } else {
-            xlog_info("set NOFILE limit to [%d].", nofile);
+            xlog_info("set NOFILE limit to %d.", nofile);
         }
     }
 #endif
@@ -546,7 +549,7 @@ int main(int argc, char** argv)
     remote.loop = uv_default_loop();
 
     if (nconnect <= 0 || nconnect > 1024) {
-        xlog_warn("invalid connection pool size [%d], reset to [1].", nconnect);
+        xlog_warn("invalid connection pool size (%d), reset to 1.", nconnect);
         nconnect = 1;
     }
 
@@ -555,7 +558,7 @@ int main(int argc, char** argv)
         devid_str = DEF_DEVID_STRING;
     }
     if (str_to_devid(device_id, devid_str) != 0) {
-        xlog_error("invalid device id string [%s].", devid_str);
+        xlog_error("invalid device id string (%s).", devid_str);
         goto end;
     }
 
@@ -573,18 +576,18 @@ int main(int argc, char** argv)
     }
 
     if (crypto_init(&crypto, method) != 0) {
-        xlog_error("invalid crypto method: [%d].", method);
+        xlog_error("invalid crypto method (%d).", method);
         goto end;
     }
     if (crypto_init(&remote.crypto, methodx) != 0) {
-        xlog_error("invalid crypto METHOD: [%d].", methodx);
+        xlog_error("invalid crypto METHOD (%d).", methodx);
         goto end;
     }
-    xlog_info("crypto method [%d], METHOD [%d].", method, methodx);
+    xlog_info("crypto method %d, METHOD %d.", method, methodx);
 
     if (parse_ip_str(server_str, DEF_SERVER_PORT, &server_addr.x) != 0
             && parse_domain_str(server_str, DEF_SERVER_PORT, &server_addr.d) != 0) {
-        xlog_error("invalid server address [%s].", server_str);
+        xlog_error("invalid server address (%s).", server_str);
         goto end;
     }
 
@@ -601,8 +604,8 @@ int main(int argc, char** argv)
 
     uv_timer_init(remote.loop, &reconnect_timer);
 
-    xlog_info("device id [%s].", devid_to_str(device_id));
-    xlog_info("server address [%s], connecting...", addr_to_str(&server_addr));
+    xlog_info("device id: %s.", devid_to_str(device_id));
+    xlog_info("server address: %s, connecting...", addr_to_str(&server_addr));
     new_server_connection(NULL);
     uv_run(remote.loop, UV_RUN_DEFAULT);
 
