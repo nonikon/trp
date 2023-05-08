@@ -45,9 +45,9 @@ extern unsigned xlog_out_level;
 #endif
 
 #if XLOG_WITH_EXTRA
-#define XLOG_FORMAT(fmt)    "%s:%d " fmt, __FUNCTION__, __LINE__
+#define XLOG_FORMAT(fmt)    "%s:%d - " fmt, __FUNCTION__, __LINE__
 #else
-#define XLOG_FORMAT(fmt)    fmt
+#define XLOG_FORMAT(fmt)    "- " fmt
 #endif
 
 #if XLOG_OUT_CTRL >= XLOG_ERROR
