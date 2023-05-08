@@ -27,7 +27,7 @@ static char     out_buf[XLOG_LINE_MAX];
 static HANDLE out_fd = INVALID_HANDLE_VALUE;
 
 #if XLOG_MULTITHREAD
-static CRITICAL_SECTION lock;
+static PCRITICAL_SECTION lock;
 #endif
 
 static void init_out_name_idx()
@@ -80,8 +80,6 @@ static void logfile_rotate()
     unsigned sz = (unsigned) strlen(out_file_path) + 12;
     char* temp = malloc(sz);
 
-    if (!temp) return;
-
     snprintf(temp, sz, "%s.%d", out_file_path, ++out_name_idx);
     /* ignore failures */
     CloseHandle(out_fd);
@@ -106,33 +104,34 @@ static void logfile_rotate()
 
 int xlog_init(const char* file_path)
 {
+    int opensucc = 1;
+
     xlog_exit();
 
+#if XLOG_MULTITHREAD
+    if (!lock) {
+        lock = malloc(sizeof(CRITICAL_SECTION));
+        InitializeCriticalSection(lock);
+    }
+#endif
     if (!file_path) {
         out_fd = GetStdHandle(STD_OUTPUT_HANDLE);
-
-        if (out_fd != INVALID_HANDLE_VALUE) {
-#if XLOG_MULTITHREAD
-            InitializeCriticalSection(&lock);
-#endif
-            return 0;
-        }
-
-        return -1;
-    }
-
-    out_fd = CreateFileA(file_path,
+    } else {
+        out_fd = CreateFileA(file_path,
                     GENERIC_WRITE,
                     FILE_SHARE_READ,
                     NULL,
                     OPEN_ALWAYS, /* create if not exists */
                     FILE_ATTRIBUTE_NORMAL /* | FILE_FLAG_NO_BUFFERING */,
                     NULL);
+        /* open output file failed, switch to STDOUT */
+        if (out_fd == INVALID_HANDLE_VALUE) {
+            out_fd = GetStdHandle(STD_OUTPUT_HANDLE);
+            opensucc = 0;
+        }
+    }
 
     if (out_fd != INVALID_HANDLE_VALUE) {
-#if XLOG_MULTITHREAD
-        InitializeCriticalSection(&lock);
-#endif
         if (GetFileType(out_fd) == FILE_TYPE_DISK) {
             /* seek to end (append) */
             SetFilePointer(out_fd, 0, 0, FILE_END);
@@ -144,8 +143,9 @@ int xlog_init(const char* file_path)
                 out_bytes = 0;
             init_out_name_idx();
         }
+
         /* FILE_TYPE_CHAR when file_path is "nul"... */
-        return 0;
+        return opensucc ? 0 : -1;
     }
 
     return -1;
@@ -164,16 +164,12 @@ void xlog_ctrl(unsigned level, unsigned max_size, unsigned rotate)
 void xlog_exit()
 {
     if (out_fd != INVALID_HANDLE_VALUE) {
-#if XLOG_MULTITHREAD
-        DeleteCriticalSection(&lock);
-#endif
         CloseHandle(out_fd);
         out_fd = INVALID_HANDLE_VALUE;
-
-        if (out_file_path) {
-            free(out_file_path);
-            out_file_path = NULL;
-        }
+    }
+    if (out_file_path) {
+        free(out_file_path);
+        out_file_path = NULL;
     }
 }
 
@@ -185,7 +181,7 @@ void xlog_println(const char* tag, const char* fmt, ...)
     va_list ap;
 
 #if XLOG_MULTITHREAD
-    EnterCriticalSection(&lock);
+    EnterCriticalSection(lock);
 #endif
 
     GetLocalTime(&t);
@@ -216,7 +212,7 @@ void xlog_println(const char* tag, const char* fmt, ...)
     }
 
 #if XLOG_MULTITHREAD
-    LeaveCriticalSection(&lock);
+    LeaveCriticalSection(lock);
 #endif
 }
 
@@ -230,7 +226,7 @@ void xlog_printhex(const unsigned char* data, unsigned int len)
     DWORD nw;
 
 #if XLOG_MULTITHREAD
-    EnterCriticalSection(&lock);
+    EnterCriticalSection(lock);
 #endif
 
     while (i < len) {
@@ -269,7 +265,7 @@ void xlog_printhex(const unsigned char* data, unsigned int len)
     }
 
 #if XLOG_MULTITHREAD
-    LeaveCriticalSection(&lock);
+    LeaveCriticalSection(lock);
 #endif
 }
 
@@ -343,8 +339,6 @@ static void logfile_rotate()
 {
     char* temp = malloc(strlen(out_file_path) + 12);
 
-    if (!temp) return;
-
     sprintf(temp, "%s.%d", out_file_path, ++out_name_idx);
     /* ignore failures */
     close(out_fd);
@@ -395,7 +389,7 @@ int xlog_init(const char* file_path)
         init_out_name_idx();
     }
 
-    /* S_ISCHR when file_path is "/dev/null"...*/
+    /* S_ISCHR when file_path is "/dev/null"... */
     return 0;
 }
 
