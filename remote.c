@@ -640,7 +640,7 @@ static void on_udp_remote_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf,
             switch (_.vx->sa_family) {
             case AF_INET:
                 cmd->alen = 4;
-                cmd->len = htons(4 + 2 + nread);
+                cmd->len = htons((u16_t) (4 + 2 + nread));
                 memcpy(cmd->data, &_.v4->sin_addr, 4);
                 memcpy(cmd->data + 4, &_.v4->sin_port, 2);
 
@@ -648,7 +648,7 @@ static void on_udp_remote_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf,
                 break;
             default: /* AF_INET6 */
                 cmd->alen = 16;
-                cmd->len = htons(16 + 2 + nread);
+                cmd->len = htons((u16_t) (16 + 2 + nread));
                 memcpy(cmd->data, &_.v6->sin6_addr, 16);
                 memcpy(cmd->data + 16, &_.v6->sin6_port, 2);
 

@@ -183,17 +183,17 @@ static void on_udp_tclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
         switch (tunnel_maddr.m.len) {
         case 4:
             cmd->alen = 4;
-            cmd->len = htons(nread + 4 + 2);
+            cmd->len = htons((u16_t) (nread + 4 + 2));
             memcpy(cmd->data, tunnel_maddr.m.data, 4);
             memcpy(cmd->data + 4, &tunnel_maddr.m.port, 2);
-            iob->len = nread + 4 + 2 + sizeof(udp_cmd_t);
+            iob->len = (u32_t) (nread + 4 + 2 + sizeof(udp_cmd_t));
             break;
         default: /* 16 */
             cmd->alen = 16;
-            cmd->len = htons(nread + 16 + 2);
+            cmd->len = htons((u16_t) (nread + 16 + 2));
             memcpy(cmd->data, tunnel_maddr.m.data, 16);
             memcpy(cmd->data + 16, &tunnel_maddr.m.port, 2);
-            iob->len = nread + 16 + 2 + sizeof(udp_cmd_t);
+            iob->len = (u32_t) (nread + 16 + 2 + sizeof(udp_cmd_t));
             break;
         }
 

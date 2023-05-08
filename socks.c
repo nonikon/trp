@@ -443,10 +443,10 @@ static void on_udp_sclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
 
             cmd->flag = xclient.utimeo;
             cmd->alen = 4;
-            cmd->len = htons(nread - 4);
+            cmd->len = htons((u16_t) (nread - 4));
             cmd->id = get_udp_packet_id(addr);
 
-            iob->len = nread - 4 + sizeof(udp_cmd_t);
+            iob->len = (u32_t) (nread - 4 + sizeof(udp_cmd_t));
 
             xlog_debug("%u udp bytes from socks5 client, to proxy server, id %x.",
                 iob->len, cmd->id);
@@ -465,10 +465,10 @@ static void on_udp_sclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
 
             cmd->flag = xclient.utimeo;
             cmd->alen = 16;
-            cmd->len = htons(nread - 4);
+            cmd->len = htons((u16_t) (nread - 4));
             cmd->id = get_udp_packet_id(addr);
 
-            iob->len = nread - 4 + sizeof(udp_cmd_t);
+            iob->len = (u32_t) (nread - 4 + sizeof(udp_cmd_t));
 
             xlog_debug("%u udp bytes from socks5 client, to proxy server, id %x.",
                 iob->len, cmd->id);

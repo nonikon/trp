@@ -383,7 +383,7 @@ void init_connect_command(xclient_ctx_t* ctx,
     xclient.cryptox.encrypt(&ctx->ectx, (u8_t*) cmd, CMD_MAX_SIZE);
 
     iob->wreq.data = ctx;
-    iob->len = pbuf + MAX_NONCE_LEN + CMD_MAX_SIZE - (u8_t*) iob->buffer;
+    iob->len = (u32_t) (pbuf + MAX_NONCE_LEN + CMD_MAX_SIZE - (u8_t*) iob->buffer);
 
     ctx->pending_iob = iob;
 }
