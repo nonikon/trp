@@ -359,16 +359,7 @@ int main(int argc, char** argv)
     }
 
     if (xlog_init(logfile) != 0) {
-        fprintf(stderr, "open logfile failed, switch to stdout.\n");
-    }
-
-    if (!verbose) {
-        xlog_ctrl(XLOG_INFO, 0, 0);
-    } else {
-        xlog_info("enable verbose output.");
-    }
-    if (i > 0) {
-        xlog_info("load %d item(s) from config file (%s).", i, cfg_path);
+        xlog_error("open logfile failed, switch to stdout.");
     }
 
 #ifdef _WIN32
@@ -383,6 +374,16 @@ int main(int argc, char** argv)
     if (logfile && daemon(1, 0) != 0) {
         xlog_error("run as daemon failed: %s.", strerror(errno));
     }
+#endif
+    if (!verbose) {
+        xlog_ctrl(XLOG_INFO, 0, 0);
+    } else {
+        xlog_info("enable verbose output.");
+    }
+    if (i > 0) {
+        xlog_info("load %d item(s) from config file (%s).", i, cfg_path);
+    }
+#ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
 
     if (nofile > 1024) {
