@@ -526,6 +526,7 @@ static void usage(const char* s)
 #ifndef _WIN32
     fprintf(stderr, "  -n <number>   set max number of open files.\n");
 #endif
+    fprintf(stderr, "  -l <path>     write output to file. (default: write to STDOUT)\n");
     fprintf(stderr, "  -L <path>     write output to file and run as daemon. (default: write to STDOUT)\n");
     fprintf(stderr, "  -C <path>     set config file path. (default: trp.ini)\n");
     fprintf(stderr, "  -S <section>  set config section name. (default: socks)\n");
@@ -559,6 +560,7 @@ int main(int argc, char** argv)
     const char* passwdx = NULL;
     int method = CRYPTO_CHACHA20;
     int methodx = CRYPTO_CHACHA20;
+    int daemonize = 0;
 #ifdef _WIN32
     int is_childproc = 0;
 #else
@@ -616,7 +618,8 @@ int main(int argc, char** argv)
 #ifndef _WIN32
             case 'n':      nofile = atoi(arg); continue;
 #endif
-            case 'L':     logfile = arg; continue;
+            case 'l':     logfile = arg; daemonize = 0; continue;
+            case 'L':     logfile = arg; daemonize = 1; continue;
             case 'C':    cfg_path = arg; continue;
             case 'S':     cfg_sec = arg; continue;
             }
@@ -681,8 +684,12 @@ int main(int argc, char** argv)
             } else if (!strcmp(item->name, "n")) {
                 nofile = atoi(item->value);
 #endif
+            } else if (!strcmp(item->name, "l")) {
+                logfile = item->value;
+                daemonize = 0;
             } else if (!strcmp(item->name, "L")) {
                 logfile = item->value;
+                daemonize = 1;
             } else {
                 fprintf(stderr, "invalid config item name [%s], ignore.\n", item->name);
                 continue;
@@ -696,15 +703,15 @@ int main(int argc, char** argv)
     }
 
 #ifdef _WIN32
-    if (logfile && !is_childproc) {
-        xlog_exit(logfile); /* close log file */
+    if (daemonize && !is_childproc) {
+        xlog_exit(); /* close log file */
         if (daemon(argc, argv) != 0) {
             xlog_init(logfile); /* reopen log file when daemon failed */
             xlog_error("run as daemon failed: %u", GetLastError());
         }
     }
 #else
-    if (logfile && daemon(1, 0) != 0) {
+    if (daemonize && daemon(1, 0) != 0) {
         xlog_error("run as daemon failed: %s.", strerror(errno));
     }
 #endif
