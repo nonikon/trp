@@ -36,7 +36,10 @@
 #define SESSION_ID_SIZE     16      /* proxy-client session id size */
 #define DEVICE_ID_SIZE      16      /* client device id size, MUST <= MAX_DOMAIN_LEN */
 
-#define RECONNECT_SRV_INTVL (10)    /* s */
+#define RECSRV_INTVL_MIN    (10)    /* min reconnect interval time */
+#define RECSRV_INTVL_MAX    (600)   /* max reconnect interval time */
+#define RECSRV_INTVL_STEP   (10)    /* increase reconnect interval time after connect failed */
+
 #define CONNECT_CLI_TIMEO   (10)    /* s */
 #define UDPCONN_TIMEO       (20)    /* s */
 #define KEEPIDLE_TIME       (40)    /* s */

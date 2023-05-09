@@ -110,9 +110,9 @@ static void new_server_connection(uv_timer_t* handle);
             xlog_warn("connection closed by server at COMMAND stage.");
             ++nconnect;
             if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
-                /* reconnect after RECONNECT_SRV_INTVL seconds. */
+                /* reconnect after RECSRV_INTVL_MIN seconds. */
                 uv_timer_start(&reconnect_timer, new_server_connection,
-                    RECONNECT_SRV_INTVL * 1000, 0);
+                    RECSRV_INTVL_MIN * 1000, 0);
             }
         } else if (ctx->stage == STAGE_FORWARDTCP) {
             uv_close((uv_handle_t*) &ctx->remote->t.io, on_tcp_remote_closed);
@@ -158,7 +158,7 @@ static void report_device_id(peer_ctx_t* ctx)
 
 static void on_server_connected(uv_connect_t* req, int status)
 {
-    static int retry_displayed = 1;
+    static int intvl = RECSRV_INTVL_MIN;
     peer_ctx_t* ctx = req->data;
 
     if (status < 0) {
@@ -168,33 +168,30 @@ static void on_server_connected(uv_connect_t* req, int status)
         server_addr_r.x.sa_family = 0;
         ++nconnect;
         if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
-            /* reconnect after RECONNECT_SRV_INTVL seconds. */
-            uv_timer_start(&reconnect_timer, new_server_connection,
-                RECONNECT_SRV_INTVL * 1000, 0);
+            /* reconnect after intvl seconds. */
+            uv_timer_start(&reconnect_timer, new_server_connection, intvl * 1000, 0);
         }
-        if (retry_displayed) {
-            xlog_debug("connect server failed: %s, retry every %d seconds.",
-                uv_err_name(status), RECONNECT_SRV_INTVL);
+        if (intvl < RECSRV_INTVL_MAX) {
+            xlog_error("connect server failed: %s, retry after %ds.",
+                uv_err_name(status), intvl);
+            intvl += RECSRV_INTVL_STEP;
         } else {
-            xlog_error("connect server failed: %s, retry every %d seconds.",
-                uv_err_name(status), RECONNECT_SRV_INTVL);
-            retry_displayed = 1;
+            xlog_debug("connect server failed: %s, retry after %ds.",
+                uv_err_name(status), intvl);
         }
     } else {
+        if (intvl > RECSRV_INTVL_MIN) {
+            intvl = RECSRV_INTVL_MIN;
+            xlog_info("server connected.");
+        } else {
+            xlog_debug("server connected.");
+        }
         /* enable tcp-keepalive. */
         uv_tcp_keepalive(&ctx->io, 1, KEEPIDLE_TIME);
         uv_read_start((uv_stream_t*) &ctx->io, on_iobuf_alloc, on_peer_read);
-
         report_device_id(ctx);
 
         ctx->stage = STAGE_COMMAND;
-
-        if (!retry_displayed) {
-            xlog_debug("server connected.");
-        } else {
-            xlog_info("server connected.");
-            retry_displayed = 0;
-        }
         if (nconnect > 0 && !uv_is_active((uv_handle_t*) &reconnect_timer)) {
             new_server_connection(NULL);
         }
@@ -227,9 +224,9 @@ static void connect_server(struct sockaddr* addr)
 
         ++nconnect;
         if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
-            /* reconnect after RECONNECT_SRV_INTVL seconds. */
+            /* reconnect after RECSRV_INTVL_MIN seconds. */
             uv_timer_start(&reconnect_timer, new_server_connection,
-                RECONNECT_SRV_INTVL * 1000, 0);
+                RECSRV_INTVL_MIN * 1000, 0);
         }
 
         uv_close((uv_handle_t*) &ctx->io, on_peer_closed);
@@ -240,34 +237,31 @@ static void connect_server(struct sockaddr* addr)
 static void on_server_domain_resolved(
         uv_getaddrinfo_t* req, int status, struct addrinfo* res)
 {
-    static int retry_displayed = 1;
+    static int intvl = RECSRV_INTVL_MIN;
 
     if (status < 0) {
-        if (retry_displayed) {
-            xlog_debug("resolve server domain failed: %s, retry every %d seconds.",
-                uv_err_name(status), RECONNECT_SRV_INTVL);
-        } else {
-            xlog_error("resolve server domain failed: %s, retry every %d seconds.",
-                uv_err_name(status), RECONNECT_SRV_INTVL);
-            retry_displayed = 1;
-        }
         ++nconnect;
         if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
-            /* reconnect after RECONNECT_SRV_INTVL seconds. */
-            uv_timer_start(&reconnect_timer, new_server_connection,
-                RECONNECT_SRV_INTVL * 1000, 0);
+            /* reconnect after intvl seconds. */
+            uv_timer_start(&reconnect_timer, new_server_connection, intvl * 1000, 0);
         }
-
-    } else {
-        if (!retry_displayed) {
-            xlog_debug("resolve server domain result: %s, connecting...",
-                addr_to_str(res->ai_addr));
+        if (intvl < RECSRV_INTVL_MAX) {
+            xlog_error("resolve server domain failed: %s, retry after %ds.",
+                uv_err_name(status), intvl);
+            intvl += RECSRV_INTVL_STEP;
         } else {
+            xlog_debug("resolve server domain failed: %s, retry every %ds.",
+                uv_err_name(status), intvl);
+        }
+    } else {
+        if (intvl > RECSRV_INTVL_MIN) {
+            intvl = RECSRV_INTVL_MIN;
             xlog_info("resolve server domain result: %s, connecting...",
                 addr_to_str(res->ai_addr));
-            retry_displayed = 0;
+        } else {
+            xlog_debug("resolve server domain result: %s, connecting...",
+                addr_to_str(res->ai_addr));
         }
-
         /* save resolved server domain. */
         memcpy(&server_addr_r, res->ai_addr, res->ai_addrlen);
 
@@ -311,13 +305,13 @@ static void new_server_connection(uv_timer_t* timer)
 
             ++nconnect;
             if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
-                /* reconnect after RECONNECT_SRV_INTVL seconds.
+                /* reconnect after RECSRV_INTVL_MIN seconds.
                  * 'reconnect_timer' is inactive when 'new_server_connection'
                  * is invoked by 'reconnect_timer'. so,
                  * 'uv_timer_start' will not be called twice anyway.
                  */
                 uv_timer_start(&reconnect_timer, new_server_connection,
-                    RECONNECT_SRV_INTVL * 1000, 0);
+                    RECSRV_INTVL_MIN * 1000, 0);
             }
 
             xlist_erase(&remote.addrinfo_reqs, xlist_value_iter(req));
