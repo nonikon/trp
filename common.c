@@ -330,11 +330,8 @@ int load_config_file(const char* path, const char* sec)
         xlist_clear(&__config_items);
     }
 
-    if (ini_parse(path, on_config_item, (void*) sec) <= 0)
-        return 0;
-
-    /* ini_parse() > 0 means config file content error. */
-    return -1;
+    /* ini_parse() > 0 means config file content error, -1 means open file failed. */
+    return ini_parse(path, on_config_item, (void*) sec);
 }
 
 config_item_t* get_config_item(config_item_t* i)

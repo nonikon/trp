@@ -371,12 +371,14 @@ int main(int argc, char** argv)
     int method = CRYPTO_CHACHA20;
     int methodx = CRYPTO_CHACHA20;
     int daemonize = 0;
+    int cfg_specified = 0;
 #ifdef _WIN32
     int is_childproc = 0;
 #else
     int nofile = 0;
 #endif
     int verbose = 0;
+    int error;
     int i;
 
     for (i = 1; i < argc; ++i) {
@@ -427,16 +429,15 @@ int main(int argc, char** argv)
 #ifndef _WIN32
             case 'n':      nofile = atoi(arg); continue;
 #endif
-            case 'l':     logfile = arg; daemonize = 0; continue;
-            case 'L':     logfile = arg; daemonize = 1; continue;
-            case 'C':    cfg_path = arg; continue;
-            case 'S':     cfg_sec = arg; continue;
+            case 'l':     logfile = arg;     daemonize = 0; continue;
+            case 'L':     logfile = arg;     daemonize = 1; continue;
+            case 'C':    cfg_path = arg; cfg_specified = 1; continue;
+            case 'S':     cfg_sec = arg; cfg_specified = 1; continue;
             }
 
             fprintf(stderr, "%s: invalid parameter [-%c %s].\n", argv[0], opt[0], arg);
             return 1;
         }
-
         opt = opt + 2;
 
         /* long option without argument. (--opt) */
@@ -460,8 +461,14 @@ int main(int argc, char** argv)
     }
 
     i = 0;
-    if (load_config_file(cfg_path, cfg_sec) != 0) {
-        fprintf(stderr, "error when parse config file [%s], ignore configs.\n", cfg_path);
+    error = load_config_file(cfg_path, cfg_sec);
+    if (error < 0) {
+        if (cfg_specified) {
+            fprintf(stderr, "open config file (%s) failed, ignore.\n", cfg_path);
+        }
+    } else if (error > 0) {
+        fprintf(stderr, "error at config file %s:%d, ignore configs.\n",
+            cfg_path, error);
     } else {
         config_item_t* item = NULL;
 
@@ -469,36 +476,22 @@ int main(int argc, char** argv)
             if (!item->name[0] || !item->value[0]) {
                 fprintf(stderr, "invalid config item [%s=%s], ignore.\n", item->name, item->value);
                 continue;
-            } else if (!strcmp(item->name, "v")) {
-                verbose = atoi(item->value);
-            } else if (!strcmp(item->name, "s")) {
-                server_str = item->value;
+            } else if (!strcmp(item->name, "v")) { verbose = atoi(item->value);
+            } else if (!strcmp(item->name, "s")) { server_str = item->value;
 #ifdef WITH_CTRLSERVER
-            } else if (!strcmp(item->name, "r")) {
-                cserver_str = item->value;
+            } else if (!strcmp(item->name, "r")) { cserver_str = item->value;
 #endif
-            } else if (!strcmp(item->name, "d")) {
-                devid_str = item->value;
-            } else if (!strcmp(item->name, "m")) {
-                method = atoi(item->value);
-            } else if (!strcmp(item->name, "M")) {
-                methodx = atoi(item->value);
-            } else if (!strcmp(item->name, "k")) {
-                passwd = item->value;
-            } else if (!strcmp(item->name, "K")) {
-                passwdx = item->value;
-            } else if (!strcmp(item->name, "c")) {
-                nconnect = atoi(item->value);
+            } else if (!strcmp(item->name, "d")) { devid_str = item->value;
+            } else if (!strcmp(item->name, "m")) { method = atoi(item->value);
+            } else if (!strcmp(item->name, "M")) { methodx = atoi(item->value);
+            } else if (!strcmp(item->name, "k")) { passwd = item->value;
+            } else if (!strcmp(item->name, "K")) { passwdx = item->value;
+            } else if (!strcmp(item->name, "c")) { nconnect = atoi(item->value);
 #ifndef _WIN32
-            } else if (!strcmp(item->name, "n")) {
-                nofile = atoi(item->value);
+            } else if (!strcmp(item->name, "n")) { nofile = atoi(item->value);
 #endif
-            } else if (!strcmp(item->name, "l")) {
-                logfile = item->value;
-                daemonize = 0;
-            } else if (!strcmp(item->name, "L")) {
-                logfile = item->value;
-                daemonize = 1;
+            } else if (!strcmp(item->name, "l")) { logfile = item->value; daemonize = 0;
+            } else if (!strcmp(item->name, "L")) { logfile = item->value; daemonize = 1;
             } else {
                 fprintf(stderr, "invalid config item name [%s], ignore.\n", item->name);
                 continue;
