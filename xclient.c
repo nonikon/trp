@@ -69,7 +69,7 @@ void on_io_closed(uv_handle_t* handle)
     }
     xlist_erase(&xclient.xclient_ctxs, xlist_value_iter(ctx));
 
-    xlog_debug("current %zu ctxs, %zu iobufs.",
+    XLOGD("current %zu ctxs, %zu iobufs.",
         xlist_size(&xclient.xclient_ctxs), xlist_size(&xclient.io_buffers));
 }
 
@@ -80,7 +80,7 @@ void on_xserver_write(uv_write_t* req, int status)
 
     if (ctx->xclient_blocked && uv_stream_get_write_queue_size(
             (uv_stream_t*) &ctx->io_xserver) == 0) {
-        xlog_debug("proxy server write queue cleared.");
+        XLOGD("proxy server write queue cleared.");
 
         /* proxy server write queue cleared, start reading from proxy client. */
         uv_read_start((uv_stream_t*) &ctx->xclient.t.io, on_iobuf_alloc, on_xclient_read);
@@ -122,7 +122,7 @@ static int forward_xserver_udp_packets(xclient_ctx_t* ctx, io_buf_t* iob)
         need = ntohs(cmd->len) + sizeof(udp_cmd_t);
 
         if (need > MAX_SOCKBUF_SIZE || need < cmd->alen + 2 + sizeof(udp_cmd_t)) {
-            xlog_warn("error udp packet length (%u).", need);
+            XLOGW("error udp packet length (%u).", need);
 
             ctx->xclient.u.last_iob = NULL;
             xlist_erase(&xclient.io_buffers, xlist_value_iter(last_iob));
@@ -143,7 +143,7 @@ static int forward_xserver_udp_packets(xclient_ctx_t* ctx, io_buf_t* iob)
         need = ntohs(cmd->len) + sizeof(udp_cmd_t);
 
         if (need > MAX_SOCKBUF_SIZE || need < cmd->alen + 2 + sizeof(udp_cmd_t)) {
-            xlog_warn("error udp packet length (%u).", need);
+            XLOGW("error udp packet length (%u).", need);
             return 0;
         }
         if (iob->len < need) {
@@ -161,7 +161,7 @@ static int forward_xserver_udp_packets(xclient_ctx_t* ctx, io_buf_t* iob)
             memmove(iob->buffer, iob->buffer + iob->idx, iob->len);
             iob->idx = 0;
         }
-        xlog_debug("%u udp bytes left.", iob->len);
+        XLOGD("%u udp bytes left.", iob->len);
 
         ctx->xclient.u.last_iob = iob;
         return 1;
@@ -192,7 +192,7 @@ void on_xserver_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 
         if (!ctx->is_udp) {
             uv_buf_t wbuf;
-            xlog_debug("%zd tcp bytes from proxy server.", nread);
+            XLOGD("%zd tcp bytes from proxy server.", nread);
 
             wbuf.base = buf->base;
             wbuf.len = nread;
@@ -203,7 +203,7 @@ void on_xserver_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 
             if (uv_stream_get_write_queue_size(
                     (uv_stream_t*) &ctx->xclient.t.io) > MAX_WQUEUE_SIZE) {
-                xlog_debug("proxy client write queue pending.");
+                XLOGD("proxy client write queue pending.");
 
                 /* stop reading from proxy server until proxy client write queue cleared. */
                 uv_read_stop(stream);
@@ -213,7 +213,7 @@ void on_xserver_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
             return;
         }
         /* ctx->is_udp */
-        xlog_debug("%zd udp bytes from proxy server.", nread);
+        XLOGD("%zd udp bytes from proxy server.", nread);
 
         iob->idx = 0;
         iob->len = (u32_t) nread;
@@ -224,7 +224,7 @@ void on_xserver_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
         }
 
     } else if (nread < 0) {
-        xlog_debug("disconnected from proxy server: %s.", uv_err_name((int) nread));
+        XLOGD("disconnected from proxy server: %s.", uv_err_name((int) nread));
 
         close_xclient(ctx);
         /* 'buf->base' may be 'NULL' when 'nread' < 0. */
@@ -239,7 +239,7 @@ static void on_xserver_connected(uv_connect_t* req, int status)
     xclient_ctx_t* ctx = req->data;
 
     if (status < 0) {
-        xlog_warn("connect proxy server failed: %s.", uv_err_name(status));
+        XLOGW("connect proxy server failed: %s.", uv_err_name(status));
 
         /* 'status' will be 'ECANCELED' when 'uv_close' is called before proxy server connected.
          * as a result, we should check it to avoid calling 'uv_close' twice.
@@ -250,7 +250,7 @@ static void on_xserver_connected(uv_connect_t* req, int status)
     } else {
         uv_buf_t wbuf;
 
-        xlog_debug("proxy server connected.");
+        XLOGD("proxy server connected.");
 
         /* send connect command. */
         wbuf.base = ctx->pending_iob->buffer;
@@ -274,7 +274,7 @@ static void on_xserver_connected(uv_connect_t* req, int status)
         } else if (ctx->xclient.u.npending) {
             u32_t i = 0;
 
-            xlog_debug("write %d pending udp packets.", ctx->xclient.u.npending);
+            XLOGD("write %d pending udp packets.", ctx->xclient.u.npending);
             /* write pending udp packets one by one. */
             do {
                 io_buf_t* iob = ctx->xclient.u.pending_pkts[i++];
@@ -298,7 +298,7 @@ int connect_xserver(xclient_ctx_t* ctx)
 {
     uv_connect_t* req = xlist_alloc_back(&xclient_pri.conn_reqs);
 
-    xlog_debug("connecting porxy server (%s)...", addr_to_str(&xclient.xserver_addr));
+    XLOGD("connecting porxy server (%s)...", addr_to_str(&xclient.xserver_addr));
     req->data = ctx;
 
     if (uv_tcp_connect(req, &ctx->io_xserver, &xclient.xserver_addr.x,
@@ -306,7 +306,7 @@ int connect_xserver(xclient_ctx_t* ctx)
         ctx->stage = STAGE_CONNECT;
         return 0;
     }
-    xlog_warn("connect proxy server failed immediately.");
+    XLOGW("connect proxy server failed immediately.");
 
     xlist_erase(&xclient_pri.conn_reqs, xlist_value_iter(req));
     return -1;
@@ -319,7 +319,7 @@ void on_xclient_write(uv_write_t* req, int status)
 
     if (ctx->xserver_blocked && uv_stream_get_write_queue_size(
             (uv_stream_t*) &ctx->xclient.t.io) == 0) {
-        xlog_debug("proxy client write queue cleared.");
+        XLOGD("proxy client write queue cleared.");
 
         /* proxy client write queue cleared, start reading from proxy server. */
         uv_read_start((uv_stream_t*) &ctx->io_xserver, on_iobuf_alloc, on_xserver_read);
@@ -372,7 +372,7 @@ void init_connect_command(xclient_ctx_t* ctx,
 
     memcpy(cmd->data, addr, addrlen);
 
-    xlog_debug("proxy to %s.", maddr_to_str(cmd));
+    XLOGD("proxy to %s.", maddr_to_str(cmd));
 
     memcpy(dnonce, pbuf, MAX_NONCE_LEN);
     convert_nonce(dnonce);
@@ -392,7 +392,7 @@ static void on_udp_packet_id_free(uv_handle_t* handle)
 {
     addr2id_t* ai = handle->data;
 
-    xlog_debug("free udp packet id %x, %zd left.", ai->ia->id,
+    XLOGD("free udp packet id %x, %zd left.", ai->ia->id,
         xhash_size(&xclient_pri.id2addrs) - 1);
     xhash_remove_data(&xclient_pri.id2addrs, ai->ia);
     xhash_remove_data(&xclient_pri.addr2ids, ai);
@@ -416,7 +416,7 @@ u32_t get_udp_packet_id(const struct sockaddr* saddr)
         ai->alive = 1;
         return ai->ia->id;
     }
-    xlog_debug("new udp packet id %x.", xclient_pri.next_upktid);
+    XLOGD("new udp packet id %x.", xclient_pri.next_upktid);
 
     ai = xhash_iter_data(xhash_put_ex(&xclient_pri.addr2ids,
             saddr, sizeof(ai->addr))); /* 'sizeof(ai->addr)' mybe unsafe in the future, TODO. */
@@ -495,17 +495,17 @@ void send_udp_packet(io_buf_t* iob)
                     on_xserver_write);
             } else {
                 xlist_erase(&xclient.io_buffers, xlist_value_iter(iob));
-                xlog_debug("proxy server write queue pending, drop this udp packet.");
+                XLOGD("proxy server write queue pending, drop this udp packet.");
             }
 
         } else if (ctx->xclient.u.npending < MAX_PENDING_UPKTS) {
             ctx->xclient.u.pending_pkts[ctx->xclient.u.npending++] = iob;
-            xlog_debug("pending this udp packet (%d/%d).", ctx->xclient.u.npending,
+            XLOGD("pending this udp packet (%d/%d).", ctx->xclient.u.npending,
                 MAX_PENDING_UPKTS);
 
         } else {
             xlist_erase(&xclient.io_buffers, xlist_value_iter(iob));
-            xlog_debug("pending queue full, drop this udp packet.");
+            XLOGD("pending queue full, drop this udp packet.");
         }
 
         iter = xlist_iter_valid(&xclient_pri.u_xclient_ctxs, xlist_iter_next(iter))
@@ -600,7 +600,7 @@ void xclient_private_init()
     xlist_init(&xclient_pri.conn_reqs, sizeof(uv_connect_t), NULL);
 
     if (uv_random(NULL, NULL, xclient_pri.session_id, SESSION_ID_SIZE, 0, NULL) != 0) {
-        xlog_warn("uv_random failed, use default random.");
+        XLOGW("uv_random failed, use default random.");
         rand_bytes(xclient_pri.session_id, SESSION_ID_SIZE);
     }
     rand_bytes((u8_t*) &xclient_pri.next_upktid, 4);

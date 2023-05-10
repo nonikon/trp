@@ -51,46 +51,40 @@ extern unsigned xlog_out_level;
 #endif
 
 #if XLOG_OUT_CTRL >= XLOG_ERROR
-#define xlog_error(fmt, ...) \
+#define XLOGE(fmt, ...) \
     do { \
         if (xlog_out_level >= XLOG_ERROR) \
             xlog_println("E", XLOG_FORMAT(fmt), ##__VA_ARGS__); \
     } while (0)
 #else
-#define xlog_error(fmt, ...)
+#define XLOGE(fmt, ...)
 #endif
 #if XLOG_OUT_CTRL >= XLOG_WARN
-#define xlog_warn(fmt, ...) \
+#define XLOGW(fmt, ...) \
     do { \
         if (xlog_out_level >= XLOG_WARN) \
             xlog_println("W", XLOG_FORMAT(fmt), ##__VA_ARGS__); \
     } while (0)
 #else
-#define  xlog_warn(fmt, ...)
+#define  XLOGW(fmt, ...)
 #endif
 #if XLOG_OUT_CTRL >= XLOG_INFO
-#define xlog_info(fmt, ...) \
+#define XLOGI(fmt, ...) \
     do { \
         if (xlog_out_level >= XLOG_INFO) \
             xlog_println("I", XLOG_FORMAT(fmt), ##__VA_ARGS__); \
     } while (0)
 #else
-#define  xlog_info(fmt, ...)
+#define  XLOGI(fmt, ...)
 #endif
 #if XLOG_OUT_CTRL >= XLOG_DEBUG
-#define xlog_debug(fmt, ...) \
+#define XLOGD(fmt, ...) \
     do { \
         if (xlog_out_level >= XLOG_DEBUG) \
             xlog_println("D", XLOG_FORMAT(fmt), ##__VA_ARGS__); \
     } while (0)
-#define xlog_hex(data, len) \
-    do { \
-        if (xlog_out_level >= XLOG_DEBUG) \
-            xlog_printhex(data, len); \
-    } while (0)
 #else
-#define xlog_debug(fmt, ...)
-#define xlog_hex(data, len)
+#define XLOGD(fmt, ...)
 #endif
 
 #if XLOG_OUT_CTRL > XLOG_NONE

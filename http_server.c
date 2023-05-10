@@ -164,7 +164,7 @@ static void dump_headers(http_req_pri_t* req)
 
         h->field[h->field_len] = '\0';
         h->value[h->value_len] = '\0';
-        xlog_debug("%s: %s", h->field, h->value);
+        XLOGD("%s: %s", h->field, h->value);
 
         i = xlist_iter_next(i);
     }
@@ -219,7 +219,7 @@ static void on_closed(uv_handle_t* handle)
 #endif
     xlist_erase(&__requests, xlist_value_iter(req));
 
-    xlog_debug("%zu requests and %zu responses left.",
+    XLOGD("%zu requests and %zu responses left.",
         xlist_size(&__requests), xlist_size(&__responses));
 }
 
@@ -237,7 +237,7 @@ static void on_read(uv_stream_t* client, ssize_t nread, const uv_buf_t* buf)
 
     if (nread > 0) {
         req->buf_len += (unsigned) nread;
-        xlog_debug("%zd bytes from client.", nread);
+        XLOGD("%zd bytes from http client.", nread);
 
         if (req->buf_len < sizeof(req->buf)) {
             http_parser_execute(&req->parser, &__parser_settings, buf->base, nread);
@@ -248,7 +248,7 @@ static void on_read(uv_stream_t* client, ssize_t nread, const uv_buf_t* buf)
                 const http_handler_t* h = __handlers;
 
                 req->pub.url[req->pub.url_len] = '\0';
-                xlog_debug("request url: %s.", req->pub.url);
+                XLOGD("request http url: %s.", req->pub.url);
 #if HTTP_SERVER_SAVE_HDR
                 dump_headers(req);
 #endif
@@ -284,7 +284,7 @@ static void on_read(uv_stream_t* client, ssize_t nread, const uv_buf_t* buf)
         }
 
     } else if (nread < 0) {
-        xlog_debug("client disconnected: %s.", uv_err_name((int) nread));
+        XLOGD("http client disconnected: %s.", uv_err_name((int) nread));
         close_connection(req);
     }
 
@@ -296,7 +296,7 @@ static void on_timeout(uv_timer_t* timer)
 {
     http_req_pri_t* req = timer->data;
 
-    xlog_debug("request timeout, close.");
+    XLOGD("http request timeout, close.");
     close_connection(req);
 }
 #endif
@@ -306,7 +306,7 @@ static void on_connect(uv_stream_t* server, int status)
     http_req_pri_t* req;
 
     if (status < 0) {
-        xlog_error("new connection error: %s.", uv_strerror(status));
+        XLOGE("new http connection error: %s.", uv_strerror(status));
         return;
     }
     req = xlist_alloc_back(&__requests);
@@ -322,7 +322,7 @@ static void on_connect(uv_stream_t* server, int status)
     req->ref_count = 1;
 
     if (uv_accept(server, (uv_stream_t*) &req->io) == 0) {
-        xlog_debug("http client connected.");
+        XLOGD("http client connected.");
         uv_read_start((uv_stream_t*) &req->io, on_read_alloc, on_read);
 #if HTTP_SERVER_TIMEOUT > 0
         req->timer.data = req;
@@ -333,7 +333,7 @@ static void on_connect(uv_stream_t* server, int status)
             HTTP_SERVER_TIMEOUT);
 #endif
     } else {
-        xlog_error("uv_accept failed.");
+        XLOGE("uv_accept failed.");
         uv_close((uv_handle_t*) &req->io, on_closed);
     }
 }
@@ -347,7 +347,7 @@ int http_server_start(uv_loop_t* loop, const struct sockaddr* addr,
 
     error = uv_tcp_bind(&__ioserver, addr, 0);
     if (error) {
-        xlog_error("tcp bind (%s) failed: %s.", addr_to_str(addr),
+        XLOGE("tcp bind (%s) failed: %s.", addr_to_str(addr),
             uv_strerror(error));
         uv_close((uv_handle_t*) &__ioserver, NULL);
         return -1;
@@ -355,7 +355,7 @@ int http_server_start(uv_loop_t* loop, const struct sockaddr* addr,
 
     error = uv_listen((uv_stream_t*) &__ioserver, 1024, on_connect);
     if (error) {
-        xlog_error("tcp listen (%s) failed: %s.", addr_to_str(addr),
+        XLOGE("tcp listen (%s) failed: %s.", addr_to_str(addr),
             uv_strerror(error));
         uv_close((uv_handle_t*) &__ioserver, NULL);
         return -1;
@@ -367,6 +367,6 @@ int http_server_start(uv_loop_t* loop, const struct sockaddr* addr,
     xlist_init(&__requests, sizeof(http_req_pri_t), NULL);
     xlist_init(&__responses, sizeof(http_resp_pri_t), NULL);
 
-    xlog_info("control server (HTTP) listen at %s...", addr_to_str(addr));
+    XLOGI("control server (HTTP) listen at %s...", addr_to_str(addr));
     return 0;
 }

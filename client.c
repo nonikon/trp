@@ -42,7 +42,7 @@ static void new_server_connection(uv_timer_t* handle);
     if (nread > 0) {
         if (ctx->stage == STAGE_FORWARDTCP) {
             uv_buf_t wbuf;
-            xlog_debug("%zd bytes from server, to tcp remote.", nread);
+            XLOGD("%zd bytes from server, to tcp remote.", nread);
 
             wbuf.base = buf->base;
             wbuf.len = nread;
@@ -56,7 +56,7 @@ static void new_server_connection(uv_timer_t* handle);
 
             if (uv_stream_get_write_queue_size(
                     (uv_stream_t*) &ctx->remote->t.io) > MAX_WQUEUE_SIZE) {
-                xlog_debug("remote write queue pending.");
+                XLOGD("remote write queue pending.");
 
                 /* stop reading from server until remote write queue cleared. */
                 uv_read_stop(stream);
@@ -67,7 +67,7 @@ static void new_server_connection(uv_timer_t* handle);
         }
 
         if (ctx->stage == STAGE_FORWARDUDP) {
-            xlog_debug("%zd udp bytes from server.", nread);
+            XLOGD("%zd udp bytes from server.", nread);
 
             remote.crypto.decrypt(&ctx->edctx, (u8_t*) buf->base, (u32_t) nread);
 
@@ -96,18 +96,18 @@ static void new_server_connection(uv_timer_t* handle);
         }
 
         /* should not reach here */
-        xlog_error("unexpected state happen when read.");
+        XLOGE("unexpected state happen when read.");
         return;
     }
 
     if (nread < 0) {
-        xlog_debug("disconnected from server: %s, stage %d.",
+        XLOGD("disconnected from server: %s, stage %d.",
             uv_err_name((int) nread), ctx->stage);
 
         uv_close((uv_handle_t*) stream, on_peer_closed);
 
         if (ctx->stage == STAGE_COMMAND) {
-            xlog_warn("connection closed by server at COMMAND stage.");
+            XLOGW("connection closed by server at COMMAND stage.");
             ++nconnect;
             if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
                 /* reconnect after RECSRV_INTVL_MIN seconds. */
@@ -172,19 +172,19 @@ static void on_server_connected(uv_connect_t* req, int status)
             uv_timer_start(&reconnect_timer, new_server_connection, intvl * 1000, 0);
         }
         if (intvl < RECSRV_INTVL_MAX) {
-            xlog_error("connect server failed: %s, retry after %ds.",
+            XLOGE("connect server failed: %s, retry after %ds.",
                 uv_err_name(status), intvl);
             intvl += RECSRV_INTVL_STEP;
         } else {
-            xlog_debug("connect server failed: %s, retry after %ds.",
+            XLOGD("connect server failed: %s, retry after %ds.",
                 uv_err_name(status), intvl);
         }
     } else {
         if (intvl > RECSRV_INTVL_MIN) {
             intvl = RECSRV_INTVL_MIN;
-            xlog_info("server connected.");
+            XLOGI("server connected.");
         } else {
-            xlog_debug("server connected.");
+            XLOGD("server connected.");
         }
         /* enable tcp-keepalive. */
         uv_tcp_keepalive(&ctx->io, 1, KEEPIDLE_TIME);
@@ -217,10 +217,10 @@ static void connect_server(struct sockaddr* addr)
 
     req->data = ctx;
 
-    xlog_debug("connecting server %s...", addr_to_str(addr));
+    XLOGD("connecting server %s...", addr_to_str(addr));
 
     if (uv_tcp_connect(req, &ctx->io, addr, on_server_connected) != 0) {
-        xlog_error("connect server failed immediately.");
+        XLOGE("connect server failed immediately.");
 
         ++nconnect;
         if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
@@ -246,20 +246,20 @@ static void on_server_domain_resolved(
             uv_timer_start(&reconnect_timer, new_server_connection, intvl * 1000, 0);
         }
         if (intvl < RECSRV_INTVL_MAX) {
-            xlog_error("resolve server domain failed: %s, retry after %ds.",
+            XLOGE("resolve server domain failed: %s, retry after %ds.",
                 uv_err_name(status), intvl);
             intvl += RECSRV_INTVL_STEP;
         } else {
-            xlog_debug("resolve server domain failed: %s, retry after %ds.",
+            XLOGD("resolve server domain failed: %s, retry after %ds.",
                 uv_err_name(status), intvl);
         }
     } else {
         if (intvl > RECSRV_INTVL_MIN) {
             intvl = RECSRV_INTVL_MIN;
-            xlog_info("resolve server domain result: %s, connecting...",
+            XLOGI("server domain resolved: %s, connecting...",
                 addr_to_str(res->ai_addr));
         } else {
-            xlog_debug("resolve server domain result: %s, connecting...",
+            XLOGD("server domain resolved: %s, connecting...",
                 addr_to_str(res->ai_addr));
         }
         /* save resolved server domain. */
@@ -301,7 +301,7 @@ static void new_server_connection(uv_timer_t* timer)
 
         if (uv_getaddrinfo(remote.loop, req, on_server_domain_resolved,
                 server_addr.d.sdm_addr, portstr, &hints) != 0) {
-            xlog_error("uv_getaddrinfo (%s) failed immediately.", server_addr.d.sdm_addr);
+            XLOGE("uv_getaddrinfo (%s) failed immediately.", server_addr.d.sdm_addr);
 
             ++nconnect;
             if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
@@ -501,7 +501,7 @@ int main(int argc, char** argv)
     }
 
     if (xlog_init(logfile) != 0) {
-        xlog_error("open logfile failed, switch to stdout.");
+        XLOGE("open logfile failed, switch to stdout.");
     }
 
 #ifdef _WIN32
@@ -509,21 +509,21 @@ int main(int argc, char** argv)
         xlog_exit(); /* close log file */
         if (daemon(argc, argv) != 0) {
             xlog_init(logfile); /* reopen log file when daemon failed */
-            xlog_error("run as daemon failed: %u", GetLastError());
+            XLOGE("run as daemon failed: %u", GetLastError());
         }
     }
 #else
     if (daemonize && daemon(1, 0) != 0) {
-        xlog_error("run as daemon failed: %s.", strerror(errno));
+        XLOGE("run as daemon failed: %s.", strerror(errno));
     }
 #endif
     if (!verbose) {
         xlog_ctrl(XLOG_INFO, 0, 0);
     } else {
-        xlog_info("enable verbose output.");
+        XLOGI("enable verbose output.");
     }
     if (i > 0) {
-        xlog_info("load %d item(s) from config file (%s).", i, cfg_path);
+        XLOGI("load %d item(s) from config file (%s).", i, cfg_path);
     }
 #ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
@@ -532,9 +532,9 @@ int main(int argc, char** argv)
         struct rlimit limit = { nofile, nofile };
 
         if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
-            xlog_warn("set NOFILE limit to %d failed: %s.", nofile, strerror(errno));
+            XLOGW("set NOFILE limit to %d failed: %s.", nofile, strerror(errno));
         } else {
-            xlog_info("set NOFILE limit to %d.", nofile);
+            XLOGI("set NOFILE limit to %d.", nofile);
         }
     }
 #endif
@@ -544,51 +544,51 @@ int main(int argc, char** argv)
     remote.loop = uv_default_loop();
 
     if (nconnect <= 0 || nconnect > 1024) {
-        xlog_warn("invalid connection pool size (%d), reset to 1.", nconnect);
+        XLOGW("invalid connection pool size (%d), reset to 1.", nconnect);
         nconnect = 1;
     }
 
     if (!devid_str) {
-        xlog_info("device id not set, use default.");
+        XLOGI("device id not set, use default.");
         devid_str = DEF_DEVID_STRING;
     }
     if (str_to_devid(device_id, devid_str) != 0) {
-        xlog_error("invalid device id string (%s).", devid_str);
+        XLOGE("invalid device id string (%s).", devid_str);
         goto end;
     }
 
     if (passwd) {
         derive_key(crypto_key, passwd);
     } else {
-        xlog_info("password not set, disable crypto with server.");
+        XLOGI("password not set, disable crypto with server.");
         method = CRYPTO_NONE;
     }
     if (passwdx) {
         derive_key(remote.crypto_key, passwdx);
     } else {
-        xlog_info("PASSWORD (-K) not set, disable crypto with proxy client.");
+        XLOGI("PASSWORD (-K) not set, disable crypto with proxy client.");
         methodx = CRYPTO_NONE;
     }
 
     if (crypto_init(&crypto, method) != 0) {
-        xlog_error("invalid crypto method (%d).", method);
+        XLOGE("invalid crypto method (%d).", method);
         goto end;
     }
     if (crypto_init(&remote.crypto, methodx) != 0) {
-        xlog_error("invalid crypto METHOD (%d).", methodx);
+        XLOGE("invalid crypto METHOD (%d).", methodx);
         goto end;
     }
-    xlog_info("crypto method %d, METHOD %d.", method, methodx);
+    XLOGI("crypto method %d, METHOD %d.", method, methodx);
 
     if (parse_ip_str(server_str, DEF_SERVER_PORT, &server_addr.x) != 0
             && parse_domain_str(server_str, DEF_SERVER_PORT, &server_addr.d) != 0) {
-        xlog_error("invalid server address (%s).", server_str);
+        XLOGE("invalid server address (%s).", server_str);
         goto end;
     }
 
 #ifdef WITH_CTRLSERVER
     if (cserver_str && start_ctrl_server(remote.loop, cserver_str) != 0) {
-        xlog_warn("start HTTP control server failed.");
+        XLOGW("start HTTP control server failed.");
         // goto end;
     }
 #endif
@@ -599,8 +599,8 @@ int main(int argc, char** argv)
 
     uv_timer_init(remote.loop, &reconnect_timer);
 
-    xlog_info("device id: %s.", devid_to_str(device_id));
-    xlog_info("server address: %s, connecting...", addr_to_str(&server_addr));
+    XLOGI("device id: %s.", devid_to_str(device_id));
+    XLOGI("server address: %s, connecting...", addr_to_str(&server_addr));
     new_server_connection(NULL);
     uv_run(remote.loop, UV_RUN_DEFAULT);
 
@@ -609,7 +609,7 @@ int main(int argc, char** argv)
     xlist_destroy(&remote.io_buffers);
     xlist_destroy(&remote.peer_ctxs);
 end:
-    xlog_info("end of loop.");
+    XLOGI("end of loop.");
     remote_private_destroy();
     xlog_exit();
 

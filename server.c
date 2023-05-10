@@ -33,7 +33,7 @@
 #ifdef WITH_CLIREMOTE
         if (ctx->stage == STAGE_FORWARDCLI) {
             uv_buf_t wbuf;
-            xlog_debug("%zd bytes from proxy client, to client.", nread);
+            XLOGD("%zd bytes from proxy client, to client.", nread);
 
             wbuf.base = buf->base;
             wbuf.len = nread;
@@ -45,7 +45,7 @@
 
             if (uv_stream_get_write_queue_size(
                     (uv_stream_t*) &ctx->remote->c.io) > MAX_WQUEUE_SIZE) {
-                xlog_debug("client write queue pending.");
+                XLOGD("client write queue pending.");
 
                 /* stop reading from peer until client write queue cleared. */
                 uv_read_stop(stream);
@@ -57,7 +57,7 @@
 #endif
         if (ctx->stage == STAGE_FORWARDTCP) {
             uv_buf_t wbuf;
-            xlog_debug("%zd bytes from proxy client, to tcp remote.", nread);
+            XLOGD("%zd bytes from proxy client, to tcp remote.", nread);
 
             wbuf.base = buf->base;
             wbuf.len = nread;
@@ -71,7 +71,7 @@
 
             if (uv_stream_get_write_queue_size(
                     (uv_stream_t*) &ctx->remote->t.io) > MAX_WQUEUE_SIZE) {
-                xlog_debug("remote write queue pending.");
+                XLOGD("remote write queue pending.");
 
                 /* stop reading from peer until remote write queue cleared. */
                 uv_read_stop(stream);
@@ -82,7 +82,7 @@
         }
 
         if (ctx->stage == STAGE_FORWARDUDP) {
-            xlog_debug("%zd udp bytes from proxy client.", nread);
+            XLOGD("%zd udp bytes from proxy client.", nread);
 
             remote.crypto.decrypt(&ctx->edctx, (u8_t*) buf->base, (u32_t) nread);
 
@@ -107,12 +107,12 @@
         }
 
         /* should not reach here */
-        xlog_error("unexpected state happen.");
+        XLOGE("unexpected state happen.");
         return;
     }
 
     if (nread < 0) {
-        xlog_debug("disconnected from proxy client: %s, stage %d.",
+        XLOGD("disconnected from proxy client: %s, stage %d.",
             uv_err_name((int) nread), ctx->stage);
 
         uv_close((uv_handle_t*) stream, on_peer_closed);
@@ -138,7 +138,7 @@ static void on_xclient_connect(uv_stream_t* stream, int status)
     peer_ctx_t* ctx;
 
     if (status < 0) {
-        xlog_error("new connection error: %s.", uv_strerror(status));
+        XLOGE("new connection error: %s.", uv_strerror(status));
         return;
     }
     ctx = xlist_alloc_back(&remote.peer_ctxs);
@@ -156,12 +156,12 @@ static void on_xclient_connect(uv_stream_t* stream, int status)
     ctx->stage = STAGE_COMMAND;
 
     if (uv_accept(stream, (uv_stream_t*) &ctx->io) == 0) {
-        xlog_debug("proxy client connected.");
+        XLOGD("proxy client connected.");
         /* enable tcp-keepalive with proxy client. */
         uv_tcp_keepalive(&ctx->io, 1, KEEPIDLE_TIME);
         uv_read_start((uv_stream_t*) &ctx->io, on_iobuf_alloc, on_peer_read);
     } else {
-        xlog_error("uv_accept failed.");
+        XLOGE("uv_accept failed.");
         uv_close((uv_handle_t*) &ctx->io, on_peer_closed);
     }
 }
@@ -361,7 +361,7 @@ int main(int argc, char** argv)
     }
 
     if (xlog_init(logfile) != 0) {
-        xlog_error("open logfile failed, switch to stdout.");
+        XLOGE("open logfile failed, switch to stdout.");
     }
 
 #ifdef _WIN32
@@ -369,21 +369,21 @@ int main(int argc, char** argv)
         xlog_exit(); /* close log file */
         if (daemon(argc, argv) != 0) {
             xlog_init(logfile); /* reopen log file when daemon failed */
-            xlog_error("run as daemon failed: %u", GetLastError());
+            XLOGE("run as daemon failed: %u", GetLastError());
         }
     }
 #else
     if (daemonize && daemon(1, 0) != 0) {
-        xlog_error("run as daemon failed: %s.", strerror(errno));
+        XLOGE("run as daemon failed: %s.", strerror(errno));
     }
 #endif
     if (!verbose) {
         xlog_ctrl(XLOG_INFO, 0, 0);
     } else {
-        xlog_info("enable verbose output.");
+        XLOGI("enable verbose output.");
     }
     if (i > 0) {
-        xlog_info("load %d item(s) from config file (%s).", i, cfg_path);
+        XLOGI("load %d item(s) from config file (%s).", i, cfg_path);
     }
 #ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
@@ -392,9 +392,9 @@ int main(int argc, char** argv)
         struct rlimit limit = { nofile, nofile };
 
         if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
-            xlog_warn("set NOFILE limit to %d failed: %s.", nofile, strerror(errno));
+            XLOGW("set NOFILE limit to %d failed: %s.", nofile, strerror(errno));
         } else {
-            xlog_info("set NOFILE limit to %d.", nofile);
+            XLOGI("set NOFILE limit to %d.", nofile);
         }
     }
 #endif
@@ -406,28 +406,28 @@ int main(int argc, char** argv)
     if (passwd) {
         derive_key(remote.crypto_key, passwd);
     } else {
-        xlog_info("password not set, disable crypto.");
+        XLOGI("password not set, disable crypto.");
         method = CRYPTO_NONE;
     }
 
     if (crypto_init(&remote.crypto, method) != 0) {
-        xlog_error("invalid crypto method (%d).", method);
+        XLOGE("invalid crypto method (%d).", method);
         goto end;
     }
-    xlog_info("crypto method %d.", method);
+    XLOGI("crypto method %d.", method);
 
 #ifdef WITH_CLIREMOTE
     if (dconnoff) {
-        xlog_info("disable direct connect.");
+        XLOGI("disable direct connect.");
         remote.dconnect_off = 1;
     }
     if (parse_ip_str(server_str, DEF_SERVER_PORT, &addr.x) != 0) {
-        xlog_error("invalid server address (%s).", server_str);
+        XLOGE("invalid server address (%s).", server_str);
         goto end;
     }
 #endif
     if (parse_ip_str(xserver_str, DEF_XSERVER_PORT, &xaddr.x) != 0) {
-        xlog_error("invalid proxy server address (%s).", xserver_str);
+        XLOGE("invalid proxy server address (%s).", xserver_str);
         goto end;
     }
 
@@ -436,13 +436,13 @@ int main(int argc, char** argv)
 
     error = uv_tcp_bind(&io_server, &addr.x, 0);
     if (error) {
-        xlog_error("tcp bind %s failed: %s.", addr_to_str(&addr),
+        XLOGE("tcp bind %s failed: %s.", addr_to_str(&addr),
             uv_strerror(error));
         goto end;
     }
     error = uv_listen((uv_stream_t*) &io_server, LISTEN_BACKLOG, on_cli_remote_connect);
     if (error) {
-        xlog_error("tcp listen %s failed: %s.", addr_to_str(&addr),
+        XLOGE("tcp listen %s failed: %s.", addr_to_str(&addr),
             uv_strerror(error));
         goto end;
     }
@@ -451,20 +451,20 @@ int main(int argc, char** argv)
 
     error = uv_tcp_bind(&io_xserver, &xaddr.x, 0);
     if (error) {
-        xlog_error("tcp bind %s failed: %s.", addr_to_str(&xaddr),
+        XLOGE("tcp bind %s failed: %s.", addr_to_str(&xaddr),
             uv_strerror(error));
         goto end;
     }
     error = uv_listen((uv_stream_t*) &io_xserver, LISTEN_BACKLOG, on_xclient_connect);
     if (error) {
-        xlog_error("tcp listen %s failed: %s.", addr_to_str(&xaddr),
+        XLOGE("tcp listen %s failed: %s.", addr_to_str(&xaddr),
             uv_strerror(error));
         goto end;
     }
 
 #ifdef WITH_CTRLSERVER
     if (cserver_str && start_ctrl_server(remote.loop, cserver_str) != 0) {
-        xlog_warn("start HTTP control server failed.");
+        XLOGW("start HTTP control server failed.");
         // goto end;
     }
 #endif
@@ -474,9 +474,9 @@ int main(int argc, char** argv)
     xlist_init(&remote.addrinfo_reqs, sizeof(uv_getaddrinfo_t), NULL);
 
 #ifdef WITH_CLIREMOTE
-    xlog_info("server listen at %s...", addr_to_str(&addr));
+    XLOGI("server listen at %s...", addr_to_str(&addr));
 #endif
-    xlog_info("proxy server listen at %s...", addr_to_str(&xaddr));
+    XLOGI("proxy server listen at %s...", addr_to_str(&xaddr));
     uv_run(remote.loop, UV_RUN_DEFAULT);
 
     xlist_destroy(&remote.addrinfo_reqs);
@@ -484,7 +484,7 @@ int main(int argc, char** argv)
     xlist_destroy(&remote.io_buffers);
     xlist_destroy(&remote.peer_ctxs);
 end:
-    xlog_info("end of loop.");
+    XLOGI("end of loop.");
     remote_private_destroy();
     xlog_exit();
 

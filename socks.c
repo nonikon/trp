@@ -54,11 +54,11 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
              */
 
             if (buf->len < 3 || buf->base[1] == 0) { /* 'NMETHODS' == 0 */
-                xlog_warn("invalid socks5 select message from client.");
+                XLOGW("invalid socks5 select message from client.");
                 return -1;
             }
 
-            xlog_debug("socks5 select message from client: %d bytes, %d methods.",
+            XLOGD("socks5 select message from client: %d bytes, %d methods.",
                 buf->len, buf->base[1]);
 
             buf->base[1] = 0x00; /* select 'METHOD' 0x00 */
@@ -85,7 +85,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
              */
 
             if (buf->len < 9 || buf->base[1] != 0x01) {/* 'CD' != 0x01 (CONNECT) */
-                xlog_warn("invalid socks4 command from client.");
+                XLOGW("invalid socks4 command from client.");
                 return -1;
             }
 
@@ -110,7 +110,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
             return 1;
         }
 
-        xlog_warn("invalid socks protocol version (%d).", buf->base[0]);
+        XLOGW("invalid socks protocol version (%d).", buf->base[0]);
         return -1;
     }
 
@@ -151,7 +151,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
         if (buf->len < 7
                 || buf->base[0] != 0x05    /* 'VER' != 0x05 */
                 || buf->base[2] != 0x00) { /* 'RSV' != 0x00 */
-            xlog_warn("invalid socks5 request from client.");
+            XLOGW("invalid socks5 request from client.");
             return -1;
         }
 
@@ -162,7 +162,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
                         *(u16_t*) (buf->base + 8), (u8_t*) (buf->base + 4), 4);
                     buf->base[1] = 0x00;
                 } else {
-                    xlog_warn("socks5 IPV4 request packet len (%d) error.", buf->len);
+                    XLOGW("socks5 IPV4 request packet len (%d) error.", buf->len);
                     buf->base[1] = 0x01;
                 }
             } else if (buf->base[3] == 0x03) { /* 'ATYP' == 0x03 (DOMAINNAME) */
@@ -176,7 +176,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
                         port, (u8_t*) (buf->base + 5), l + 1);
                     buf->base[1] = 0x00;
                 } else {
-                    xlog_warn("socks5 request packet len error, domain len %d.", l);
+                    XLOGW("socks5 request packet len error, domain len %d.", l);
                     buf->base[1] = 0x01;
                 }
             } else if (buf->base[3] == 0x04) { /* 'ATYP' == 0x04 (IPV6) */
@@ -185,11 +185,11 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
                         *(u16_t*) (buf->base + 20), (u8_t*) (buf->base + 4), 16);
                     buf->base[1] = 0x00;
                 } else {
-                    xlog_warn("socks5 IPV6 request packet len (%d) error.", buf->len);
+                    XLOGW("socks5 IPV6 request packet len (%d) error.", buf->len);
                     buf->base[1] = 0x01;
                 }
             } else {
-                xlog_warn("unsupported socks5 address type %d.", buf->base[3]);
+                XLOGW("unsupported socks5 address type %d.", buf->base[3]);
                 buf->base[1] = 0x08;
             }
 
@@ -225,7 +225,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
                         /* record 'DST.ADDR', 'DST.PORT' and 'addr', TODO. */
                         buf->base[1] = 0x00;
                     } else {
-                        xlog_warn("socks5 IPV4 udp request packet len (%d) error.", buf->len);
+                        XLOGW("socks5 IPV4 udp request packet len (%d) error.", buf->len);
                         buf->base[1] = 0x01;
                     }
                 } else if (buf->base[3] == 0x04) { /* 'ATYP' == 0x04 (IPV6) */
@@ -233,11 +233,11 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
                         /* record 'DST.ADDR', 'DST.PORT' and 'addr', TODO. */
                         buf->base[1] = 0x00;
                     } else {
-                        xlog_warn("socks5 IPV6 udp request packet len (%d) error.", buf->len);
+                        XLOGW("socks5 IPV6 udp request packet len (%d) error.", buf->len);
                         buf->base[1] = 0x01;
                     }
                 } else {
-                    xlog_warn("unsupported socks5 udp address type %d.", buf->base[3]);
+                    XLOGW("unsupported socks5 udp address type %d.", buf->base[3]);
                     buf->base[1] = 0x08;
                 }
 
@@ -259,7 +259,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
                         buf->len = 6 + 16;
                         break;
                     default:
-                        xlog_error("uv_tcp_getsockname failed.");
+                        XLOGE("uv_tcp_getsockname failed.");
                         return -1;
                     }
                     ctx->stage = STAGE_NOOP;
@@ -267,13 +267,13 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
                 }
 
             } else {
-                xlog_warn("socks5 udp relay not enabled.");
+                XLOGW("socks5 udp relay not enabled.");
                 buf->base[1] = 0x01;
             }
 
         } else {
             /* 'BIND' not supported. */
-            xlog_warn("unsupported socks5 command %d.", buf->base[1]);
+            XLOGW("unsupported socks5 command %d.", buf->base[1]);
             buf->base[1] = 0x07;
         }
 
@@ -281,7 +281,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
     }
 
     /* can't reach here. */
-    xlog_error("unexpected state happen.");
+    XLOGE("unexpected state happen.");
     return -1;
 }
 
@@ -299,7 +299,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
         iob->wreq.data = ctx;
 
         if (ctx->stage == STAGE_FORWARD) {
-            xlog_debug("%zd bytes from socks client, to proxy server.", nread);
+            XLOGD("%zd bytes from socks client, to proxy server.", nread);
 
             xclient.cryptox.encrypt(&ctx->ectx, (u8_t*) wbuf.base, wbuf.len);
 
@@ -308,7 +308,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
 
             if (uv_stream_get_write_queue_size(
                     (uv_stream_t*) &ctx->io_xserver) > MAX_WQUEUE_SIZE) {
-                xlog_debug("proxy server write queue pending.");
+                XLOGD("proxy server write queue pending.");
 
                 /* stop reading from SOCKS client until proxy server write queue cleared. */
                 uv_read_stop(stream);
@@ -342,7 +342,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
         }
 
     } else if (nread < 0) {
-        xlog_debug("disconnected from socks client: %s, stage %d.",
+        XLOGD("disconnected from socks client: %s, stage %d.",
             uv_err_name((int) nread), ctx->stage);
 
         if (ctx->stage == STAGE_NOOP) {
@@ -363,7 +363,7 @@ static void on_sclient_connect(uv_stream_t* stream, int status)
     xclient_ctx_t* ctx;
 
     if (status < 0) {
-        xlog_error("new connection error: %s.", uv_strerror(status));
+        XLOGE("new connection error: %s.", uv_strerror(status));
         return;
     }
     ctx = xlist_alloc_back(&xclient.xclient_ctxs);
@@ -380,7 +380,7 @@ static void on_sclient_connect(uv_stream_t* stream, int status)
     ctx->stage = STAGE_INIT;
 
     if (uv_accept(stream, (uv_stream_t*) &ctx->xclient.t.io) == 0) {
-        xlog_debug("socks client connected.");
+        XLOGD("socks client connected.");
         uv_tcp_init(xclient.loop, &ctx->io_xserver);
         uv_read_start((uv_stream_t*) &ctx->xclient.t.io, on_iobuf_alloc, on_xclient_read);
         /* keepalive with socks client. */
@@ -388,7 +388,7 @@ static void on_sclient_connect(uv_stream_t* stream, int status)
         /* 'ctx->io_xserver' need to be closed, increase refcount. */
         ctx->ref_count = 2;
     } else {
-        xlog_error("uv_accept failed.");
+        XLOGE("uv_accept failed.");
         uv_close((uv_handle_t*) &ctx->xclient.t.io, on_io_closed);
     }
 }
@@ -426,14 +426,14 @@ static void on_udp_sclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
      */
 
     if (nread < 7 || (buf->base[0] | buf->base[1])) { /* 'RSV' != 0x0000 */
-        xlog_debug("invalid udp packet from socks5 client (%zd/%04x).", nread,
+        XLOGD("invalid udp packet from socks5 client (%zd/%04x).", nread,
             *(u16_t*) buf->base);
 
     } else if (flags & UV_UDP_PARTIAL) {
-        xlog_warn("socks5 udp packet too large (> %u), drop it.", buf->len);
+        XLOGW("socks5 udp packet too large (> %u), drop it.", buf->len);
 
     } else if (buf->base[2]) { /* 'FRAG' != 0x00 */
-        xlog_warn("socks5 udp packet with fragment is not supported.");
+        XLOGW("socks5 udp packet with fragment is not supported.");
 
     } else if (buf->base[3] == 0x01) { /* 'ATYP' == 0x01 (IPV4) */
 
@@ -448,14 +448,14 @@ static void on_udp_sclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
 
             iob->len = (u32_t) (nread - 4 + sizeof(udp_cmd_t));
 
-            xlog_debug("%u udp bytes from socks5 client, to proxy server, id %x.",
+            XLOGD("%u udp bytes from socks5 client, to proxy server, id %x.",
                 iob->len, cmd->id);
             send_udp_packet(iob);
             /* 'iob' free later. */
             return;
         }
 
-        xlog_warn("socks5 IPV4 udp packet len (%zd) error.", nread);
+        XLOGW("socks5 IPV4 udp packet len (%zd) error.", nread);
 
     } else if (buf->base[3] == 0x04) { /* 'ATYP' == 0x04 (IPV6) */
 
@@ -470,17 +470,17 @@ static void on_udp_sclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
 
             iob->len = (u32_t) (nread - 4 + sizeof(udp_cmd_t));
 
-            xlog_debug("%u udp bytes from socks5 client, to proxy server, id %x.",
+            XLOGD("%u udp bytes from socks5 client, to proxy server, id %x.",
                 iob->len, cmd->id);
             send_udp_packet(iob);
             /* 'iob' free later. */
             return;
         }
 
-        xlog_warn("socks5 IPV6 udp packet len (%zd) error.", nread);
+        XLOGW("socks5 IPV6 udp packet len (%zd) error.", nread);
 
     } else {
-        xlog_warn("unsupported socks5 udp packet address type: %d.", buf->base[3]);
+        XLOGW("unsupported socks5 udp packet address type: %d.", buf->base[3]);
     }
 
     xlist_erase(&xclient.io_buffers, xlist_value_iter(iob));
@@ -492,7 +492,7 @@ static void on_udp_sclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
     uv_buf_t wbuf;
 
     if (!addr) {
-        xlog_warn("udp packet id (%x) not found.", cmd->id);
+        XLOGW("udp packet id (%x) not found.", cmd->id);
         return;
     }
     /* zero 'RSV', 'FRAG' and 'ATYP'. */
@@ -503,10 +503,10 @@ static void on_udp_sclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
     wbuf.base = (char*) cmd + 4;
     wbuf.len = ntohs(cmd->len) + 4;
 
-    xlog_debug("%u udp bytes to socks5 client (%s).", wbuf.len, addr_to_str(addr));
+    XLOGD("%u udp bytes to socks5 client (%s).", wbuf.len, addr_to_str(addr));
 
     if (uv_udp_try_send(&io_usserver, &wbuf, 1, addr) < 0) {
-        xlog_debug("send udp packet to socks5 client failed.");
+        XLOGD("send udp packet to socks5 client failed.");
     }
 }
 
@@ -691,7 +691,7 @@ int main(int argc, char** argv)
     }
 
     if (xlog_init(logfile) != 0) {
-        xlog_error("open logfile failed, switch to stdout.");
+        XLOGE("open logfile failed, switch to stdout.");
     }
 
 #ifdef _WIN32
@@ -699,21 +699,21 @@ int main(int argc, char** argv)
         xlog_exit(); /* close log file */
         if (daemon(argc, argv) != 0) {
             xlog_init(logfile); /* reopen log file when daemon failed */
-            xlog_error("run as daemon failed: %u", GetLastError());
+            XLOGE("run as daemon failed: %u", GetLastError());
         }
     }
 #else
     if (daemonize && daemon(1, 0) != 0) {
-        xlog_error("run as daemon failed: %s.", strerror(errno));
+        XLOGE("run as daemon failed: %s.", strerror(errno));
     }
 #endif
     if (!verbose) {
         xlog_ctrl(XLOG_INFO, 0, 0);
     } else {
-        xlog_info("enable verbose output.");
+        XLOGI("enable verbose output.");
     }
     if (i > 0) {
-        xlog_info("load %d item(s) from config file (%s).", i, cfg_path);
+        XLOGI("load %d item(s) from config file (%s).", i, cfg_path);
     }
 #ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
@@ -722,9 +722,9 @@ int main(int argc, char** argv)
         struct rlimit limit = { nofile, nofile };
 
         if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
-            xlog_warn("set NOFILE limit to %d failed: %s.", nofile, strerror(errno));
+            XLOGW("set NOFILE limit to %d failed: %s.", nofile, strerror(errno));
         } else {
-            xlog_info("set NOFILE limit to %d.", nofile);
+            XLOGI("set NOFILE limit to %d.", nofile);
         }
     }
 #endif
@@ -734,65 +734,65 @@ int main(int argc, char** argv)
     xclient.loop = uv_default_loop();
 
     if (nconnect < 0 || nconnect > 1024) {
-        xlog_warn("invalid connection pool size (%d), reset to 1.", nconnect);
+        XLOGW("invalid connection pool size (%d), reset to 1.", nconnect);
         nconnect = 1;
     }
 
     if (utimeo <= 0 || utimeo > MAX_UDPCONN_TIMEO) {
-        xlog_warn("invalid UDP connection timeout (%d), reset to %d.",
+        XLOGW("invalid UDP connection timeout (%d), reset to %d.",
             utimeo, UDPCONN_TIMEO);
         utimeo = UDPCONN_TIMEO;
     }
     xclient.utimeo = (u8_t) utimeo;
 
     if (devid_str && str_to_devid(xclient.device_id, devid_str) != 0) {
-        xlog_error("invalid device id string (%s).", devid_str);
+        XLOGE("invalid device id string (%s).", devid_str);
         goto end;
     }
 
     if (passwd) {
         derive_key(xclient.crypto_key, passwd);
     } else {
-        xlog_info("password not set, disable crypto with proxy server.");
+        XLOGI("password not set, disable crypto with proxy server.");
         method = CRYPTO_NONE;
     }
     if (devid_str) {
         if (passwdx) {
             derive_key(xclient.cryptox_key, passwdx);
         } else {
-            xlog_info("PASSWORD (-K) not set, disable crypto with client.");
+            XLOGI("PASSWORD (-K) not set, disable crypto with client.");
             methodx = CRYPTO_NONE;
         }
     } else {
         if (passwdx) {
-            xlog_info("device id not set, ignore PASSWORD (-K).");
+            XLOGI("device id not set, ignore PASSWORD (-K).");
         }
         methodx = method;
         memcpy(xclient.cryptox_key, xclient.crypto_key, 16);
     }
 
     if (crypto_init(&xclient.crypto, method) != 0) {
-        xlog_error("invalid crypto method (%d).", method);
+        XLOGE("invalid crypto method (%d).", method);
         goto end;
     }
     if (crypto_init(&xclient.cryptox, methodx) != 0) {
-        xlog_error("invalid crypto METHOD (%d).", methodx);
+        XLOGE("invalid crypto METHOD (%d).", methodx);
         goto end;
     }
-    xlog_info("crypto method %d, METHOD %d.", method, methodx);
+    XLOGI("crypto method %d, METHOD %d.", method, methodx);
 
     if (parse_ip_str(xserver_str, DEF_XSERVER_PORT, &xclient.xserver_addr.x) != 0) {
         struct sockaddr_dm dm;
 
         if (parse_domain_str(xserver_str, DEF_XSERVER_PORT, &dm) != 0
                 || resolve_domain_sync(xclient.loop, &dm, &xclient.xserver_addr.x) != 0) {
-            xlog_error("invalid proxy server address (%s).", xserver_str);
+            XLOGE("invalid proxy server address (%s).", xserver_str);
             goto end;
         }
     }
 
     if (parse_ip_str(sserver_str, DEF_SSERVER_PORT, &saddr.x) != 0) {
-        xlog_error("invalid socks5 server address (%s).", sserver_str);
+        XLOGE("invalid socks5 server address (%s).", sserver_str);
         goto end;
     }
 
@@ -800,31 +800,31 @@ int main(int argc, char** argv)
 
     error = uv_tcp_bind(&io_sserver, &saddr.x, 0);
     if (error) {
-        xlog_error("tcp bind (%s) failed: %s.", addr_to_str(&saddr),
+        XLOGE("tcp bind (%s) failed: %s.", addr_to_str(&saddr),
             uv_strerror(error));
         goto end;
     }
     error = uv_listen((uv_stream_t*) &io_sserver, LISTEN_BACKLOG, on_sclient_connect);
     if (error) {
-        xlog_error("tcp listen (%s) failed: %s.", addr_to_str(&saddr),
+        XLOGE("tcp listen (%s) failed: %s.", addr_to_str(&saddr),
             uv_strerror(error));
         goto end;
     }
 
     if (nconnect) {
-        xlog_info("enable UDP relay, connections %d, timeout %d.", nconnect, utimeo);
+        XLOGI("enable UDP relay, connections %d, timeout %d.", nconnect, utimeo);
         uv_udp_init(xclient.loop, &io_usserver);
         /* start socks5 udp listen io. */
         error = uv_udp_bind(&io_usserver, &saddr.x, 0);
         if (error) {
-            xlog_error("udp bind (%s) failed: %s.", addr_to_str(&saddr),
+            XLOGE("udp bind (%s) failed: %s.", addr_to_str(&saddr),
                 uv_strerror(error));
             goto end;
         }
         error = uv_udp_recv_start(&io_usserver, on_udp_sclient_rbuf_alloc,
                     on_udp_sclient_read);
         if (error) {
-            xlog_error("udp listen (%s) failed: %s.", addr_to_str(&saddr),
+            XLOGE("udp listen (%s) failed: %s.", addr_to_str(&saddr),
                 uv_strerror(error));
             goto end;
         }
@@ -834,16 +834,17 @@ int main(int argc, char** argv)
     xlist_init(&xclient.xclient_ctxs, sizeof(xclient_ctx_t), NULL);
     xlist_init(&xclient.io_buffers, sizeof(io_buf_t) + MAX_SOCKBUF_SIZE, NULL);
 
-    xlog_info("proxy server: %s.", addr_to_str(&xclient.xserver_addr));
-    if (devid_str)
-        xlog_info("to device id: %s.", devid_to_str(xclient.device_id));
-    xlog_info("SOCKS4/SOCKS5 server listen at %s...", addr_to_str(&saddr));
+    XLOGI("proxy server: %s.", addr_to_str(&xclient.xserver_addr));
+    if (devid_str) {
+        XLOGI("to device id: %s.", devid_to_str(xclient.device_id));
+    }
+    XLOGI("SOCKS4/SOCKS5 server listen at %s...", addr_to_str(&saddr));
     uv_run(xclient.loop, UV_RUN_DEFAULT);
 
     xlist_destroy(&xclient.io_buffers);
     xlist_destroy(&xclient.xclient_ctxs);
 end:
-    xlog_info("end of loop.");
+    XLOGI("end of loop.");
     xclient_private_destroy();
     xlog_exit();
 

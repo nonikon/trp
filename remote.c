@@ -76,7 +76,7 @@ void on_peer_closed(uv_handle_t* handle)
     }
     xlist_erase(&remote.peer_ctxs, xlist_value_iter(ctx));
 
-    xlog_debug("current %zu peers, %zu iobufs.",
+    XLOGD("current %zu peers, %zu iobufs.",
         xlist_size(&remote.peer_ctxs), xlist_size(&remote.io_buffers));
 }
 
@@ -87,7 +87,7 @@ void on_peer_write(uv_write_t* req, int status)
 
     if (ctx->remote_blocked && status == 0 &&
             uv_stream_get_write_queue_size((uv_stream_t*) &ctx->io) == 0) {
-        xlog_debug("peer write queue cleared.");
+        XLOGD("peer write queue cleared.");
 
         /* peer write queue cleared, start reading from remote. */
 #ifdef WITH_CLIREMOTE
@@ -117,12 +117,12 @@ void on_cli_remote_closed(uv_handle_t* handle)
         xlist_paste_back(&remote_pri.remote_ctxs,
             xlist_cut(&ctx->c.pending_ctx->clients, xlist_value_iter(ctx)));
 
-        xlog_debug("current %zu pending clients with this devid.",
+        XLOGD("current %zu pending clients with this devid.",
             xlist_size(&ctx->c.pending_ctx->clients));
     }
     xlist_erase(&remote_pri.remote_ctxs, xlist_value_iter(ctx));
 
-    xlog_debug("current %zu remotes, %zu iobufs.",
+    XLOGD("current %zu remotes, %zu iobufs.",
         xlist_size(&remote_pri.remote_ctxs), xlist_size(&remote.io_buffers));
 }
 
@@ -133,7 +133,7 @@ void on_cli_remote_write(uv_write_t* req, int status)
 
     if (status == 0 && ctx->c.peer->peer_blocked &&
             uv_stream_get_write_queue_size((uv_stream_t*) &ctx->c.io) == 0) {
-        xlog_debug("client remote write queue cleared.");
+        XLOGD("client remote write queue cleared.");
 
         /* remote write queue cleared, start reading from peer. */
         uv_read_start((uv_stream_t*) &ctx->c.peer->io, on_iobuf_alloc, on_peer_read);
@@ -178,7 +178,7 @@ static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u3
     cmd_t* cmd = (cmd_t*) (data + MAX_NONCE_LEN);
 
     if (len != CMD_MAX_SIZE + MAX_NONCE_LEN) {
-        xlog_warn("error packet from client (length).");
+        XLOGW("error packet from client (length).");
         return -1;
     }
 
@@ -186,12 +186,12 @@ static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u3
     remote.crypto.decrypt(&ctx->c.edctx, (u8_t*) cmd, CMD_MAX_SIZE);
 
     if (!check_command_md(cmd)) {
-        xlog_warn("error packet from client (digest).");
+        XLOGW("error packet from client (digest).");
         return -1;
     }
 
     if (!is_valid_command(cmd)) {
-        xlog_warn("invalid version: %02X (%u.%u).", cmd->tag, cmd->major, cmd->minor);
+        XLOGW("invalid version: %02X (%u.%u).", cmd->tag, cmd->major, cmd->minor);
         return -1;
     }
 
@@ -200,11 +200,11 @@ static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u3
         if (is_valid_devid(cmd->data) && !ctx->c.pending_ctx) {
             pending_ctx_t* pdctx = xhash_get_data(&remote_pri.pending_ctxs, cmd->data);
 
-            xlog_debug("REPORT_DEVID (%s) cmd from client, process.",
+            XLOGD("REPORT_DEVID (%s) cmd from client, process.",
                 devid_to_str(cmd->data));
 
             if (pdctx == XHASH_INVALID_DATA) {
-                xlog_info("device id (%s) not exist, insert.", devid_to_str(cmd->data));
+                XLOGI("device id (%s) not exist, insert.", devid_to_str(cmd->data));
 
                 /* create if not exist maybe unsafe, TODO */
                 pdctx = xhash_iter_data(xhash_put_ex(&remote_pri.pending_ctxs,
@@ -218,7 +218,7 @@ static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u3
             }
 
             if (xlist_empty(&pdctx->peers)) {
-                xlog_debug("no pending peer match, move to pending list.");
+                XLOGD("no pending peer match, move to pending list.");
 
                 ctx->c.pending_ctx = pdctx;
                 /* move client node from 'remote_ctxs' to 'pdctx->clients' */
@@ -226,7 +226,7 @@ static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u3
                     xlist_cut(&remote_pri.remote_ctxs, xlist_value_iter(ctx)));
 
             } else {
-                xlog_debug("pending peer match, associate.");
+                XLOGD("pending peer match, associate.");
 
                 connect_cli_remote(xlist_front(&pdctx->peers), ctx);
                 ++pdctx->nconnect;
@@ -248,11 +248,11 @@ static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u3
             return 0;
         }
 
-        xlog_warn("invalid device id from client.");
+        XLOGW("invalid device id from client.");
         return -1;
     }
 
-    xlog_warn("error command (%d) from client.", cmd->cmd);
+    XLOGW("error command (%d) from client.", cmd->cmd);
     return -1;
 }
 
@@ -265,7 +265,7 @@ static void on_cli_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_
         if (ctx->c.peer != NULL) {
             /* client is already associated with an peer, foward data. */
             uv_buf_t wbuf;
-            xlog_debug("%zd bytes from client, to proxy client.", nread);
+            XLOGD("%zd bytes from client, to proxy client.", nread);
 
             wbuf.base = buf->base;
             wbuf.len = nread;
@@ -277,7 +277,7 @@ static void on_cli_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_
 
             if (uv_stream_get_write_queue_size(
                     (uv_stream_t*) &ctx->c.peer->io) > MAX_WQUEUE_SIZE) {
-                xlog_debug("peer write queue pending.");
+                XLOGD("peer write queue pending.");
 
                 /* stop reading from client until peer write queue cleared. */
                 uv_read_stop(stream);
@@ -293,7 +293,7 @@ static void on_cli_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_
         }
 
     } else if (nread < 0) {
-        xlog_debug("disconnected from client: %s.", uv_err_name((int) nread));
+        XLOGD("disconnected from client: %s.", uv_err_name((int) nread));
 
         if (ctx->c.peer != NULL) {
             uv_close((uv_handle_t*) &ctx->c.peer->io, on_peer_closed);
@@ -312,7 +312,7 @@ void on_cli_remote_connect(uv_stream_t* stream, int status)
     remote_ctx_t* ctx;
 
     if (status < 0) {
-        xlog_error("new connection error: %s.", uv_strerror(status));
+        XLOGE("new connection error: %s.", uv_strerror(status));
         return;
     }
     ctx = xlist_alloc_back(&remote_pri.remote_ctxs);
@@ -324,12 +324,12 @@ void on_cli_remote_connect(uv_stream_t* stream, int status)
     ctx->c.pending_ctx = NULL;
 
     if (uv_accept(stream, (uv_stream_t*) &ctx->c.io) == 0) {
-        xlog_debug("client connected.");
+        XLOGD("client connected.");
         /* enable tcp-keepalive with client. */
         uv_tcp_keepalive(&ctx->c.io, 1, KEEPIDLE_TIME);
         uv_read_start((uv_stream_t*) &ctx->c.io, on_iobuf_alloc, on_cli_remote_read);
     } else {
-        xlog_error("uv_accept failed.");
+        XLOGE("uv_accept failed.");
         uv_close((uv_handle_t*) &ctx->c.io, on_cli_remote_closed);
     }
 }
@@ -338,7 +338,7 @@ static void on_connect_cli_remote_timeout(uv_timer_t* timer)
 {
     pending_ctx_t* ctx = xcontainer_of(timer, pending_ctx_t, timer);
 
-    xlog_info("still no available client after %u seconds, close %zu pending peer(s).",
+    XLOGI("still no available client after %u seconds, close %zu pending peer(s).",
         CONNECT_CLI_TIMEO, xlist_size(&ctx->peers));
 
     do {
@@ -361,7 +361,7 @@ void on_tcp_remote_closed(uv_handle_t* handle)
 
     xlist_erase(&remote_pri.remote_ctxs, xlist_value_iter(ctx));
 
-    xlog_debug("current %zu remotes, %zu iobufs.",
+    XLOGD("current %zu remotes, %zu iobufs.",
         xlist_size(&remote_pri.remote_ctxs), xlist_size(&remote.io_buffers));
 }
 
@@ -372,7 +372,7 @@ void on_tcp_remote_write(uv_write_t* req, int status)
 
     if (status == 0 && ctx->t.peer->peer_blocked &&
             uv_stream_get_write_queue_size((uv_stream_t*) &ctx->t.io) == 0) {
-        xlog_debug("tcp remote write queue cleared.");
+        XLOGD("tcp remote write queue cleared.");
 
         /* remote write queue cleared, start reading from peer. */
         uv_read_start((uv_stream_t*) &ctx->t.peer->io, on_iobuf_alloc, on_peer_read);
@@ -389,7 +389,7 @@ static void on_tcp_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_
 
     if (nread > 0) {
         uv_buf_t wbuf;
-        xlog_debug("%zd bytes from tcp remote, to peer.", nread);
+        XLOGD("%zd bytes from tcp remote, to peer.", nread);
 
         wbuf.base = buf->base;
         wbuf.len = nread;
@@ -402,7 +402,7 @@ static void on_tcp_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_
 
         if (uv_stream_get_write_queue_size(
                 (uv_stream_t*) &ctx->t.peer->io) > MAX_WQUEUE_SIZE) {
-            xlog_debug("peer write queue pending.");
+            XLOGD("peer write queue pending.");
 
             /* stop reading from remote until peer write queue cleared. */
             uv_read_stop(stream);
@@ -413,7 +413,7 @@ static void on_tcp_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_
     }
 
     if (nread < 0) {
-        xlog_debug("disconnected from remote: %s.", uv_err_name((int) nread));
+        XLOGD("disconnected from remote: %s.", uv_err_name((int) nread));
 
         uv_close((uv_handle_t*) &ctx->t.peer->io, on_peer_closed);
         uv_close((uv_handle_t*) stream, on_tcp_remote_closed);
@@ -430,7 +430,7 @@ static void on_tcp_remote_connected(uv_connect_t* req, int status)
     remote_ctx_t* ctx = req->data;
 
     if (status < 0) {
-        xlog_warn("connect remote failed: %s.", uv_err_name(status));
+        XLOGW("connect remote failed: %s.", uv_err_name(status));
 
         /* 'status' will be 'ECANCELED' when 'uv_close' is called before remote connected.
          * as a result, we should check it to avoid calling 'uv_close' twice.
@@ -442,7 +442,7 @@ static void on_tcp_remote_connected(uv_connect_t* req, int status)
     } else {
         io_buf_t* iob = ctx->t.peer->pending_iob;
 
-        xlog_debug("remote connected.");
+        XLOGD("remote connected.");
 
         convert_nonce((u8_t*) iob->buffer);
         remote.crypto.init(&ctx->t.edctx, remote.crypto_key, (u8_t*) iob->buffer);
@@ -490,7 +490,7 @@ static int connect_tcp_remote(peer_ctx_t* ctx, struct sockaddr* addr)
         return 0;
     }
 
-    xlog_warn("connect remote failed immediately.");
+    XLOGW("connect remote failed immediately.");
 
     uv_close((uv_handle_t*) &rctx->t.io, on_tcp_remote_closed);
     xlist_erase(&remote.conn_reqs, xlist_value_iter(req));
@@ -503,11 +503,11 @@ static void on_tcp_remote_domain_resolved(
     peer_ctx_t* ctx = req->data;
 
     if (status < 0) {
-        xlog_debug("resolve domain failed: %s.", uv_err_name(status));
+        XLOGD("resolve domain failed: %s.", uv_err_name(status));
         uv_close((uv_handle_t*) &ctx->io, on_peer_closed);
 
     } else {
-        xlog_debug("resolve result: %s, connect.", addr_to_str(res->ai_addr));
+        XLOGD("resolve result: %s, connect.", addr_to_str(res->ai_addr));
 
         if (connect_tcp_remote(ctx, res->ai_addr) != 0) {
             /* connect failed immediately, just close this connection. */
@@ -521,7 +521,7 @@ static void on_tcp_remote_domain_resolved(
 
 static inline void free_udp_session(udp_session_t* sess)
 {
-    xlog_info("free udp session %x, %zu left.", *(u32_t*) sess->sid,
+    XLOGI("free udp session %x, %zu left.", *(u32_t*) sess->sid,
         xhash_size(&remote_pri.udp_sessions) - 1);
 
     xlist_destroy(&sess->rctxs);
@@ -536,7 +536,7 @@ static void on_udp_conn_closed(uv_handle_t* handle)
 
     if (--conn->refs) return; /* conn free later */
 
-    xlog_debug("free udp connection %x, %zu left in current session.", conn->id,
+    XLOGD("free udp connection %x, %zu left in current session.", conn->id,
         xhash_size(&sess->conns) - 1);
 
     xhash_remove_data(&sess->conns, conn);
@@ -567,7 +567,7 @@ void close_udp_remote(remote_ctx_t* ctx)
         xlist_cut(&sess->rctxs, xlist_value_iter(ctx)));
     xlist_erase(&remote_pri.remote_ctxs, xlist_value_iter(ctx));
 
-    xlog_debug("%zu udp remote left in session %x.", xlist_size(&sess->rctxs),
+    XLOGD("%zu udp remote left in session %x.", xlist_size(&sess->rctxs),
         *(u32_t*) sess->sid);
 
     if (xlist_empty(&sess->rctxs) && xhash_empty(&sess->conns)) {
@@ -600,29 +600,29 @@ static void on_udp_remote_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf,
                         io_buf_t, buffer);
 
     if (nread < 0) {
-        xlog_warn("udp remote read failed: %s.", uv_err_name((int) nread));
+        XLOGW("udp remote read failed: %s.", uv_err_name((int) nread));
         close_udp_conn(conn);
 
     } else if (!addr) {
         /* 'nread' == 0 and 'addr' == NULL means no more data. */
-        xlog_debug("udp remote read nothing.");
+        XLOGD("udp remote read nothing.");
 
     } else if (flags & UV_UDP_PARTIAL) {
         conn->alive = 1;
-        xlog_warn("remote udp packet too large (> %u), drop.", iob->len);
+        XLOGW("remote udp packet too large (> %u), drop.", iob->len);
 
     } else {
         remote_ctx_t* rctx;
 
         conn->alive = 1;
-        xlog_debug("%zd bytes from udp remote (%s), id %x, to peer.", nread,
+        XLOGD("%zd bytes from udp remote (%s), id %x, to peer.", nread,
             addr_to_str(addr), conn->id);
 
         rctx = choose_udp_remote_ctx(conn->parent);
 
         if (!rctx || uv_stream_get_write_queue_size(
                 (uv_stream_t*) &rctx->u.peer->io) > MAX_WQUEUE_SIZE) {
-            xlog_debug("drop this udp packet: rctx %p.", rctx);
+            XLOGD("drop this udp packet: rctx %p.", rctx);
 
         } else {
             union {
@@ -678,7 +678,7 @@ static void on_udp_conn_check(uv_timer_t* timer)
     udp_conn_t* conn = timer->data;
 
     if (!conn->alive) {
-        xlog_debug("udp connection %x is not alive, close.", conn->id);
+        XLOGD("udp connection %x is not alive, close.", conn->id);
         close_udp_conn(conn);
     } else {
         conn->alive = 0;
@@ -724,12 +724,12 @@ static void send_udp_packet(remote_ctx_t* ctx, udp_cmd_t* cmd)
         wbuf.len = ntohs(cmd->len) - 16 - 2;
         break;
     default:
-        xlog_warn("error udp packet addrlen (%u).", cmd->alen);
+        XLOGW("error udp packet addrlen (%u).", cmd->alen);
         return;
     }
     /* 'wbuf.len' == 0 is allowed. */
 
-    xlog_debug("udp packet to %s %u bytes, id %x.", addr_to_str(&addr),
+    XLOGD("udp packet to %s %u bytes, id %x.", addr_to_str(&addr),
         wbuf.len, cmd->id);
 
     conn = xhash_get_data(&ctx->u.parent->conns, &cmd->id);
@@ -740,15 +740,15 @@ static void send_udp_packet(remote_ctx_t* ctx, udp_cmd_t* cmd)
             conn->alive = 1;
             rt = uv_udp_try_send(&conn->io, &wbuf, 1, &addr.vx);
             if (rt < 0) {
-                xlog_debug("send udp packet failed: %s.", uv_err_name(rt));
+                XLOGD("send udp packet failed: %s.", uv_err_name(rt));
             }
         } else {
             /* 'uv_close' was called on this UDP connection. */
-            xlog_debug("udp connection is closing, drop this packet.");
+            XLOGD("udp connection is closing, drop this packet.");
         }
 
     } else {
-        xlog_debug("new udp connection, id %x.", cmd->id);
+        XLOGD("new udp connection, id %x.", cmd->id);
 
         conn = xhash_iter_data(xhash_put_ex(&ctx->u.parent->conns,
                     &cmd->id, sizeof(u32_t)));
@@ -768,7 +768,7 @@ static void send_udp_packet(remote_ctx_t* ctx, udp_cmd_t* cmd)
 
         rt = uv_udp_try_send(&conn->io, &wbuf, 1, &addr.vx);
         if (rt < 0) {
-            xlog_warn("send first udp packet failed: %s.", uv_err_name(rt));
+            XLOGW("send first udp packet failed: %s.", uv_err_name(rt));
             close_udp_conn(conn);
         } else {
             rt = cmd->flag & 0x7F; /* UDP connection timeout (seconds) */
@@ -812,7 +812,7 @@ int forward_peer_udp_packets(remote_ctx_t* ctx, io_buf_t* iob)
         need = ntohs(cmd->len) + sizeof(udp_cmd_t);
 
         if (need > MAX_SOCKBUF_SIZE || need < cmd->alen + 2 + sizeof(udp_cmd_t)) {
-            xlog_warn("error udp packet length (%u).", need);
+            XLOGW("error udp packet length (%u).", need);
 
             ctx->u.last_iob = NULL;
             xlist_erase(&remote.io_buffers, xlist_value_iter(last_iob));
@@ -833,7 +833,7 @@ int forward_peer_udp_packets(remote_ctx_t* ctx, io_buf_t* iob)
         need = ntohs(cmd->len) + sizeof(udp_cmd_t);
 
         if (need > MAX_SOCKBUF_SIZE || need < cmd->alen + 2 + sizeof(udp_cmd_t)) {
-            xlog_warn("error udp packet length (%u).", need);
+            XLOGW("error udp packet length (%u).", need);
             return 0;
         }
         if (iob->len < need) {
@@ -851,7 +851,7 @@ int forward_peer_udp_packets(remote_ctx_t* ctx, io_buf_t* iob)
             memmove(iob->buffer, iob->buffer + iob->idx, iob->len);
             iob->idx = 0;
         }
-        xlog_debug("%u udp bytes left.", iob->len);
+        XLOGD("%u udp bytes left.", iob->len);
 
         ctx->u.last_iob = iob;
         return 1;
@@ -877,7 +877,7 @@ static void connect_udp_remote(peer_ctx_t* ctx, const u8_t* sid)
     remote_ctx_t* rctx;
 
     if (sess == XHASH_INVALID_DATA) {
-        xlog_info("new udp session %x.", *(u32_t*) sid);
+        XLOGI("new udp session %x.", *(u32_t*) sid);
 
         /* the number of sessions may need to be limited, TODO. */
         sess = xhash_iter_data(xhash_put_ex(&remote_pri.udp_sessions,
@@ -927,7 +927,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
     ctx->pending_iob = iob;
 
     if (iob->len < CMD_MAX_SIZE + MAX_NONCE_LEN) {
-        xlog_warn("error packet from peer (length).");
+        XLOGW("error packet from peer (length).");
         return -1;
     }
 
@@ -938,12 +938,12 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
     iob->len -= CMD_MAX_SIZE + MAX_NONCE_LEN;
 
     if (!check_command_md(cmd)) {
-        xlog_warn("error packet from client (digest).");
+        XLOGW("error packet from client (digest).");
         return -1;
     }
 
     if (!is_valid_command(cmd)) {
-        xlog_warn("invalid version: %02X (%u.%u).", cmd->tag, cmd->major, cmd->minor);
+        XLOGW("invalid version: %02X (%u.%u).", cmd->tag, cmd->major, cmd->minor);
         return -1;
     }
 
@@ -953,14 +953,14 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         pending_ctx_t* pdctx = xhash_get_data(&remote_pri.pending_ctxs, cmd->data);
 
         ++remote_pri.nconnect_cli;
-        xlog_debug("CONNECT_CLIENT cmd (%s) from peer, process.",
+        XLOGD("CONNECT_CLIENT cmd (%s) from peer, process.",
             devid_to_str(cmd->data));
 
         if (pdctx != XHASH_INVALID_DATA) {
 
             if (!xlist_empty(&pdctx->clients)) {
                 /* online client exist, associate. */
-                xlog_debug("found an available client, connect.");
+                XLOGD("found an available client, connect.");
 
                 connect_cli_remote(ctx, xlist_front(&pdctx->clients));
                 ++pdctx->nconnect;
@@ -969,7 +969,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 
             } else {
                 /* no online client. stop reading from peer and move it to 'pending_ctx_t'. */
-                xlog_debug("no available client, pending this peer.");
+                XLOGD("no available client, pending this peer.");
 
                 uv_read_stop((uv_stream_t*) &ctx->io);
                 /* move peer node from 'peer_ctxs' to 'pdctx->peers' */
@@ -986,12 +986,12 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
             return 0;
         }
 
-        xlog_warn("device id (%s) not exist for peer.", devid_to_str(cmd->data));
+        XLOGW("device id (%s) not exist for peer.", devid_to_str(cmd->data));
         return -1;
     }
 
     if (remote.dconnect_off) {
-        xlog_debug("attempt to connect %s directly but function is disabled.",
+        XLOGD("attempt to connect %s directly but function is disabled.",
             maddr_to_str(cmd));
         return -1;
     }
@@ -1006,7 +1006,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         memcpy(&addr.sin_addr, cmd->data, 4);
 
         ++remote_pri.nconnect_ipv4;
-        xlog_debug("CONNECT_IPV4 cmd (%s) from peer, process.", addr_to_str(&addr));
+        XLOGD("CONNECT_IPV4 cmd (%s) from peer, process.", addr_to_str(&addr));
 
         /* stop reading from peer until remote connected. */
         uv_read_stop((uv_stream_t*) &ctx->io);
@@ -1035,7 +1035,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 
         sprintf(portstr, "%d", ntohs(cmd->port));
         ++remote_pri.nconnect_dm;
-        xlog_debug("CONNECT_DOMAIN cmd (%s) from peer, process.", maddr_to_str(cmd));
+        XLOGD("CONNECT_DOMAIN cmd (%s) from peer, process.", maddr_to_str(cmd));
 
         /* stop reading from peer until remote connected. */
         uv_read_stop((uv_stream_t*) &ctx->io);
@@ -1044,7 +1044,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
                 (char*) cmd->data, portstr, &hints) == 0)
             return 0;
 
-        xlog_warn("uv_getaddrinfo (%s) failed immediately.", cmd->data);
+        XLOGW("uv_getaddrinfo (%s) failed immediately.", cmd->data);
         xlist_erase(&remote.addrinfo_reqs, xlist_value_iter(req));
         return -1;
     }
@@ -1058,7 +1058,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         memcpy(&addr.sin6_addr, cmd->data, 16);
 
         ++remote_pri.nconnect_ipv6;
-        xlog_debug("CONNECT_IPV6 cmd (%s) from peer, process.", addr_to_str(&addr));
+        XLOGD("CONNECT_IPV6 cmd (%s) from peer, process.", addr_to_str(&addr));
 
         /* stop reading from peer until remote connected. */
         uv_read_stop((uv_stream_t*) &ctx->io);
@@ -1071,12 +1071,12 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 
     if (cmd->cmd == CMD_CONNECT_UDP) {
         ++remote_pri.nconnect_udp;
-        xlog_debug("CONNECT_UDP cmd (%s) from peer, process.", maddr_to_str(cmd));
+        XLOGD("CONNECT_UDP cmd (%s) from peer, process.", maddr_to_str(cmd));
         connect_udp_remote(ctx, cmd->data);
         return 0;
     }
 
-    xlog_warn("error command (%d) from peer.", cmd->cmd);
+    XLOGW("error command (%d) from peer.", cmd->cmd);
     return -1;
 }
 
@@ -1213,7 +1213,7 @@ static void handle_request_device_list(const http_request_t* req, http_response_
 static void handle_request_dconnect_on(const http_request_t* req, http_response_t* resp)
 {
     remote.dconnect_off = 0;
-    xlog_warn("direct connect [ON].");
+    XLOGW("direct connect [ON].");
 
     http_buf_add_string(resp->headers, &resp->header_len,
         "Content-Type: application/json\r\n");
@@ -1223,7 +1223,7 @@ static void handle_request_dconnect_on(const http_request_t* req, http_response_
 static void handle_request_dconnect_off(const http_request_t* req, http_response_t* resp)
 {
     remote.dconnect_off = 1;
-    xlog_warn("direct connect [OFF].");
+    XLOGW("direct connect [OFF].");
 
     http_buf_add_string(resp->headers, &resp->header_len,
         "Content-Type: application/json\r\n");
@@ -1234,7 +1234,7 @@ static void handle_request_dconnect_off(const http_request_t* req, http_response
 static void handle_request_log_verbose_on(const http_request_t* req, http_response_t* resp)
 {
     xlog_ctrl(XLOG_DEBUG, 0, 0);
-    xlog_warn("output verbosely [ON].");
+    XLOGW("output verbosely [ON].");
 
     http_buf_add_string(resp->headers, &resp->header_len,
         "Content-Type: application/json\r\n");
@@ -1244,7 +1244,7 @@ static void handle_request_log_verbose_on(const http_request_t* req, http_respon
 static void handle_request_log_verbose_off(const http_request_t* req, http_response_t* resp)
 {
     xlog_ctrl(XLOG_INFO, 0, 0);
-    xlog_warn("output verbosely [OFF].");
+    XLOGW("output verbosely [OFF].");
 
     http_buf_add_string(resp->headers, &resp->header_len,
         "Content-Type: application/json\r\n");
@@ -1259,7 +1259,7 @@ int start_ctrl_server(uv_loop_t* loop, const char* addrstr)
     } addr;
 
     if (parse_ip_str(addrstr, DEF_CSERVER_PORT, &addr.x) != 0) {
-        xlog_error("invalid control server address (%s).", addrstr);
+        XLOGE("invalid control server address (%s).", addrstr);
         return -1;
     }
 
