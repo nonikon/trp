@@ -158,7 +158,7 @@ static void report_device_id(peer_ctx_t* ctx)
 
 static void on_server_connected(uv_connect_t* req, int status)
 {
-    static int intvl = RECSRV_INTVL_MIN;
+    static int intvl = RECSRV_INTVL_MIN + RECSRV_INTVL_STEP;
     peer_ctx_t* ctx = req->data;
 
     if (status < 0) {
@@ -237,7 +237,7 @@ static void connect_server(struct sockaddr* addr)
 static void on_server_domain_resolved(
         uv_getaddrinfo_t* req, int status, struct addrinfo* res)
 {
-    static int intvl = RECSRV_INTVL_MIN;
+    static int intvl = RECSRV_INTVL_MIN + RECSRV_INTVL_STEP;
 
     if (status < 0) {
         ++nconnect;
@@ -250,7 +250,7 @@ static void on_server_domain_resolved(
                 uv_err_name(status), intvl);
             intvl += RECSRV_INTVL_STEP;
         } else {
-            xlog_debug("resolve server domain failed: %s, retry every %ds.",
+            xlog_debug("resolve server domain failed: %s, retry after %ds.",
                 uv_err_name(status), intvl);
         }
     } else {
