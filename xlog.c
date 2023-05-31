@@ -27,7 +27,8 @@ static char     out_buf[XLOG_LINE_MAX];
 static HANDLE out_fd = INVALID_HANDLE_VALUE;
 
 #if XLOG_MULTITHREAD
-static PCRITICAL_SECTION lock;
+static CRITICAL_SECTION lock;
+static int lock_inited;
 #endif
 
 static void init_out_name_idx()
@@ -109,9 +110,9 @@ int xlog_init(const char* file_path)
     xlog_exit();
 
 #if XLOG_MULTITHREAD
-    if (!lock) {
-        lock = malloc(sizeof(CRITICAL_SECTION));
-        InitializeCriticalSection(lock);
+    if (!lock_inited) {
+        InitializeCriticalSection(&lock);
+        lock_inited = 1;
     }
 #endif
     if (!file_path) {
@@ -181,7 +182,7 @@ void xlog_println(const char* tag, const char* fmt, ...)
     va_list ap;
 
 #if XLOG_MULTITHREAD
-    EnterCriticalSection(lock);
+    EnterCriticalSection(&lock);
 #endif
 
     GetLocalTime(&t);
@@ -212,7 +213,7 @@ void xlog_println(const char* tag, const char* fmt, ...)
     }
 
 #if XLOG_MULTITHREAD
-    LeaveCriticalSection(lock);
+    LeaveCriticalSection(&lock);
 #endif
 }
 
@@ -226,7 +227,7 @@ void xlog_printhex(const unsigned char* data, unsigned int len)
     DWORD nw;
 
 #if XLOG_MULTITHREAD
-    EnterCriticalSection(lock);
+    EnterCriticalSection(&lock);
 #endif
 
     while (i < len) {
@@ -265,7 +266,7 @@ void xlog_printhex(const unsigned char* data, unsigned int len)
     }
 
 #if XLOG_MULTITHREAD
-    LeaveCriticalSection(lock);
+    LeaveCriticalSection(&lock);
 #endif
 }
 

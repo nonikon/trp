@@ -13,8 +13,8 @@
 
 #define VERSION_MAJOR       1
 #define VERSION_MINOR       4
-#define VERSION_PATCH       2
-#define VERSION_ISREL       1
+#define VERSION_PATCH       3
+#define VERSION_ISREL       0
 
 #define DEF_CONFIG_FILE     "trp.ini"
 #define DEF_DEVID_STRING    "test"
