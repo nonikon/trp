@@ -119,6 +119,15 @@ int daemon(int argc, char** argv);
 void seed_rand(u32_t seed);
 void rand_bytes(u8_t* data, u32_t len);
 
+/* parse config path string. Eg:
+ * - "file:section" -> [file], [section]
+ * - ":section" -> [DEF_CONFIG_FILE], [section]
+ * - "file" -> [file], [sec]
+ * - NULL -> [DEF_CONFIG_FILE], [sec]
+ * NOTE: content of 'str' may be modified.
+ */
+void parse_config_str(char** str, const char** sec);
+
 /* parse ipv4/ipv6 address string to 'struct sockaddr'. Eg:
  * - "1.2.3.4:8080" -> [1.2.3.4], [8080]
  * - ":8080" -> [127.0.0.1], [8080]

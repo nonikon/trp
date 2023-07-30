@@ -184,8 +184,8 @@ static void usage(const char* s)
 #endif
     fprintf(stderr, "  -l <path>     write output to file. (default: write to STDOUT)\n");
     fprintf(stderr, "  -L <path>     write output to file and run as daemon. (default: write to STDOUT)\n");
-    fprintf(stderr, "  -C <path>     set config file path. (default: trp.ini)\n");
-    fprintf(stderr, "  -S <section>  set config section name. (default: server)\n");
+    fprintf(stderr, "  -C <path>     set config file path and section. (default: trp.ini)\n");
+    fprintf(stderr, "                - section can be specified after colon (default: trp.ini:server)\n");
 #ifdef WITH_CLIREMOTE
     fprintf(stderr, "  -D            disable direct connect (connect TCP or UDP remote directly).\n");
 #endif
@@ -211,7 +211,7 @@ int main(int argc, char** argv)
     uv_tcp_t io_xserver; /* proxy-server listen io */
     union { struct sockaddr x; struct sockaddr_in6 d; } addr;
     union { struct sockaddr x; struct sockaddr_in6 d; } xaddr;
-    const char* cfg_path = DEF_CONFIG_FILE;
+    char* cfg_path = NULL;
     const char* cfg_sec = "server";
 #ifdef WITH_CLIREMOTE
     const char* server_str = "127.0.0.1";
@@ -290,7 +290,6 @@ int main(int argc, char** argv)
             case 'l':     logfile = arg;     daemonize = 0; continue;
             case 'L':     logfile = arg;     daemonize = 1; continue;
             case 'C':    cfg_path = arg; cfg_specified = 1; continue;
-            case 'S':     cfg_sec = arg; cfg_specified = 1; continue;
             }
 
             fprintf(stderr, "%s: invalid parameter [-%c %s].\n", argv[0], opt[0], arg);
@@ -318,21 +317,24 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    xlog_init(NULL); /* output to STDOUT first */
+
     i = 0;
+    parse_config_str(&cfg_path, &cfg_sec);
     error = load_config_file(cfg_path, cfg_sec);
     if (error < 0) {
         if (cfg_specified) {
-            fprintf(stderr, "open config file (%s) failed, ignore.\n", cfg_path);
+            XLOGE("open config file (%s) failed, exit.", cfg_path);
+            return 1;
         }
     } else if (error > 0) {
-        fprintf(stderr, "error at config file %s:%d, ignore configs.\n",
-            cfg_path, error);
+        XLOGE("error at config file %s:%d, ignore configs.", cfg_path, error);
     } else {
         config_item_t* item = NULL;
 
         while (!!(item = get_config_item(item))) {
             if (!item->name[0] || !item->value[0]) {
-                fprintf(stderr, "invalid config item [%s=%s], ignore.\n", item->name, item->value);
+                XLOGW("invalid config item (%s=%s), ignore.", item->name, item->value);
                 continue;
             } else if (!strcmp(item->name, "v")) { verbose = atoi(item->value);
 #ifdef WITH_CLIREMOTE
@@ -353,15 +355,18 @@ int main(int argc, char** argv)
             } else if (!strcmp(item->name, "l")) { logfile = item->value; daemonize = 0;
             } else if (!strcmp(item->name, "L")) { logfile = item->value; daemonize = 1;
             } else {
-                fprintf(stderr, "invalid config item name [%s], ignore.\n", item->name);
+                XLOGW("invalid config item name (%s), ignore.", item->name);
                 continue;
             }
             ++i;
         }
     }
 
-    if (xlog_init(logfile) != 0) {
-        XLOGE("open logfile failed, switch to stdout.");
+    if (logfile) {
+        XLOGI("switch output to file: %s...", logfile);
+        if (xlog_init(logfile) != 0) {
+            XLOGE("open logfile failed, switch to stdout.");
+        }
     }
 
 #ifdef _WIN32
@@ -377,13 +382,14 @@ int main(int argc, char** argv)
         XLOGE("run as daemon failed: %s.", strerror(errno));
     }
 #endif
+    XLOGI("current version %s, libuv %s.", version_string(), uv_version_string());
     if (!verbose) {
         xlog_ctrl(XLOG_INFO, 0, 0);
     } else {
         XLOGI("enable verbose output.");
     }
     if (i > 0) {
-        XLOGI("load %d item(s) from config file (%s).", i, cfg_path);
+        XLOGI("load %d item(s) from config file (%s:%s).", i, cfg_path, cfg_sec);
     }
 #ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);

@@ -87,6 +87,35 @@ void rand_bytes(u8_t* data, u32_t len)
     }
 }
 
+void parse_config_str(char** str, const char** sec)
+{
+    if (!*str) {
+        *str = DEF_CONFIG_FILE;
+    } else {
+        char* p = strrchr(*str, ':');
+
+#ifdef _WIN32
+        /* in case of "D:\trp.ini" and so on... */
+        if (p && p[1] != '/' && p[1] != '\\') {
+#else
+        if (p) {
+#endif
+            /* "file:section" */
+            if (p != *str) {
+                /* with 'file' */
+                p[0] = '\0';
+            } else {
+                /* without 'file' */
+                *str = DEF_CONFIG_FILE;
+            }
+            if (p[1]) {
+                /* with 'section' */
+                *sec = p + 1;
+            }
+        }
+    }
+}
+
 int parse_ip_str(const char* str, int port, struct sockaddr* addr)
 {
     const char* p;
