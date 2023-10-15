@@ -13,23 +13,24 @@
 
 #ifdef HAVE_XCONFIG_H
 #include "xconfig.h"
-#else
+#endif
 
 /* cache can decrease memory allocation. node will be put into cache
  * when it being erased, and next insertion will pop one node from
- * cache. define 'XHASH_ENABLE_CACHE=1' to enable it. */
+ * cache. define 'XHASH_ENABLE_CACHE=1' to enable it.
+ */
 #ifndef XHASH_ENABLE_CACHE
-#define XHASH_ENABLE_CACHE          0
+#define XHASH_ENABLE_CACHE  0
 #endif
 
-#ifndef XHASH_DEFAULT_SIZE
-#define XHASH_DEFAULT_SIZE          64 // default bucket size, MUST be 2^N
+/* minimal bucket size, MUST be 2^N */
+#ifndef XHASH_MINIMAL_SIZE
+#define XHASH_MINIMAL_SIZE  64
 #endif
 
-#ifndef XHASH_DEFAULT_LOADFACTOR
-#define XHASH_DEFAULT_LOADFACTOR    75 // percent
-#endif
-
+/* loadfactor percent */
+#ifndef XHASH_LOADFACTOR
+#define XHASH_LOADFACTOR    75
 #endif
 
 typedef struct xhash xhash_t;
@@ -54,7 +55,6 @@ struct xhash {
     size_t bkt_size;
     size_t data_size;
     size_t size;
-    size_t loadfactor;
 #if XHASH_ENABLE_CACHE
     xhash_node_t* cache; /* cache nodes */
 #endif
@@ -83,12 +83,6 @@ void xhash_free(xhash_t* xh);
 /* free all cache nodes. */
 void xhash_cache_free(xhash_t* xh);
 #endif
-
-/* <factor> is the loadfactor percent. */
-static inline void xhash_set_loadfactor(xhash_t* xh, size_t factor) {
-    assert(factor > 0 && factor <= 100);
-    xh->loadfactor = factor;
-}
 
 static inline size_t xhash_size(xhash_t* xh) {
     return xh->size;
@@ -144,7 +138,7 @@ xhash_iter_t xhash_get(xhash_t* xh, const void* pdata);
 /* remove an element at <iter>, <iter> MUST be valid. */
 void xhash_remove(xhash_t* xh, xhash_iter_t iter);
 
-/* remove all elements. */
+/* remove all elements (no cache). */
 void xhash_clear(xhash_t* xh);
 
 /* find an element with specific data. return a pointer to the element

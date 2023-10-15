@@ -12,11 +12,12 @@
 
 #ifdef HAVE_XCONFIG_H
 #include "xconfig.h"
-#else
+#endif
 
 /* cache can decrease memory allocation. node will be put into cache
  * when it being erased, and next insertion will pop one node from
- * cache. define 'XLIST_ENABLE_CACHE=1' to enable it. */
+ * cache. define 'XLIST_ENABLE_CACHE=1' to enable it.
+ */
 #ifndef XLIST_ENABLE_CACHE
 #define XLIST_ENABLE_CACHE  0
 #endif
@@ -29,8 +30,6 @@
 /* enable xlist_cut_* interface or not. */
 #ifndef XLIST_ENABLE_CUT
 #define XLIST_ENABLE_CUT    1
-#endif
-
 #endif
 
 typedef struct xlist xlist_t;
@@ -151,7 +150,7 @@ xlist_iter_t xlist_insert(xlist_t* xl, xlist_iter_t iter, const void* pvalue);
  */
 xlist_iter_t xlist_erase(xlist_t* xl, xlist_iter_t iter);
 
-/* clears the elements. */
+/* clears the elements (no cache). */
 void xlist_clear(xlist_t* xl);
 
 /* inserts an element to the beginning. see <xlist_insert>. */

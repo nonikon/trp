@@ -53,27 +53,27 @@ void xlist_free(xlist_t* xl)
 
 void xlist_clear(xlist_t* xl)
 {
-    xlist_iter_t curr = xlist_begin(xl);
-    xlist_iter_t next;
+    xlist_iter_t iter = xlist_begin(xl);
 
-    if (curr == xlist_end(xl)) {
+    if (iter == xlist_end(xl)) {
         return;
     }
     xlist_rbegin(xl)->next = NULL;
     do {
-        next = curr->next;
+        xlist_iter_t next = iter->next;
+
         if (xl->destroy_cb) {
-            xl->destroy_cb(xlist_iter_value(curr));
+            xl->destroy_cb(xlist_iter_value(iter));
         }
-#if XLIST_ENABLE_CACHE
-        curr->next = xl->cache;
-        xl->cache = curr;
-#else
-        free(curr);
-#endif
-        curr = next;
+// #if XLIST_ENABLE_CACHE
+//         iter->next = xl->cache;
+//         xl->cache = iter;
+// #else
+        free(iter);
+// #endif
+        iter = next;
     }
-    while (curr);
+    while (iter);
 
     xl->size = 0;
     xl->head.next = &xl->head;

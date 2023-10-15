@@ -15,59 +15,54 @@
 static int __buckets_expand(xhash_t* xh)
 {
     size_t i;
-    size_t new_sz = xh->bkt_size << 1;
-    xhash_node_t** new_bkts;
-    xhash_iter_t unlinked;
-    xhash_iter_t iter;
+    size_t newsz = xh->bkt_size << 1;
+    xhash_node_t** newbkts;
 
-    if (new_sz > XHASH_MAX_BKTSIZE) {
+    if (newsz > XHASH_MAX_BKTSIZE) {
         return -1;
     }
-    new_bkts = realloc(xh->buckets, sizeof(xhash_node_t*) * new_sz);
-    if (!new_bkts) {
+    newbkts = realloc(xh->buckets, sizeof(xhash_node_t*) * newsz);
+    if (!newbkts) {
         return -1;
     }
 
-    memset(&new_bkts[xh->bkt_size], 0, sizeof(xhash_node_t*) * xh->bkt_size);
+    memset(&newbkts[xh->bkt_size], 0, sizeof(xhash_node_t*) * xh->bkt_size);
     /* rehash */
     for (i = 0; i < xh->bkt_size; ++i) {
-        iter = new_bkts[i];
+        xhash_iter_t iter = newbkts[i];
 
         while (iter) {
             if (iter->hash & xh->bkt_size) {
                 /* unlink this node */
-                unlinked = iter;
-                iter = unlinked->next;
+                xhash_iter_t unlinked = iter;
 
+                iter = unlinked->next;
                 if (unlinked->next) {
                     unlinked->next->prev = unlinked->prev;
                 } if (unlinked->prev) {
                     unlinked->prev->next = iter;
                 } else {
-                    new_bkts[i] = iter;
+                    newbkts[i] = iter;
                 }
-
                 /* insert unlinked node into buckets[i + bkt_size] */
                 unlinked->prev = NULL;
-                unlinked->next = new_bkts[i + xh->bkt_size];
-
+                unlinked->next = newbkts[i + xh->bkt_size];
                 if (unlinked->next) {
                     unlinked->next->prev = unlinked;
                 }
-
-                new_bkts[i + xh->bkt_size] = unlinked;
+                newbkts[i + xh->bkt_size] = unlinked;
             } else {
                 iter = iter->next;
             }
         }
     }
 
-    xh->bkt_size = new_sz;
-    xh->buckets = new_bkts;
+    xh->bkt_size = newsz;
+    xh->buckets = newbkts;
     return 0;
 }
 
-static inline unsigned int __align32pow2(unsigned int z)
+static inline unsigned __align32pow2(unsigned z)
 {
     z -= 1;
     z |= z >> 1;
@@ -87,12 +82,11 @@ xhash_t* xhash_init(xhash_t* xh, int bkt_size, size_t data_size,
     xh->hash_cb = hash_cb;
     xh->equal_cb = equal_cb;
     xh->destroy_cb = destroy_cb;
-    xh->bkt_size = bkt_size < XHASH_DEFAULT_SIZE
-                            ? XHASH_DEFAULT_SIZE : __align32pow2(bkt_size);
+    xh->bkt_size = bkt_size < XHASH_MINIMAL_SIZE
+                            ? XHASH_MINIMAL_SIZE : __align32pow2(bkt_size);
     assert(xh->bkt_size <= XHASH_MAX_BKTSIZE);
     xh->data_size = data_size;
     xh->size = 0;
-    xh->loadfactor = XHASH_DEFAULT_LOADFACTOR;
 #if XHASH_ENABLE_CACHE
     xh->cache = NULL;
 #endif
@@ -102,6 +96,7 @@ xhash_t* xhash_init(xhash_t* xh, int bkt_size, size_t data_size,
         memset(xh->buckets, 0, sizeof(xhash_node_t*) * xh->bkt_size);
         return xh;
     }
+
     return NULL;
 }
 
@@ -125,6 +120,7 @@ xhash_t* xhash_new(int bkt_size, size_t data_size, xhash_hash_cb hash_cb,
         }
         free(xh);
     }
+
     return NULL;
 }
 
@@ -155,9 +151,9 @@ xhash_iter_t xhash_put_ex(xhash_t* xh, const void* pdata, size_t ksz)
         iter = iter->next;
     }
 
-    if (xh->size > XHASH_MAX_SIZE - 1) {
-        return NULL;
-    }
+    // if (xh->size > XHASH_MAX_SIZE - 1) {
+    //     return NULL;
+    // }
 #if XHASH_ENABLE_CACHE
     if (xh->cache) {
         iter = xh->cache;
@@ -188,7 +184,7 @@ xhash_iter_t xhash_put_ex(xhash_t* xh, const void* pdata, size_t ksz)
 
     ++xh->size;
     /* check loadfactor */
-    if (xh->size * 100 > xh->bkt_size * xh->loadfactor) {
+    if (xh->size * 100 > xh->bkt_size * XHASH_LOADFACTOR) {
         __buckets_expand(xh);
     }
 
@@ -238,32 +234,31 @@ void xhash_remove(xhash_t* xh, xhash_iter_t iter)
 
 void xhash_clear(xhash_t* xh)
 {
-    xhash_node_t* curr = NULL;
-    xhash_node_t* next;
     size_t i;
 
     if (xhash_empty(xh))  {
         return;
     }
-
     for (i = 0; i < xh->bkt_size; ++i) {
-        curr = xh->buckets[i];
-        if (!curr) {
+        xhash_iter_t iter = xh->buckets[i];
+
+        if (!iter) {
             continue;
         }
         do {
-            next = curr->next;
+            xhash_iter_t next = iter->next;
+
             if (xh->destroy_cb) {
-                xh->destroy_cb(xhash_iter_data(curr));
+                xh->destroy_cb(xhash_iter_data(iter));
             }
-#if XHASH_ENABLE_CACHE
-            curr->next = xh->cache;
-            xh->cache = curr;
-#else
-            free(curr);
-#endif
-            curr = next;
-        } while (curr);
+// #if XHASH_ENABLE_CACHE
+//             iter->next = xh->cache;
+//             xh->cache = iter;
+// #else
+            free(iter);
+// #endif
+            iter = next;
+        } while (iter);
 
         xh->buckets[i] = NULL;
     }
