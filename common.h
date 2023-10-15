@@ -105,12 +105,15 @@ struct sockaddr_dm {
      char sdm_addr[MAX_DOMAIN_LEN]; /* null-terminated domain */
 };
 
-#define is_valid_devid(s)   (*(u8_t*) (s))
+static inline int is_valid_devid(const u8_t* s) {
+    return s[0];
+}
 
-#define is_valid_command(c) ( \
-            (c)->tag == CMD_TAG && \
-            (c)->major == VERSION_MAJOR && \
-            (c)->minor == VERSION_MINOR)
+static inline int is_valid_command(const cmd_t* c) {
+    return c->tag == CMD_TAG
+        && c->major == VERSION_MAJOR
+        && c->minor == VERSION_MINOR;
+}
 
 #ifdef _WIN32
 int daemon(int argc, char** argv);
@@ -124,7 +127,7 @@ void rand_bytes(u8_t* data, u32_t len);
  * - ":section" -> [DEF_CONFIG_FILE], [section]
  * - "file" -> [file], [sec]
  * - NULL -> [DEF_CONFIG_FILE], [sec]
- * NOTE: content of 'str' may be modified.
+ * NOTE: content of '*str' may be modified.
  */
 void parse_config_str(char** str, const char** sec);
 

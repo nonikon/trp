@@ -528,8 +528,8 @@ static void usage(const char* s)
 #endif
     fprintf(stderr, "  -l <path>     write output to file. (default: write to STDOUT)\n");
     fprintf(stderr, "  -L <path>     write output to file and run as daemon. (default: write to STDOUT)\n");
-    fprintf(stderr, "  -C <path>     set config file path and section. (default: trp.ini)\n");
-    fprintf(stderr, "                - section can be specified after colon (default: trp.ini:socks)\n");
+    fprintf(stderr, "  -C <config>   set config file path and section. (default: trp.ini)\n");
+    fprintf(stderr, "                section can be specified after colon. (default: trp.ini:socks)\n");
     fprintf(stderr, "  -v            output verbosely.\n");
     fprintf(stderr, "  -V            output version string.\n");
     fprintf(stderr, "  -h            print this help message.\n");
@@ -790,9 +790,12 @@ int main(int argc, char** argv)
     if (parse_ip_str(xserver_str, DEF_XSERVER_PORT, &xclient.xserver_addr.x) != 0) {
         struct sockaddr_dm dm;
 
-        if (parse_domain_str(xserver_str, DEF_XSERVER_PORT, &dm) != 0
-                || resolve_domain_sync(xclient.loop, &dm, &xclient.xserver_addr.x) != 0) {
+        if (parse_domain_str(xserver_str, DEF_XSERVER_PORT, &dm) != 0) {
             XLOGE("invalid proxy server address (%s).", xserver_str);
+            goto end;
+        }
+        if (resolve_domain_sync(xclient.loop, &dm, &xclient.xserver_addr.x) != 0) {
+            XLOGE("resolve domain (%s) failed.", xserver_str);
             goto end;
         }
     }

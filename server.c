@@ -184,8 +184,8 @@ static void usage(const char* s)
 #endif
     fprintf(stderr, "  -l <path>     write output to file. (default: write to STDOUT)\n");
     fprintf(stderr, "  -L <path>     write output to file and run as daemon. (default: write to STDOUT)\n");
-    fprintf(stderr, "  -C <path>     set config file path and section. (default: trp.ini)\n");
-    fprintf(stderr, "                - section can be specified after colon (default: trp.ini:server)\n");
+    fprintf(stderr, "  -C <config>   set config file path and section. (default: trp.ini)\n");
+    fprintf(stderr, "                section can be specified after colon. (default: trp.ini:server)\n");
 #ifdef WITH_CLIREMOTE
     fprintf(stderr, "  -D            disable direct connect (connect TCP or UDP remote directly).\n");
 #endif

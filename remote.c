@@ -200,8 +200,7 @@ static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u3
         if (is_valid_devid(cmd->data) && !ctx->c.pending_ctx) {
             pending_ctx_t* pdctx = xhash_get_data(&remote_pri.pending_ctxs, cmd->data);
 
-            XLOGD("REPORT_DEVID (%s) cmd from client, process.",
-                devid_to_str(cmd->data));
+            XLOGD("REPORT_DEVID (%s) cmd from client, process.", devid_to_str(cmd->data));
 
             if (pdctx == XHASH_INVALID_DATA) {
                 XLOGI("device id (%s) not exist, insert.", devid_to_str(cmd->data));
@@ -953,8 +952,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         pending_ctx_t* pdctx = xhash_get_data(&remote_pri.pending_ctxs, cmd->data);
 
         ++remote_pri.nconnect_cli;
-        XLOGD("CONNECT_CLIENT cmd (%s) from peer, process.",
-            devid_to_str(cmd->data));
+        XLOGD("CONNECT_CLIENT cmd (%s) from peer, process.", devid_to_str(cmd->data));
 
         if (pdctx != XHASH_INVALID_DATA) {
 
@@ -1203,7 +1201,8 @@ static void handle_request_device_list(const http_request_t* req, http_response_
 
             iter = xhash_iter_next(&remote_pri.pending_ctxs, iter);
         }
-        while (xhash_iter_valid(iter) && resp->body_len + 120 <= sizeof(resp->body));
+        while (xhash_iter_valid(iter)
+            && resp->body_len + 110 + DEVICE_ID_SIZE <= sizeof(resp->body));
 
         resp->body_len -= 2; /* delete ',\n' at the end of 'resp->body'. */
     }
