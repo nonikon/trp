@@ -129,3 +129,6 @@ Finally, start `proxy-client` locally (should have access to the `server`) on de
     dig -p 5353 @127.0.0.1 www.google.com
     ```
 NOTE: Config file is supported by `-C` command option, see [trp.ini](trp.ini).
+
+## Lisence
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
