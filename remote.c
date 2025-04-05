@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2023 nonikon@qq.com.
+ * Copyright (C) 2021-2025 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -496,6 +496,25 @@ static int connect_tcp_remote(peer_ctx_t* ctx, struct sockaddr* addr)
     return -1;
 }
 
+static inline struct addrinfo* choose_addr(struct addrinfo* res, uint8_t method)
+{
+    switch (method) {
+    case FLG_ADDRPREF_NONE: // not specified, use the first addr
+        break;
+    case FLG_ADDRPREF_IPV4:
+        while (res->ai_family != AF_INET && res->ai_next) {
+            res = res->ai_next;
+        }
+        break;
+    case FLG_ADDRPREF_IPV6:
+        while (res->ai_family != AF_INET6 && res->ai_next) {
+            res = res->ai_next;
+        }
+        break;
+    }
+    return res;
+}
+
 static void on_tcp_remote_domain_resolved(
         uv_getaddrinfo_t* req, int status, struct addrinfo* res)
 {
@@ -506,9 +525,10 @@ static void on_tcp_remote_domain_resolved(
         uv_close((uv_handle_t*) &ctx->io, on_peer_closed);
 
     } else {
-        XLOGD("resolve result: %s, connect.", addr_to_str(res->ai_addr));
+        struct addrinfo* pref = choose_addr(res, ctx->flag);
+        XLOGD("resolve result: %s, connect.", addr_to_str(pref->ai_addr));
 
-        if (connect_tcp_remote(ctx, res->ai_addr) != 0) {
+        if (connect_tcp_remote(ctx, pref->ai_addr) != 0) {
             /* connect failed immediately, just close this connection. */
             uv_close((uv_handle_t*) &ctx->io, on_peer_closed);
         }
@@ -1028,12 +1048,13 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         hints.ai_flags = 0;
 
         req->data = ctx;
+        ctx->flag = cmd->flag;
         /* make sure that domain is null-terminated. */
         cmd->data[MAX_DOMAIN_LEN - 1] = 0;
 
         sprintf(portstr, "%d", ntohs(cmd->port));
         ++remote_pri.nconnect_dm;
-        XLOGD("CONNECT_DOMAIN cmd (%s) from peer, process.", maddr_to_str(cmd));
+        XLOGD("CONNECT_DOMAIN cmd (%s, %d) from peer, process.", maddr_to_str(cmd), cmd->flag);
 
         /* stop reading from peer until remote connected. */
         uv_read_stop((uv_stream_t*) &ctx->io);

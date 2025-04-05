@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 nonikon@qq.com.
+ * Copyright (C) 2021-2025 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -61,6 +61,7 @@ struct peer_ctx {
     u8_t peer_blocked;
     u8_t remote_blocked;
     u8_t stage;
+    u8_t flag;                  /* same to cmd_t.flag */
 };
 
 /*  public */ void on_iobuf_alloc(uv_handle_t* handle, size_t sg_size, uv_buf_t* buf);

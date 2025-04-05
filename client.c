@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2023 nonikon@qq.com.
+ * Copyright (C) 2021-2025 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -143,6 +143,7 @@ static void report_device_id(peer_ctx_t* ctx)
     cmd->tag = CMD_TAG;
     cmd->major = VERSION_MAJOR;
     cmd->minor = VERSION_MINOR;
+    cmd->flag = 0;
     cmd->cmd = CMD_REPORT_DEVID;
     cmd->len = DEVICE_ID_SIZE;
 
@@ -214,6 +215,7 @@ static void connect_server(struct sockaddr* addr)
     ctx->peer_blocked = 0;
     ctx->remote_blocked = 0;
     ctx->stage = STAGE_INIT;
+    // ctx->flag = 0;
 
     req->data = ctx;
 

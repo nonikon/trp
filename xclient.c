@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2023 nonikon@qq.com.
+ * Copyright (C) 2021-2025 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -346,6 +346,7 @@ void init_connect_command(xclient_ctx_t* ctx,
         cmd->tag = CMD_TAG;
         cmd->major = VERSION_MAJOR;
         cmd->minor = VERSION_MINOR;
+        cmd->flag = 0;
         cmd->cmd = CMD_CONNECT_CLIENT;
         cmd->len = DEVICE_ID_SIZE;
 
@@ -366,6 +367,7 @@ void init_connect_command(xclient_ctx_t* ctx,
     cmd->tag = CMD_TAG;
     cmd->major = VERSION_MAJOR;
     cmd->minor = VERSION_MINOR;
+    cmd->flag = xclient.addrpref;
     cmd->cmd = code;
     cmd->len = (u8_t) addrlen;
     cmd->port = port;

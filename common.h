@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2023 nonikon@qq.com.
+ * Copyright (C) 2021-2025 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -13,8 +13,8 @@
 
 #define VERSION_MAJOR       1
 #define VERSION_MINOR       4
-#define VERSION_PATCH       3
-#define VERSION_ISREL       1
+#define VERSION_PATCH       4
+#define VERSION_ISREL       0
 
 #define DEF_CONFIG_FILE     "trp.ini"
 #define DEF_DEVID_STRING    "test"
@@ -60,6 +60,12 @@ enum {
     CMD_REPORT_DEVID,   /* [DEVICE_ID_SIZE] */
 };
 
+enum {
+    FLG_ADDRPREF_NONE,
+    FLG_ADDRPREF_IPV4,
+    FLG_ADDRPREF_IPV6,
+};
+
 #define CMD_TAG         0x7E
 #define CMD_MD_SIZE     8
 #define CMD_MAX_SIZE    (sizeof(cmd_t) + MAX_DOMAIN_LEN)
@@ -70,7 +76,7 @@ typedef struct {
     u8_t tag;   /* CMD_TAG */
     u8_t major; /* VERSION_MAJOR */
     u8_t minor; /* VERSION_MINOR */
-    u8_t rsv;   /* reserved */
+    u8_t flag;  /* FLG_ADDRPREF_* when cmd is CMD_CONNECT_DOMAIN */
     u8_t cmd;   /* CMD_CONNECT_IPV4, ... */
     u8_t len;   /* data length */
     u16_t port; /* big endian port */

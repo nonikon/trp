@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 nonikon@qq.com.
+ * Copyright (C) 2021-2025 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -65,6 +65,7 @@ typedef struct {
         struct sockaddr x;
         struct sockaddr_in6 d;
     } xserver_addr;
+    u8_t addrpref;          /* prefer addr type used in remote domain resolution */
     u8_t utimeo;            /* udp connection timeout (seconds) */
     u32_t n_uconnect;       /* max udp-over-tcp connection size */
     xlist_t xclient_ctxs;   /* xclient_ctx_t */

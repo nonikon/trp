@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2023 nonikon@qq.com.
+ * Copyright (C) 2021-2025 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -154,6 +154,7 @@ static void on_xclient_connect(uv_stream_t* stream, int status)
     ctx->peer_blocked = 0;
     ctx->remote_blocked = 0;
     ctx->stage = STAGE_COMMAND;
+    // ctx->flag = 0;
 
     if (uv_accept(stream, (uv_stream_t*) &ctx->io) == 0) {
         XLOGD("proxy client connected.");

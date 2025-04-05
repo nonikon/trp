@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2023 nonikon@qq.com.
+ * Copyright (C) 2021-2025 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -293,6 +293,7 @@ static void usage(const char* s)
     fprintf(stderr, "  -K <PASSWORD> crypto password with client. (default: none)\n");
     fprintf(stderr, "  -m <method>   crypto method with proxy server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
     fprintf(stderr, "  -M <METHOD>   crypto method with client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
+    fprintf(stderr, "  -a <number>   prefer addr type used in remote domain resolution, 0 - none, 1 - IPV4, 2 - IPV6. (default: 0)\n");
     fprintf(stderr, "  -u <number>   set the number of UDP-over-TCP connection pools. (default: 0)\n");
     fprintf(stderr, "  -U <NUMBER>   set the number of UDP-over-TCP connection pools and disable TCP tunnel. (default: 0)\n");
     fprintf(stderr, "  -O <number>   set UDP connection timeout seconds. (default: %d)\n", UDPCONN_TIMEO);
@@ -342,6 +343,7 @@ int main(int argc, char** argv)
 #else
     int nofile = 0;
 #endif
+    int addrpref = 0;
     int utimeo = UDPCONN_TIMEO;
     int nconnect = 0; /* the number of UDP-over-TCP connections */
     int tcpoff = 0;
@@ -392,6 +394,7 @@ int main(int argc, char** argv)
             case 'M':     methodx = atoi(arg); continue;
             case 'k':      passwd = arg; continue;
             case 'K':     passwdx = arg; continue;
+            case 'a':    addrpref = atoi(arg); continue;
             case 'u':    nconnect = atoi(arg); tcpoff = 0; continue;
             case 'U':    nconnect = atoi(arg); tcpoff = 1; continue;
             case 'O':      utimeo = atoi(arg); continue;
@@ -456,6 +459,7 @@ int main(int argc, char** argv)
             } else if (!strcmp(item->name, "M")) { methodx = atoi(item->value);
             } else if (!strcmp(item->name, "k")) { passwd = item->value;
             } else if (!strcmp(item->name, "K")) { passwdx = item->value;
+            } else if (!strcmp(item->name, "a")) { addrpref = atoi(item->value);
             } else if (!strcmp(item->name, "u")) { nconnect = atoi(item->value); tcpoff = 0;
             } else if (!strcmp(item->name, "U")) { nconnect = atoi(item->value); tcpoff = 1;
             } else if (!strcmp(item->name, "O")) { utimeo = atoi(item->value);
@@ -523,6 +527,11 @@ int main(int argc, char** argv)
         XLOGW("invalid connection pool size (%d), reset to 1.", nconnect);
         nconnect = 1;
     }
+    if (addrpref > FLG_ADDRPREF_IPV6) {
+        XLOGW("invalid prefer addr type (%d), reset to 0.", addrpref);
+        addrpref = FLG_ADDRPREF_NONE;
+    }
+    xclient.addrpref = addrpref;
 
     if (utimeo < 0) {
         XLOGI("UDP flag close-on-recv ON.");
@@ -677,6 +686,9 @@ int main(int argc, char** argv)
     XLOGI("proxy server: %s.", addr_to_str(&xclient.xserver_addr));
     if (devid_str) {
         XLOGI("to device id: %s.", devid_to_str(xclient.device_id));
+    }
+    if (addrpref) {
+        XLOGI("prefer addr type: %d.", addrpref);
     }
     XLOGI("tunnel server listen at %s...", addr_to_str(&taddr));
     uv_run(xclient.loop, UV_RUN_DEFAULT);
