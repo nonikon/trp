@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.4)
+cmake_minimum_required(VERSION 3.9)
 
 project(trp LANGUAGES C)
 
@@ -10,7 +10,7 @@ if(LIBUV_EMBEDDED)
     add_subdirectory(${LIBUV_SRC_PATH})
 endif()
 
-# get Git current commit id
+# Get Git current commit id
 find_package(Git QUIET)
 if(GIT_FOUND)
     execute_process(
