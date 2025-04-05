@@ -177,7 +177,7 @@ static void on_udp_tclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
     } else {
         udp_cmd_t* cmd = (udp_cmd_t*) iob->buffer;
 
-        cmd->flag = xclient.utimeo;
+        cmd->flag = (xclient.uclrcv << 7) | xclient.utimeo;
         cmd->id = get_udp_packet_id(addr);
 
         switch (tunnel_maddr.m.len) {
@@ -536,16 +536,16 @@ int main(int argc, char** argv)
     if (utimeo < 0) {
         XLOGI("UDP flag close-on-recv ON.");
         utimeo = -utimeo;
-        xclient.utimeo = 0x80;
+        xclient.uclrcv = 1;
     } else {
-        xclient.utimeo = 0;
+        xclient.uclrcv = 0;
     }
     if (utimeo > MAX_UDPCONN_TIMEO) {
         XLOGW("invalid UDP connection timeout (%d), reset to %d.",
             utimeo, UDPCONN_TIMEO);
         utimeo = UDPCONN_TIMEO;
     }
-    xclient.utimeo |= (u8_t) utimeo; /* utimeo == 0 is allowed */
+    xclient.utimeo = (u8_t) utimeo; /* utimeo == 0 is allowed */
 
     if (devid_str && str_to_devid(xclient.device_id, devid_str) != 0) {
         XLOGE("invalid device id string (%s).", devid_str);

@@ -441,7 +441,7 @@ static void on_udp_sclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
         if (nread >= 4 + 4 + 2) {
             udp_cmd_t* cmd = (udp_cmd_t*) iob->buffer;
 
-            cmd->flag = xclient.utimeo;
+            cmd->flag = xclient.utimeo; /* close-on-recv always 0 */
             cmd->alen = 4;
             cmd->len = htons((u16_t) (nread - 4));
             cmd->id = get_udp_packet_id(addr);
@@ -463,7 +463,7 @@ static void on_udp_sclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
         if (nread >= 4 + 16 + 2) {
             udp_cmd_t* cmd = (udp_cmd_t*) iob->buffer;
 
-            cmd->flag = xclient.utimeo;
+            cmd->flag = xclient.utimeo; /* close-on-recv always 0 */
             cmd->alen = 16;
             cmd->len = htons((u16_t) (nread - 4));
             cmd->id = get_udp_packet_id(addr);
@@ -753,6 +753,7 @@ int main(int argc, char** argv)
     }
     xclient.addrpref = addrpref;
 
+    xclient.uclrcv = 0;
     if (utimeo <= 0 || utimeo > MAX_UDPCONN_TIMEO) {
         XLOGW("invalid UDP connection timeout (%d), reset to %d.",
             utimeo, UDPCONN_TIMEO);
