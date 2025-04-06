@@ -268,6 +268,11 @@ static void on_xserver_connected(uv_connect_t* req, int status)
         uv_read_start((uv_stream_t*) &ctx->io_xserver, on_iobuf_alloc, on_xserver_read);
 
         if (!ctx->is_udp) {
+            if (xclient.nodelay) {
+                /* enable nodelay both proxy server and proxy client */
+                uv_tcp_nodelay(&ctx->xclient.t.io, 1);
+                uv_tcp_nodelay(&ctx->io_xserver, 1);
+            }
             uv_read_start((uv_stream_t*) &ctx->xclient.t.io, on_iobuf_alloc,
                 on_xclient_read);
 
@@ -346,7 +351,7 @@ void init_connect_command(xclient_ctx_t* ctx,
         cmd->tag = CMD_TAG;
         cmd->major = VERSION_MAJOR;
         cmd->minor = VERSION_MINOR;
-        cmd->flag = 0;
+        cmd->flag = xclient.nodelay << 2; /* addrpref always 0 */
         cmd->cmd = CMD_CONNECT_CLIENT;
         cmd->len = DEVICE_ID_SIZE;
 
@@ -367,7 +372,7 @@ void init_connect_command(xclient_ctx_t* ctx,
     cmd->tag = CMD_TAG;
     cmd->major = VERSION_MAJOR;
     cmd->minor = VERSION_MINOR;
-    cmd->flag = xclient.addrpref;
+    cmd->flag = (xclient.nodelay << 2) | xclient.addrpref;
     cmd->cmd = code;
     cmd->len = (u8_t) addrlen;
     cmd->port = port;

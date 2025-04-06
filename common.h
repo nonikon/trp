@@ -76,7 +76,7 @@ typedef struct {
     u8_t tag;   /* CMD_TAG */
     u8_t major; /* VERSION_MAJOR */
     u8_t minor; /* VERSION_MINOR */
-    u8_t flag;  /* FLG_ADDRPREF_* when cmd is CMD_CONNECT_DOMAIN */
+    u8_t flag;  /* 1 bit TCP nodelay flag, 2 bits FLG_ADDRPREF_* flag */
     u8_t cmd;   /* CMD_CONNECT_IPV4, ... */
     u8_t len;   /* data length */
     u16_t port; /* big endian port */

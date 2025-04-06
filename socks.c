@@ -747,13 +747,14 @@ int main(int argc, char** argv)
         XLOGW("invalid connection pool size (%d), reset to 1.", nconnect);
         nconnect = 1;
     }
+    xclient.nodelay = 0; /* disable nodelay */
     if (addrpref > FLG_ADDRPREF_IPV6) {
         XLOGW("invalid prefer addr type (%d), reset to 0.", addrpref);
         addrpref = FLG_ADDRPREF_NONE;
     }
     xclient.addrpref = addrpref;
 
-    xclient.uclrcv = 0;
+    xclient.uclrcv = 0; /* disable close-on-recv */
     if (utimeo <= 0 || utimeo > MAX_UDPCONN_TIMEO) {
         XLOGW("invalid UDP connection timeout (%d), reset to %d.",
             utimeo, UDPCONN_TIMEO);

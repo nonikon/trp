@@ -154,6 +154,11 @@ static void connect_cli_remote(peer_ctx_t* pctx, remote_ctx_t* rctx)
     pctx->pending_iob = NULL;
     pctx->stage = STAGE_FORWARDCLI;
 
+    if (pctx->nodelay) {
+        /* enable nodelay both client and peer */
+        uv_tcp_nodelay(&pctx->io, 1);
+        uv_tcp_nodelay(&rctx->c.io, 1);
+    }
     if (iob->len > 0) {
         uv_buf_t wbuf;
 
@@ -441,11 +446,16 @@ static void on_tcp_remote_connected(uv_connect_t* req, int status)
     } else {
         io_buf_t* iob = ctx->t.peer->pending_iob;
 
-        XLOGD("remote connected.");
+        XLOGD("remote connected, nodelay %d.", ctx->t.peer->nodelay);
 
         convert_nonce((u8_t*) iob->buffer);
         remote.crypto.init(&ctx->t.edctx, remote.crypto_key, (u8_t*) iob->buffer);
 
+        if (ctx->t.peer->nodelay) {
+            /* enable nodelay both remote and peer */
+            uv_tcp_nodelay(&ctx->t.io, 1);
+            uv_tcp_nodelay(&ctx->t.peer->io, 1);
+        }
         if (iob->len > 0) {
             uv_buf_t wbuf;
 
@@ -525,7 +535,7 @@ static void on_tcp_remote_domain_resolved(
         uv_close((uv_handle_t*) &ctx->io, on_peer_closed);
 
     } else {
-        struct addrinfo* pref = choose_addr(res, ctx->flag);
+        struct addrinfo* pref = choose_addr(res, ctx->addrpref);
         XLOGD("resolve result: %s, connect.", addr_to_str(pref->ai_addr));
 
         if (connect_tcp_remote(ctx, pref->ai_addr) != 0) {
@@ -966,13 +976,16 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         return -1;
     }
 
+    ctx->nodelay = (cmd->flag >> 2) & 0x01;
+    ctx->addrpref = cmd->flag & 0x03;
 #ifdef WITH_CLIREMOTE
     if (cmd->cmd == CMD_CONNECT_CLIENT) {
         /* find an online client. */
         pending_ctx_t* pdctx = xhash_get_data(&remote_pri.pending_ctxs, cmd->data);
 
         ++remote_pri.nconnect_cli;
-        XLOGD("CONNECT_CLIENT cmd (%s) from peer, process.", devid_to_str(cmd->data));
+        XLOGD("CONNECT_CLIENT cmd (%s, %d) from peer, process.",
+            devid_to_str(cmd->data), cmd->flag);
 
         if (pdctx != XHASH_INVALID_DATA) {
 
@@ -1024,7 +1037,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         memcpy(&addr.sin_addr, cmd->data, 4);
 
         ++remote_pri.nconnect_ipv4;
-        XLOGD("CONNECT_IPV4 cmd (%s) from peer, process.", addr_to_str(&addr));
+        XLOGD("CONNECT_IPV4 cmd (%s, %d) from peer, process.", addr_to_str(&addr), cmd->flag);
 
         /* stop reading from peer until remote connected. */
         uv_read_stop((uv_stream_t*) &ctx->io);
@@ -1048,7 +1061,6 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         hints.ai_flags = 0;
 
         req->data = ctx;
-        ctx->flag = cmd->flag;
         /* make sure that domain is null-terminated. */
         cmd->data[MAX_DOMAIN_LEN - 1] = 0;
 
@@ -1077,7 +1089,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         memcpy(&addr.sin6_addr, cmd->data, 16);
 
         ++remote_pri.nconnect_ipv6;
-        XLOGD("CONNECT_IPV6 cmd (%s) from peer, process.", addr_to_str(&addr));
+        XLOGD("CONNECT_IPV6 cmd (%s, %d) from peer, process.", addr_to_str(&addr), cmd->flag);
 
         /* stop reading from peer until remote connected. */
         uv_read_stop((uv_stream_t*) &ctx->io);
@@ -1090,7 +1102,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 
     if (cmd->cmd == CMD_CONNECT_UDP) {
         ++remote_pri.nconnect_udp;
-        XLOGD("CONNECT_UDP cmd (%s) from peer, process.", maddr_to_str(cmd));
+        XLOGD("CONNECT_UDP cmd (%s, %d) from peer, process.", maddr_to_str(cmd), cmd->flag);
         connect_udp_remote(ctx, cmd->data);
         return 0;
     }

@@ -294,6 +294,7 @@ static void usage(const char* s)
     fprintf(stderr, "  -m <method>   crypto method with proxy server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
     fprintf(stderr, "  -M <METHOD>   crypto method with client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
     fprintf(stderr, "  -a <number>   prefer addr type used in remote domain resolution, 0 - none, 1 - IPV4, 2 - IPV6. (default: 0)\n");
+    fprintf(stderr, "  -y            enable TCP nodelay. (recommended for SSH relay, default: disable)\n");
     fprintf(stderr, "  -u <number>   set the number of UDP-over-TCP connection pools. (default: 0)\n");
     fprintf(stderr, "  -U <NUMBER>   set the number of UDP-over-TCP connection pools and disable TCP tunnel. (default: 0)\n");
     fprintf(stderr, "  -O <number>   set UDP connection timeout seconds. (default: %d)\n", UDPCONN_TIMEO);
@@ -344,6 +345,7 @@ int main(int argc, char** argv)
     int nofile = 0;
 #endif
     int addrpref = 0;
+    int nodelay = 0;
     int utimeo = UDPCONN_TIMEO;
     int nconnect = 0; /* the number of UDP-over-TCP connections */
     int tcpoff = 0;
@@ -366,6 +368,7 @@ int main(int argc, char** argv)
 
             /* short option without argument. (-opt[0]) */
             switch (opt[0]) {
+            case 'y': nodelay = 1; continue;
             case 'v': verbose = 1; continue;
             case 'V':
                 fprintf(stderr, "trp %s libuv %s.\n", version_string(), uv_version_string());
@@ -450,6 +453,7 @@ int main(int argc, char** argv)
             if (!item->name[0] || !item->value[0]) {
                 XLOGW("invalid config item (%s=%s), ignore.", item->name, item->value);
                 continue;
+            } else if (!strcmp(item->name, "y")) { nodelay = atoi(item->value);
             } else if (!strcmp(item->name, "v")) { verbose = atoi(item->value);
             } else if (!strcmp(item->name, "x")) { xserver_str = item->value;
             } else if (!strcmp(item->name, "b")) { tserver_str = item->value;
@@ -527,6 +531,7 @@ int main(int argc, char** argv)
         XLOGW("invalid connection pool size (%d), reset to 1.", nconnect);
         nconnect = 1;
     }
+    xclient.nodelay = nodelay != 0;
     if (addrpref > FLG_ADDRPREF_IPV6) {
         XLOGW("invalid prefer addr type (%d), reset to 0.", addrpref);
         addrpref = FLG_ADDRPREF_NONE;
@@ -686,6 +691,9 @@ int main(int argc, char** argv)
     XLOGI("proxy server: %s.", addr_to_str(&xclient.xserver_addr));
     if (devid_str) {
         XLOGI("to device id: %s.", devid_to_str(xclient.device_id));
+    }
+    if (nodelay) {
+        XLOGI("TCP nodelay ON.");
     }
     if (addrpref) {
         XLOGI("prefer addr type: %d.", addrpref);

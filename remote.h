@@ -61,7 +61,8 @@ struct peer_ctx {
     u8_t peer_blocked;
     u8_t remote_blocked;
     u8_t stage;
-    u8_t flag;                  /* same to cmd_t.flag */
+    u8_t nodelay;               /* TCP nodelay flag in cmd_t.flag */
+    u8_t addrpref;              /* prefer addr type flag in cmd_t.flag */
 };
 
 /*  public */ void on_iobuf_alloc(uv_handle_t* handle, size_t sg_size, uv_buf_t* buf);
