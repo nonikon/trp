@@ -76,7 +76,13 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
              * +----+----+---------+-------+----------+------+
              * | 1  | 1  |    2    |   4   | Variable |   1  |
              * +----+----+---------+-------+----------+------+
-             *  SOCKS4 server response:
+            /* SOCKS4a client request:
+             * +----+----+---------+-------+----------+------+----------+------+
+             * | VN | CD | DSTPORT | DSTIP |  USERID  | NULL |  DOMAIN  | NULL |
+             * +----+----+---------+-------+----------+------+----------+------+
+             * | 1  | 1  |    2    |   4   | Variable |   1  | Variable |   1  |
+             * +----+----+---------+-------+----------+------+----------+------+
+             *  SOCKS4/SOCKS4a server response:
              * +----+----+---------+-------+
              * | VN | CD | DSTPORT | DSTIP |
              * +----+----+---------+-------+
@@ -84,29 +90,53 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
              * +----+----+---------+-------+
              */
 
-            if (buf->len < 9 || buf->base[1] != 0x01) {/* 'CD' != 0x01 (CONNECT) */
+            if (buf->len < 9 || buf->base[1] != 0x01) { /* 'CD' != 0x01 (CONNECT) */
                 XLOGW("invalid socks4 command from client.");
                 return -1;
             }
 
-            init_connect_command(ctx, CMD_CONNECT_IPV4,
-                *(u16_t*) (buf->base + 2), (u8_t*) (buf->base + 4), 4);
+            if ((buf->base[4] | buf->base[5] | buf->base[6]) != 0) { /* DSTIP is not 0.0.0.x */
+                init_connect_command(ctx, CMD_CONNECT_IPV4,
+                    *(u16_t*) (buf->base + 2), (u8_t*) (buf->base + 4), 4);
+                buf->base[1] = 90; /* set 'CD' to 90 */
+
+            } else if (buf->base[7] != 0x00) { /* SOCKS4a (DSTIP is 0.0.0.x) */
+                const char* b = buf->base + 8;
+                const char* e = buf->base + buf->len - 1;
+
+                while (b < e && b[0]) ++b; /* skip USERID */
+                while (b < e && e[0]) --e; /* skip possible invalid characters at the end */
+                /* |  USERID  | NULL |  DOMAIN  | NULL |
+                 *               ^ b               ^ e
+                 */
+                if (e - b > 1 && e - b <= MAX_DOMAIN_LEN) {
+                    XLOGD("socks4a command from client: %zu userid, %zu domain.",
+                        b - buf->base - 8, e - b);
+                    init_connect_command(ctx, CMD_CONNECT_DOMAIN,
+                        *(u16_t*) (buf->base + 2), (u8_t*) (b + 1), (u32_t) (e - b));
+                    buf->base[1] = 90;
+                } else {
+                    XLOGW("socks4a domain len (%zu) error.", e - b);
+                    buf->base[1] = 91;
+                }
+            } else {
+                XLOGW("socks4a dstip error.");
+                buf->base[1] = 91;
+            }
 
             buf->base[0] = 0x00; /* set 'VN' to 0x00 */
             buf->len = 8;
 
-            if (connect_xserver(ctx) == 0) {
-                /* assume that proxy server was connected successfully. */
-
-                /* stop reading from socks client until proxy server connected. */
-                uv_read_stop((uv_stream_t*) &ctx->xclient.t.io);
-
-                buf->base[1] = 90; /* set 'CD' to 90 */
-                return 0;
+            if (buf->base[1] == 90) { /* 'CD' == 90, no error */
+                if (connect_xserver(ctx) == 0) {
+                    /* assume that proxy server was connected successfully. */
+                    /* stop reading from socks client until proxy server connected. */
+                    uv_read_stop((uv_stream_t*) &ctx->xclient.t.io);
+                    return 0;
+                }
+                /* connect proxy server failed immediately. */
+                buf->base[1] = 91;
             }
-
-            /* connect proxy server failed immediately. */
-            buf->base[1] = 91; /* set 'CD' to 91 */
             return 1;
         }
 

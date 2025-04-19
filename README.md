@@ -1,6 +1,6 @@
 # TRP - Tiny Reverse Proxy
 ## Feature
-- SOCKS5 TCP/UDP proxy and SOCKS4 TCP proxy.
+- SOCKS5 TCP/UDP proxy and SOCKS4/SOCKS4a TCP proxy.
 - Linux iptable redirect (TCP).
 - TCP/UDP port mapping.
 
