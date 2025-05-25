@@ -76,7 +76,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
              * +----+----+---------+-------+----------+------+
              * | 1  | 1  |    2    |   4   | Variable |   1  |
              * +----+----+---------+-------+----------+------+
-            /* SOCKS4a client request:
+             * SOCKS4a client request:
              * +----+----+---------+-------+----------+------+----------+------+
              * | VN | CD | DSTPORT | DSTIP |  USERID  | NULL |  DOMAIN  | NULL |
              * +----+----+---------+-------+----------+------+----------+------+
