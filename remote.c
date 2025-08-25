@@ -1031,6 +1031,8 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
     if (cmd->cmd == CMD_CONNECT_IPV4) {
         struct sockaddr_in addr;
 
+        memset(&addr, 0, sizeof(addr));
+
         addr.sin_family = AF_INET;
         addr.sin_port = cmd->port;
 
@@ -1082,6 +1084,8 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 
     if (cmd->cmd == CMD_CONNECT_IPV6) {
         struct sockaddr_in6 addr;
+
+        memset(&addr, 0, sizeof(addr));
 
         addr.sin6_family = AF_INET6;
         addr.sin6_port = cmd->port;
