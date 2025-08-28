@@ -785,7 +785,7 @@ static void send_udp_packet(remote_ctx_t* ctx, udp_cmd_t* cmd)
         uv_udp_init(remote.loop, &conn->io);
         uv_timer_init(remote.loop, &conn->timer);
         /* enable to send udp broadcast packet. */
-        uv_udp_set_broadcast(&conn->io, 1);
+        // uv_udp_set_broadcast(&conn->io, 1);
   
         conn->alen = cmd->alen;
         conn->clrcv = cmd->flag >> 7;
