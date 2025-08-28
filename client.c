@@ -31,99 +31,22 @@ static u8_t device_id[DEVICE_ID_SIZE];
 
 static int nconnect = 1;
 
-static void on_server_connected(uv_connect_t* req, int status);
 static void new_server_connection(uv_timer_t* handle);
 
-/* override */ void on_peer_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
+/* override */ void on_peer_state_change(peer_ctx_t* ctx, int connected)
 {
-    peer_ctx_t* ctx = stream->data;
-    io_buf_t* iob = xcontainer_of(buf->base, io_buf_t, buffer);
-
-    if (nread > 0) {
-        if (ctx->stage == STAGE_FORWARDTCP) {
-            uv_buf_t wbuf;
-            XLOGD("%zd bytes from server, to tcp remote.", nread);
-
-            wbuf.base = buf->base;
-            wbuf.len = nread;
-
-            iob->wreq.data = ctx->remote;
-
-            remote.crypto.decrypt(&ctx->edctx, (u8_t*) wbuf.base, wbuf.len);
-
-            uv_write(&iob->wreq, (uv_stream_t*) &ctx->remote->t.io,
-                &wbuf, 1, on_tcp_remote_write);
-
-            if (uv_stream_get_write_queue_size(
-                    (uv_stream_t*) &ctx->remote->t.io) > MAX_WQUEUE_SIZE) {
-                XLOGD("remote write queue pending.");
-
-                /* stop reading from server until remote write queue cleared. */
-                uv_read_stop(stream);
-                ctx->peer_blocked = 1;
-            }
-            /* 'iob' free later. */
-            return;
+    if (connected) {
+        /* start a new server connection always. */
+        new_server_connection(NULL);
+    } else {
+        XLOGW("connection closed by server at COMMAND stage.");
+        if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
+            /* reconnect after RECSRV_INTVL_MIN seconds. */
+            uv_timer_start(&reconnect_timer, new_server_connection,
+                RECSRV_INTVL_MIN * 1000, 0);
         }
-
-        if (ctx->stage == STAGE_FORWARDUDP) {
-            XLOGD("%zd udp bytes from server.", nread);
-
-            remote.crypto.decrypt(&ctx->edctx, (u8_t*) buf->base, (u32_t) nread);
-
-            iob->idx = 0;
-            iob->len = (u32_t) nread;
-
-            if (forward_peer_udp_packets(ctx->remote, iob) == 0) {
-                /* 'iob' was processed totally, release now. */
-                xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
-            }
-            return;
-        }
-
-        if (ctx->stage == STAGE_COMMAND) {
-            iob->len = (u32_t) nread;
-
-            ++nconnect;
-            /* start a new server connection always. */
-            new_server_connection(NULL);
-
-            if (invoke_encrypted_peer_command(ctx, iob) != 0) {
-                uv_close((uv_handle_t*) stream, on_peer_closed);
-            }
-            /* 'iob' free later. */
-            return;
-        }
-
-        /* should not reach here */
-        XLOGE("unexpected state happen when read.");
-        return;
     }
-
-    if (nread < 0) {
-        XLOGD("disconnected from server: %s, stage %d.",
-            uv_err_name((int) nread), ctx->stage);
-
-        uv_close((uv_handle_t*) stream, on_peer_closed);
-
-        if (ctx->stage == STAGE_COMMAND) {
-            XLOGW("connection closed by server at COMMAND stage.");
-            ++nconnect;
-            if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
-                /* reconnect after RECSRV_INTVL_MIN seconds. */
-                uv_timer_start(&reconnect_timer, new_server_connection,
-                    RECSRV_INTVL_MIN * 1000, 0);
-            }
-        } else if (ctx->stage == STAGE_FORWARDTCP) {
-            uv_close((uv_handle_t*) &ctx->remote->t.io, on_tcp_remote_closed);
-        } else if (ctx->stage == STAGE_FORWARDUDP) {
-            close_udp_remote(ctx->remote);
-        }
-        /* 'buf->base' may be 'NULL' when 'nread' < 0. */
-        if (!buf->base) return;
-    }
-
-    xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
+    ++nconnect;
 }
 
 static void report_device_id(peer_ctx_t* ctx)
@@ -210,12 +133,10 @@ static void connect_server(struct sockaddr* addr)
 
     ctx->io.data = ctx;
     ctx->remote = NULL;
-    // ctx->pending_ctx = NULL;
     ctx->pending_iob = NULL;
     ctx->peer_blocked = 0;
     ctx->remote_blocked = 0;
     ctx->stage = STAGE_INIT;
-    // ctx->flag = 0;
 
     req->data = ctx;
 

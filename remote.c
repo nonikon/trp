@@ -30,13 +30,19 @@ struct udp_session {
     xhash_t conns;              /* udp_conn_t, udp connections with this sid */
 };
 
+struct conn_stats {
+    size_t rxbytes;     /* the number of bytes received from peer */
+    size_t txbytes;     /* the number of bytes transmitted to peer */
+    size_t nconnect;    /* the count of connect command from peer */
+};
+
 #ifdef WITH_CLIREMOTE
 struct pending_ctx {
     u8_t devid[DEVICE_ID_SIZE]; /* (must be the first member) */
     xlist_t clients;            /* remote_ctx_t, the clients which at COMMAND stage */
     xlist_t peers;              /* peer_ctx_t, the peers which is connecting to a client */
     uv_timer_t timer;           /* peers connect timeout timer */
-    size_t nconnect;
+    conn_stats_t stats;
 };
 #endif
 
@@ -46,12 +52,12 @@ static struct {
     xhash_t udp_sessions;   /* udp_session_t */
 #ifdef WITH_CLIREMOTE
     xhash_t pending_ctxs;   /* pending_ctx_t */
-    size_t nconnect_cli;
+    conn_stats_t stats_cli;
 #endif
-    size_t nconnect_ipv4;
-    size_t nconnect_ipv6;
-    size_t nconnect_dm;
-    size_t nconnect_udp;
+    conn_stats_t stats_ipv4;
+    conn_stats_t stats_ipv6;
+    conn_stats_t stats_dm;
+    conn_stats_t stats_udp;
 } remote_pri;
 
 #ifdef WITH_CLIREMOTE
@@ -108,17 +114,17 @@ void on_peer_write(uv_write_t* req, int status)
 }
 
 #ifdef WITH_CLIREMOTE
-void on_cli_remote_closed(uv_handle_t* handle)
+static void on_cli_remote_closed(uv_handle_t* handle)
 {
     remote_ctx_t* ctx = handle->data;
 
-    if (ctx->c.pending_ctx) {
+    if (!ctx->c.peer && ctx->c.parent) {
         /* move client node from 'pending_ctx->clients' to 'remote_ctxs' */
         xlist_paste_back(&remote_pri.remote_ctxs,
-            xlist_cut(&ctx->c.pending_ctx->clients, xlist_value_iter(ctx)));
+            xlist_cut(&ctx->c.parent->clients, xlist_value_iter(ctx)));
 
         XLOGD("current %zu pending clients with this devid.",
-            xlist_size(&ctx->c.pending_ctx->clients));
+            xlist_size(&ctx->c.parent->clients));
     }
     xlist_erase(&remote_pri.remote_ctxs, xlist_value_iter(ctx));
 
@@ -126,7 +132,7 @@ void on_cli_remote_closed(uv_handle_t* handle)
         xlist_size(&remote_pri.remote_ctxs), xlist_size(&remote.io_buffers));
 }
 
-void on_cli_remote_write(uv_write_t* req, int status)
+static void on_cli_remote_write(uv_write_t* req, int status)
 {
     remote_ctx_t* ctx = req->data;
     io_buf_t* iob = xcontainer_of(req, io_buf_t, wreq);
@@ -143,17 +149,18 @@ void on_cli_remote_write(uv_write_t* req, int status)
     xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
 }
 
-static void connect_cli_remote(peer_ctx_t* pctx, remote_ctx_t* rctx)
+static void connect_cli_remote(peer_ctx_t* pctx, remote_ctx_t* rctx, pending_ctx_t* pdctx)
 {
     io_buf_t* iob = pctx->pending_iob;
 
     rctx->c.peer = pctx;
-    rctx->c.pending_ctx = NULL;
+    rctx->c.parent = pdctx;
 
     pctx->remote = rctx;
     pctx->pending_iob = NULL;
     pctx->stage = STAGE_FORWARDCLI;
 
+    ++pdctx->stats.nconnect;
     if (pctx->nodelay) {
         /* enable nodelay both client and peer */
         uv_tcp_nodelay(&pctx->io, 1);
@@ -164,6 +171,9 @@ static void connect_cli_remote(peer_ctx_t* pctx, remote_ctx_t* rctx)
 
         wbuf.base = iob->buffer + iob->idx;
         wbuf.len = iob->len;
+
+        pctx->stats->rxbytes += wbuf.len;
+        pdctx->stats.txbytes += wbuf.len;
 
         iob->wreq.data = rctx;
         /* write this 'iob' to client, 'iob' free later. */
@@ -177,7 +187,7 @@ static void connect_cli_remote(peer_ctx_t* pctx, remote_ctx_t* rctx)
     uv_tcp_keepalive(&rctx->c.io, 0, 0);
 }
 
-static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u32_t len)
+static int do_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u32_t len)
 {
     /* process command from client */
     cmd_t* cmd = (cmd_t*) (data + MAX_NONCE_LEN);
@@ -202,7 +212,7 @@ static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u3
 
     if (cmd->cmd == CMD_REPORT_DEVID) {
 
-        if (is_valid_devid(cmd->data) && !ctx->c.pending_ctx) {
+        if (is_valid_devid(cmd->data) && !ctx->c.parent) {
             pending_ctx_t* pdctx = xhash_get_data(&remote_pri.pending_ctxs, cmd->data);
 
             XLOGD("REPORT_DEVID (%s) cmd from client, process.", devid_to_str(cmd->data));
@@ -218,22 +228,20 @@ static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u3
                 xlist_init(&pdctx->peers, sizeof(peer_ctx_t), NULL);
 
                 uv_timer_init(remote.loop, &pdctx->timer);
-                pdctx->nconnect = 0;
+                memset(&pdctx->stats, 0, sizeof(pdctx->stats));
             }
 
             if (xlist_empty(&pdctx->peers)) {
                 XLOGD("no pending peer match, move to pending list.");
 
-                ctx->c.pending_ctx = pdctx;
+                ctx->c.parent = pdctx; // !!!
                 /* move client node from 'remote_ctxs' to 'pdctx->clients' */
                 xlist_paste_back(&pdctx->clients,
                     xlist_cut(&remote_pri.remote_ctxs, xlist_value_iter(ctx)));
-
             } else {
                 XLOGD("pending peer match, associate.");
 
-                connect_cli_remote(xlist_front(&pdctx->peers), ctx);
-                ++pdctx->nconnect;
+                connect_cli_remote(xlist_front(&pdctx->peers), ctx, pdctx);
                 /* move peer node from 'pdctx->peers' to 'peer_ctxs' */
                 xlist_paste_back(&remote.peer_ctxs, xlist_cut_front(&pdctx->peers));
 
@@ -252,7 +260,7 @@ static int invoke_encrypted_cli_remote_command(remote_ctx_t* ctx, char* data, u3
             return 0;
         }
 
-        XLOGW("invalid device id from client.");
+        XLOGW("invalid device id command from client.");
         return -1;
     }
 
@@ -276,6 +284,9 @@ static void on_cli_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_
 
             iob->wreq.data = ctx->c.peer;
 
+            ctx->c.peer->stats->txbytes += wbuf.len;
+            ctx->c.parent->stats.rxbytes += wbuf.len;
+
             uv_write(&iob->wreq, (uv_stream_t*) &ctx->c.peer->io, &wbuf, 1,
                 on_peer_write);
 
@@ -292,7 +303,7 @@ static void on_cli_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_
         }
 
         /* ctx->c.peer == NULL */
-        if (invoke_encrypted_cli_remote_command(ctx, buf->base, (u32_t) nread) != 0) {
+        if (do_encrypted_cli_remote_command(ctx, buf->base, (u32_t) nread) != 0) {
             uv_close((uv_handle_t*) stream, on_cli_remote_closed);
         }
 
@@ -324,8 +335,8 @@ void on_cli_remote_connect(uv_stream_t* stream, int status)
     uv_tcp_init(remote.loop, &ctx->c.io);
 
     ctx->c.peer = NULL;
+    ctx->c.parent = NULL;
     ctx->c.io.data = ctx;
-    ctx->c.pending_ctx = NULL;
 
     if (uv_accept(stream, (uv_stream_t*) &ctx->c.io) == 0) {
         XLOGD("client connected.");
@@ -359,7 +370,7 @@ static void on_connect_cli_remote_timeout(uv_timer_t* timer)
 }
 #endif // WITH_CLIREMOTE
 
-void on_tcp_remote_closed(uv_handle_t* handle)
+static void on_tcp_remote_closed(uv_handle_t* handle)
 {
     remote_ctx_t* ctx = handle->data;
 
@@ -369,7 +380,7 @@ void on_tcp_remote_closed(uv_handle_t* handle)
         xlist_size(&remote_pri.remote_ctxs), xlist_size(&remote.io_buffers));
 }
 
-void on_tcp_remote_write(uv_write_t* req, int status)
+static void on_tcp_remote_write(uv_write_t* req, int status)
 {
     remote_ctx_t* ctx = req->data;
     io_buf_t* iob = xcontainer_of(req, io_buf_t, wreq);
@@ -399,6 +410,7 @@ static void on_tcp_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_
         wbuf.len = nread;
 
         iob->wreq.data = ctx->t.peer;
+        ctx->t.peer->stats->txbytes += nread;
 
         remote.crypto.encrypt(&ctx->t.edctx, (u8_t*) wbuf.base, wbuf.len);
 
@@ -462,6 +474,7 @@ static void on_tcp_remote_connected(uv_connect_t* req, int status)
             wbuf.base = iob->buffer + iob->idx;
             wbuf.len = iob->len;
 
+            ctx->t.peer->stats->rxbytes += wbuf.len;
             iob->wreq.data = ctx;
 
             remote.crypto.decrypt(&ctx->t.peer->edctx, (u8_t*) wbuf.base, wbuf.len);
@@ -581,7 +594,7 @@ static inline void close_udp_conn(udp_conn_t* conn)
     uv_close((uv_handle_t*) &conn->timer, on_udp_conn_closed);
 }
 
-void close_udp_remote(remote_ctx_t* ctx)
+static void close_udp_remote(remote_ctx_t* ctx)
 {
     udp_session_t* sess = ctx->u.parent;
 
@@ -686,6 +699,7 @@ static void on_udp_remote_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf,
             }
             remote.crypto.encrypt(&rctx->u.edctx, (u8_t*) wbuf.base, wbuf.len);
 
+            rctx->u.peer->stats->txbytes += nread;
             iob->wreq.data = rctx->u.peer;
             uv_write(&iob->wreq, (uv_stream_t*) &rctx->u.peer->io,
                 &wbuf, 1, on_peer_write);
@@ -763,6 +777,7 @@ static void send_udp_packet(remote_ctx_t* ctx, udp_cmd_t* cmd)
 
     conn = xhash_get_data(&ctx->u.parent->conns, &cmd->id);
 
+    ctx->u.peer->stats->rxbytes += wbuf.len;
     if (conn != XHASH_INVALID_DATA) {
         if (!uv_is_closing((uv_handle_t*) &conn->io)) {
             /* ignore 'cmd->flag' in the following packets. */
@@ -824,10 +839,12 @@ static int __iob_move(io_buf_t* dst, io_buf_t* src, u32_t need)
     return 0;
 }
 
-int forward_peer_udp_packets(remote_ctx_t* ctx, io_buf_t* iob)
+static int fwd_encrypted_peer_udp_packet(remote_ctx_t* ctx, io_buf_t* iob)
 {
     udp_cmd_t* cmd;
     u32_t need;
+
+    remote.crypto.decrypt(&ctx->u.peer->edctx, (u8_t*) iob->buffer + iob->idx, iob->len);
 
     if (ctx->u.last_iob) {
         io_buf_t* last_iob = ctx->u.last_iob;
@@ -935,20 +952,15 @@ static void connect_udp_remote(peer_ctx_t* ctx, const u8_t* sid)
     ctx->pending_iob = NULL;
     ctx->stage = STAGE_FORWARDUDP;
 
-    if (iob->len) {
-        remote.crypto.decrypt(&ctx->edctx, (u8_t*) iob->buffer + iob->idx, iob->len);
-
-        if (forward_peer_udp_packets(ctx->remote, iob) != 0) {
-            /* some bytes left, 'iob' free later. */
-            return;
-        }
+    if (iob->len == 0 || fwd_encrypted_peer_udp_packet(ctx->remote, iob) == 0) {
+        /* 'iob' was processed totally, release now. */
+        xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
     }
-    /* 'iob' was processed totally, release now. */
-    xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
+    /* else: some bytes left, 'iob' free later. */
 }
 
 /* process command from peer. */
-int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
+static int do_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 {
     cmd_t* cmd = (cmd_t*) (iob->buffer + MAX_NONCE_LEN);
 
@@ -983,7 +995,8 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         /* find an online client. */
         pending_ctx_t* pdctx = xhash_get_data(&remote_pri.pending_ctxs, cmd->data);
 
-        ++remote_pri.nconnect_cli;
+        ctx->stats = &remote_pri.stats_cli;
+        ++remote_pri.stats_cli.nconnect;
         XLOGD("CONNECT_CLIENT cmd (%s, %d) from peer, process.",
             devid_to_str(cmd->data), cmd->flag);
 
@@ -993,8 +1006,7 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
                 /* online client exist, associate. */
                 XLOGD("found an available client, connect.");
 
-                connect_cli_remote(ctx, xlist_front(&pdctx->clients));
-                ++pdctx->nconnect;
+                connect_cli_remote(ctx, xlist_front(&pdctx->clients), pdctx);
                 /* move client node from 'pdctx->clients' to 'remote_ctxs' */
                 xlist_paste_back(&remote_pri.remote_ctxs, xlist_cut_front(&pdctx->clients));
 
@@ -1011,7 +1023,6 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
                     uv_timer_start(&pdctx->timer, on_connect_cli_remote_timeout,
                         CONNECT_CLI_TIMEO * 1000, CONNECT_CLI_TIMEO * 1000);
                 }
-                ctx->pending_ctx = pdctx;
             }
 
             return 0;
@@ -1038,7 +1049,8 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 
         memcpy(&addr.sin_addr, cmd->data, 4);
 
-        ++remote_pri.nconnect_ipv4;
+        ctx->stats = &remote_pri.stats_ipv4;
+        ++remote_pri.stats_ipv4.nconnect;
         XLOGD("CONNECT_IPV4 cmd (%s, %d) from peer, process.", addr_to_str(&addr), cmd->flag);
 
         /* stop reading from peer until remote connected. */
@@ -1067,7 +1079,9 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         cmd->data[MAX_DOMAIN_LEN - 1] = 0;
 
         sprintf(portstr, "%d", ntohs(cmd->port));
-        ++remote_pri.nconnect_dm;
+
+        ctx->stats = &remote_pri.stats_dm;
+        ++remote_pri.stats_dm.nconnect;
         XLOGD("CONNECT_DOMAIN cmd (%s, %d) from peer, process.", maddr_to_str(cmd), cmd->flag);
 
         /* stop reading from peer until remote connected. */
@@ -1092,7 +1106,8 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 
         memcpy(&addr.sin6_addr, cmd->data, 16);
 
-        ++remote_pri.nconnect_ipv6;
+        ctx->stats = &remote_pri.stats_ipv6;
+        ++remote_pri.stats_ipv6.nconnect;
         XLOGD("CONNECT_IPV6 cmd (%s, %d) from peer, process.", addr_to_str(&addr), cmd->flag);
 
         /* stop reading from peer until remote connected. */
@@ -1105,7 +1120,8 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
     }
 
     if (cmd->cmd == CMD_CONNECT_UDP) {
-        ++remote_pri.nconnect_udp;
+        ctx->stats = &remote_pri.stats_udp;
+        ++remote_pri.stats_udp.nconnect;
         XLOGD("CONNECT_UDP cmd (%s, %d) from peer, process.", maddr_to_str(cmd), cmd->flag);
         connect_udp_remote(ctx, cmd->data);
         return 0;
@@ -1113,6 +1129,117 @@ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 
     XLOGW("error command (%d) from peer.", cmd->cmd);
     return -1;
+}
+
+void on_peer_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
+{
+    peer_ctx_t* ctx = stream->data;
+    io_buf_t* iob = xcontainer_of(buf->base, io_buf_t, buffer);
+
+    if (nread > 0) {
+#ifdef WITH_CLIREMOTE
+        if (ctx->stage == STAGE_FORWARDCLI) {
+            uv_buf_t wbuf;
+            XLOGD("%zd bytes from peer, to client.", nread);
+
+            wbuf.base = buf->base;
+            wbuf.len = nread;
+
+            iob->wreq.data = ctx->remote;
+            ctx->stats->rxbytes += wbuf.len;
+            ctx->remote->c.parent->stats.txbytes += wbuf.len;
+
+            uv_write(&iob->wreq, (uv_stream_t*) &ctx->remote->c.io,
+                &wbuf, 1, on_cli_remote_write);
+
+            if (uv_stream_get_write_queue_size(
+                    (uv_stream_t*) &ctx->remote->c.io) > MAX_WQUEUE_SIZE) {
+                XLOGD("client write queue pending.");
+
+                /* stop reading from peer until client write queue cleared. */
+                uv_read_stop(stream);
+                ctx->peer_blocked = 1;
+            }
+            /* 'iob' free later. */
+            return;
+        }
+#endif
+        if (ctx->stage == STAGE_FORWARDTCP) {
+            uv_buf_t wbuf;
+            XLOGD("%zd bytes from peer, to tcp remote.", nread);
+
+            wbuf.base = buf->base;
+            wbuf.len = nread;
+
+            iob->wreq.data = ctx->remote;
+
+            remote.crypto.decrypt(&ctx->edctx, (u8_t*) wbuf.base, wbuf.len);
+            ctx->stats->rxbytes += wbuf.len;
+
+            uv_write(&iob->wreq, (uv_stream_t*) &ctx->remote->t.io,
+                &wbuf, 1, on_tcp_remote_write);
+
+            if (uv_stream_get_write_queue_size(
+                    (uv_stream_t*) &ctx->remote->t.io) > MAX_WQUEUE_SIZE) {
+                XLOGD("remote write queue pending.");
+
+                /* stop reading from peer until remote write queue cleared. */
+                uv_read_stop(stream);
+                ctx->peer_blocked = 1;
+            }
+            /* 'iob' free later. */
+            return;
+        }
+
+        if (ctx->stage == STAGE_FORWARDUDP) {
+            XLOGD("%zd udp bytes from peer.", nread);
+            iob->idx = 0;
+            iob->len = (u32_t) nread;
+
+            if (fwd_encrypted_peer_udp_packet(ctx->remote, iob) == 0) {
+                /* 'iob' was processed totally, release now. */
+                xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
+            }
+            return;
+        }
+
+        if (ctx->stage == STAGE_COMMAND) {
+            iob->len = (u32_t) nread;
+
+            on_peer_state_change(ctx, 1);
+            if (do_encrypted_peer_command(ctx, iob) != 0) {
+                uv_close((uv_handle_t*) stream, on_peer_closed);
+            }
+            /* 'iob' free later. */
+            return;
+        }
+
+        /* should not reach here */
+        XLOGE("unexpected state happen.");
+        return;
+    }
+
+    if (nread < 0) {
+        XLOGD("disconnected from peer: %s, stage %d.", uv_err_name((int) nread), ctx->stage);
+
+        uv_close((uv_handle_t*) stream, on_peer_closed);
+#ifdef WITH_CLIREMOTE
+        if (ctx->stage == STAGE_FORWARDCLI) {
+            uv_close((uv_handle_t*) &ctx->remote->c.io, on_cli_remote_closed);
+        } else
+#endif
+        if (ctx->stage == STAGE_FORWARDTCP) {
+            uv_close((uv_handle_t*) &ctx->remote->t.io, on_tcp_remote_closed);
+        } else if (ctx->stage == STAGE_FORWARDUDP) {
+            close_udp_remote(ctx->remote);
+        } else if (ctx->stage == STAGE_COMMAND) {
+            on_peer_state_change(ctx, 0);
+        }
+        /* 'buf->base' may be 'NULL' when 'nread' < 0. */
+        if (!buf->base) return;
+    }
+
+    xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
 }
 
 #ifdef WITH_CTRLSERVER
@@ -1171,24 +1298,24 @@ static void handle_request_status(const http_request_t* req, http_response_t* re
         "\"udp_sessions\":%zd,\n"
 #ifdef WITH_CLIREMOTE
         "\"devices\":%zd,\n"
-        "\"nconnect_cli\":%zd,\n"
+        "\"stats_cli\":{\"nconnect\":%zd,\"rxbytes\":%zd,\"txbytes\":%zd},\n"
 #endif
-        "\"nconnect_ipv4\":%zd,\n"
-        "\"nconnect_ipv6\":%zd,\n"
-        "\"nconnect_dm\":%zd,\n"
-        "\"nconnect_udp\":%zd\n}",
+        "\"stats_ipv4\":{\"nconnect\":%zd,\"rxbytes\":%zd,\"txbytes\":%zd},\n"
+        "\"stats_ipv6\":{\"nconnect\":%zd,\"rxbytes\":%zd,\"txbytes\":%zd},\n"
+        "\"stats_dm\":{\"nconnect\":%zd,\"rxbytes\":%zd,\"txbytes\":%zd},\n"
+        "\"stats_udp\":{\"nconnect\":%zd,\"rxbytes\":%zd,\"txbytes\":%zd}\n}",
         xlist_size(&remote.peer_ctxs),
         xlist_size(&remote_pri.remote_ctxs),
         xlist_size(&remote.io_buffers),
         xhash_size(&remote_pri.udp_sessions),
 #ifdef WITH_CLIREMOTE
         xhash_size(&remote_pri.pending_ctxs),
-        remote_pri.nconnect_cli,
+        remote_pri.stats_cli.nconnect, remote_pri.stats_cli.rxbytes, remote_pri.stats_cli.txbytes,
 #endif
-        remote_pri.nconnect_ipv4,
-        remote_pri.nconnect_ipv6,
-        remote_pri.nconnect_dm,
-        remote_pri.nconnect_udp);
+        remote_pri.stats_ipv4.nconnect, remote_pri.stats_ipv4.rxbytes, remote_pri.stats_ipv4.txbytes,
+        remote_pri.stats_ipv6.nconnect, remote_pri.stats_ipv6.rxbytes, remote_pri.stats_ipv6.txbytes,
+        remote_pri.stats_dm.nconnect, remote_pri.stats_dm.rxbytes, remote_pri.stats_dm.txbytes,
+        remote_pri.stats_udp.nconnect, remote_pri.stats_udp.rxbytes, remote_pri.stats_udp.txbytes);
 }
 
 static void handle_request_usession_list(const http_request_t* req, http_response_t* resp)
@@ -1232,14 +1359,15 @@ static void handle_request_device_list(const http_request_t* req, http_response_
             pending_ctx_t* c = xhash_iter_data(iter);
 
             http_buf_add_printf(resp->body, &resp->body_len,
-                "{\"devid\":\"%s\",\"nclients\":%zd,\"npeers\":%zd,\"nconnect\":%zd},\n",
+                "{\"devid\":\"%s\",\"nclients\":%zd,\"npeers\":%zd,"
+                "\"nconnect\":%zd,\"rxbytes\":%zd,\"txbytes\":%zd},\n",
                 devid_to_str(c->devid), xlist_size(&c->clients), xlist_size(&c->peers),
-                c->nconnect);
+                c->stats.nconnect, c->stats.rxbytes, c->stats.txbytes);
 
             iter = xhash_iter_next(&remote_pri.pending_ctxs, iter);
         }
         while (xhash_iter_valid(iter)
-            && resp->body_len + 110 + DEVICE_ID_SIZE <= sizeof(resp->body));
+            && resp->body_len + 70 + 20 * 5 + DEVICE_ID_SIZE <= sizeof(resp->body));
 
         resp->body_len -= 2; /* delete ',\n' at the end of 'resp->body'. */
     }

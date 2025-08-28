@@ -24,113 +24,9 @@
  *  --------         --------------
  */
 
-/* override */ void on_peer_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
+/* override */ void on_peer_state_change(peer_ctx_t* ctx, int connected)
 {
-    peer_ctx_t* ctx = stream->data;
-    io_buf_t* iob = xcontainer_of(buf->base, io_buf_t, buffer);
-
-    if (nread > 0) {
-#ifdef WITH_CLIREMOTE
-        if (ctx->stage == STAGE_FORWARDCLI) {
-            uv_buf_t wbuf;
-            XLOGD("%zd bytes from proxy client, to client.", nread);
-
-            wbuf.base = buf->base;
-            wbuf.len = nread;
-
-            iob->wreq.data = ctx->remote;
-
-            uv_write(&iob->wreq, (uv_stream_t*) &ctx->remote->c.io,
-                &wbuf, 1, on_cli_remote_write);
-
-            if (uv_stream_get_write_queue_size(
-                    (uv_stream_t*) &ctx->remote->c.io) > MAX_WQUEUE_SIZE) {
-                XLOGD("client write queue pending.");
-
-                /* stop reading from peer until client write queue cleared. */
-                uv_read_stop(stream);
-                ctx->peer_blocked = 1;
-            }
-            /* 'iob' free later. */
-            return;
-        }
-#endif
-        if (ctx->stage == STAGE_FORWARDTCP) {
-            uv_buf_t wbuf;
-            XLOGD("%zd bytes from proxy client, to tcp remote.", nread);
-
-            wbuf.base = buf->base;
-            wbuf.len = nread;
-
-            iob->wreq.data = ctx->remote;
-
-            remote.crypto.decrypt(&ctx->edctx, (u8_t*) wbuf.base, wbuf.len);
-
-            uv_write(&iob->wreq, (uv_stream_t*) &ctx->remote->t.io,
-                &wbuf, 1, on_tcp_remote_write);
-
-            if (uv_stream_get_write_queue_size(
-                    (uv_stream_t*) &ctx->remote->t.io) > MAX_WQUEUE_SIZE) {
-                XLOGD("remote write queue pending.");
-
-                /* stop reading from peer until remote write queue cleared. */
-                uv_read_stop(stream);
-                ctx->peer_blocked = 1;
-            }
-            /* 'iob' free later. */
-            return;
-        }
-
-        if (ctx->stage == STAGE_FORWARDUDP) {
-            XLOGD("%zd udp bytes from proxy client.", nread);
-
-            remote.crypto.decrypt(&ctx->edctx, (u8_t*) buf->base, (u32_t) nread);
-
-            iob->idx = 0;
-            iob->len = (u32_t) nread;
-
-            if (forward_peer_udp_packets(ctx->remote, iob) == 0) {
-                /* 'iob' was processed totally, release now. */
-                xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
-            }
-            return;
-        }
-
-        if (ctx->stage == STAGE_COMMAND) {
-            iob->len = (u32_t) nread;
-
-            if (invoke_encrypted_peer_command(ctx, iob) != 0) {
-                uv_close((uv_handle_t*) stream, on_peer_closed);
-            }
-            /* 'iob' free later. */
-            return;
-        }
-
-        /* should not reach here */
-        XLOGE("unexpected state happen.");
-        return;
-    }
-
-    if (nread < 0) {
-        XLOGD("disconnected from proxy client: %s, stage %d.",
-            uv_err_name((int) nread), ctx->stage);
-
-        uv_close((uv_handle_t*) stream, on_peer_closed);
-#ifdef WITH_CLIREMOTE
-        if (ctx->stage == STAGE_FORWARDCLI) {
-            uv_close((uv_handle_t*) &ctx->remote->c.io, on_cli_remote_closed);
-        } else
-#endif
-        if (ctx->stage == STAGE_FORWARDTCP) {
-            uv_close((uv_handle_t*) &ctx->remote->t.io, on_tcp_remote_closed);
-        } else if (ctx->stage == STAGE_FORWARDUDP) {
-            close_udp_remote(ctx->remote);
-        }
-        /* 'buf->base' may be 'NULL' when 'nread' < 0. */
-        if (!buf->base) return;
-    }
-
-    xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
+    /* do nothing */
 }
 
 static void on_xclient_connect(uv_stream_t* stream, int status)
@@ -147,14 +43,10 @@ static void on_xclient_connect(uv_stream_t* stream, int status)
 
     ctx->io.data = ctx;
     ctx->remote = NULL;
-#ifdef WITH_CLIREMOTE
-    ctx->pending_ctx = NULL;
-#endif
     ctx->pending_iob = NULL;
     ctx->peer_blocked = 0;
     ctx->remote_blocked = 0;
     ctx->stage = STAGE_COMMAND;
-    // ctx->flag = 0;
 
     if (uv_accept(stream, (uv_stream_t*) &ctx->io) == 0) {
         XLOGD("proxy client connected.");

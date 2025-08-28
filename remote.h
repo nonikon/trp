@@ -21,6 +21,7 @@ enum {
     STAGE_FORWARDUDP,
 };
 
+typedef struct conn_stats conn_stats_t;
 typedef struct peer_ctx peer_ctx_t;
 typedef struct pending_ctx pending_ctx_t;
 typedef struct udp_session udp_session_t;
@@ -30,9 +31,9 @@ typedef union {
     /* client remote */
     struct {
         peer_ctx_t* peer;
+        pending_ctx_t* parent;  /* the 'pending_ctx_t' belonging to */
         uv_tcp_t io;
         crypto_ctx_t edctx;
-        pending_ctx_t* pending_ctx; /* the 'pending_ctx_t' belonging to */
     } c;
 #endif
     /* tcp remote */
@@ -53,9 +54,7 @@ typedef union {
 struct peer_ctx {
     uv_tcp_t io;
     remote_ctx_t* remote;
-#ifdef WITH_CLIREMOTE
-    pending_ctx_t* pending_ctx; /* the 'pending_ctx_t' belonging to */
-#endif
+    conn_stats_t* stats;
     io_buf_t* pending_iob;      /* the pending 'io_buf_t' before 'remote' connected */
     crypto_ctx_t edctx;
     u8_t peer_blocked;
@@ -66,19 +65,11 @@ struct peer_ctx {
 };
 
 /*  public */ void on_iobuf_alloc(uv_handle_t* handle, size_t sg_size, uv_buf_t* buf);
-#ifdef WITH_CLIREMOTE
-/*  public */ void on_cli_remote_closed(uv_handle_t* handle);
-/*  public */ void on_cli_remote_write(uv_write_t* req, int status);
 /*  public */ void on_cli_remote_connect(uv_stream_t* stream, int status);
-#endif
-/*  public */ void on_tcp_remote_closed(uv_handle_t* handle);
-/*  public */ void on_tcp_remote_write(uv_write_t* req, int status);
 /*  public */ void on_peer_closed(uv_handle_t* handle);
 /*  public */ void on_peer_write(uv_write_t* req, int status);
-/* virtual */ void on_peer_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf);
-/*  public */ void close_udp_remote(remote_ctx_t* ctx);
-/*  public */ int forward_peer_udp_packets(remote_ctx_t* ctx, io_buf_t* iob);
-/*  public */ int invoke_encrypted_peer_command(peer_ctx_t* ctx, io_buf_t* iob);
+/*  public */ void on_peer_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf);
+/* virtual */ void on_peer_state_change(peer_ctx_t* ctx, int connected);
 
 typedef struct {
     uv_loop_t* loop;
