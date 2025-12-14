@@ -4,6 +4,12 @@
  */
 
 #include <string.h>
+#ifdef __ANDROID__
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#endif
 
 #include "xclient.h"
 
@@ -299,9 +305,87 @@ static void on_xserver_connected(uv_connect_t* req, int status)
     xlist_erase(&xclient_pri.conn_reqs, xlist_value_iter(req));
 }
 
+#ifdef __ANDROID__
+static int do_protect_fd(int nfd)
+{
+    struct sockaddr_un sa = { AF_UNIX, "protect_path" };
+    struct iovec iov;
+    struct msghdr msgh;
+    struct cmsghdr* cmsgh;
+    union {
+        char cmsg[CMSG_SPACE(sizeof(int))];
+        struct cmsghdr cmh;
+    } cmsgu;
+    char none = '!';
+    int chn = socket(AF_UNIX, SOCK_STREAM, 0);
+
+    if (chn == -1) {
+        XLOGE("unix socket failed: %s.", strerror(errno));
+        return -1;
+    }
+    if (connect(chn, (struct sockaddr*) &sa, sizeof(sa)) == -1) {
+        XLOGE("connect protect_path failed: %s.", strerror(errno));
+        close(chn);
+        return -1;
+    }
+
+    iov.iov_base = &none;
+    iov.iov_len = sizeof(none);
+
+    memset(&msgh, 0, sizeof(msgh));
+    msgh.msg_iov = &iov;
+    msgh.msg_iovlen = 1;
+    msgh.msg_control = cmsgu.cmsg;
+    msgh.msg_controllen = sizeof(cmsgu.cmsg);
+
+    memset(cmsgu.cmsg, 0, sizeof(cmsgu.cmsg));
+    cmsgh = CMSG_FIRSTHDR(&msgh);
+    cmsgh->cmsg_len = CMSG_LEN(sizeof(nfd));
+    cmsgh->cmsg_level = SOL_SOCKET;
+    cmsgh->cmsg_type = SCM_RIGHTS;
+    memcpy(CMSG_DATA(cmsgh), &nfd, sizeof(nfd));
+
+    if (sendmsg(chn, &msgh, 0) == -1
+            || recv(chn, &none, sizeof(none), 0) == -1) {
+        XLOGE("sendmsg/recv failed: %s.", strerror(errno));
+        close(chn);
+        return -1;
+    }
+    close(chn);
+    return 0;
+}
+
+static inline int open_protected_fd(uv_tcp_t* handle, int af)
+{
+    int nfd = socket(af, SOCK_STREAM, 0);
+
+    if (nfd == -1) {
+        XLOGE("stream socket failed: %s.", strerror(errno));
+        return -1;
+    }
+    if (do_protect_fd(nfd) == -1) {
+        close(nfd);
+        return -1;
+    }
+    if (uv_tcp_open(handle, nfd) != 0) {
+        XLOGE("uv_tcp_open failed");
+        close(nfd);
+        return -1;
+    }
+    return 0;
+}
+#endif
+
 int connect_xserver(xclient_ctx_t* ctx)
 {
-    uv_connect_t* req = xlist_alloc_back(&xclient_pri.conn_reqs);
+    uv_connect_t* req;
+
+#ifdef __ANDROID__
+    if (xclient.profd && open_protected_fd(&ctx->io_xserver, 
+            xclient.xserver_addr.x.sa_family) != 0)
+        return -1;
+#endif
+    req = xlist_alloc_back(&xclient_pri.conn_reqs);
 
     XLOGD("connecting porxy server (%s)...", addr_to_str(&xclient.xserver_addr));
     req->data = ctx;

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.9)
+cmake_minimum_required(VERSION 3.10)
 
 project(trp LANGUAGES C)
 
@@ -9,6 +9,7 @@ option(LIBUV_EMBEDDED "with build-in libuv" ON)
 if(LIBUV_EMBEDDED)
     add_subdirectory(${LIBUV_SRC_PATH})
 endif()
+option(DISABLE_LOG "disable log output" OFF)
 
 # Get Git current commit id
 find_package(Git QUIET)
@@ -36,10 +37,12 @@ set(generic_defines
     XLOG_WITH_TID=0
     XHASH_ENABLE_CACHE=1
     XLIST_ENABLE_CACHE=1
-    XLOG_OUT_CTRL=4
     INI_ALLOW_MULTILINE=0
     INI_MAX_LINE=512
 )
+if(DISABLE_LOG)
+    list(APPEND generic_defines XLOG_OUT_CTRL=0)
+endif()
 if(NOT ${GIT_COMMIT_ID})
     list(APPEND generic_defines GIT_COMMIT_ID="${GIT_COMMIT_ID}")
 endif()

@@ -65,6 +65,9 @@ typedef struct {
         struct sockaddr x;
         struct sockaddr_in6 d;
     } xserver_addr;
+#ifdef __ANDROID__
+    u8_t profd;             /* protect fd */
+#endif
     u8_t nodelay;           /* TCP nodelay */
     u8_t addrpref;          /* prefer addr type used in remote domain resolution */
     u8_t uclrcv;            /* udp close-on-recv */

@@ -100,7 +100,7 @@ void xlog_exit();
 void xlog_println(const char* tag, const char* fmt, ...);
 void xlog_printhex(const unsigned char* data, unsigned int len);
 #else
-#define xlog_init(...)
+#define xlog_init(...) 0
 #define xlog_ctrl(...)
 #define xlog_exit(...)
 #define xlog_println(...)

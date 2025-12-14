@@ -552,6 +552,9 @@ static void usage(const char* s)
     fprintf(stderr, "  -m <method>   crypto method with proxy server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
     fprintf(stderr, "  -M <METHOD>   crypto method with client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
     fprintf(stderr, "  -a <number>   prefer addr type used in remote domain resolution, 0 - none, 1 - IPV4, 2 - IPV6. (default: 0)\n");
+#ifdef __ANDROID__
+    fprintf(stderr, "  -p            enable protect fd for android.\n");
+#endif
     fprintf(stderr, "  -u <number>   set the number of UDP-over-TCP connection pools. (default: 0)\n");
     fprintf(stderr, "  -O <number>   set UDP connection timeout seconds. (default: %d)\n", UDPCONN_TIMEO);
 #ifndef _WIN32
@@ -599,6 +602,9 @@ int main(int argc, char** argv)
     int nofile = 0;
 #endif
     int addrpref = 0;
+#ifdef __ANDROID__
+    int profd = 0;
+#endif
     int utimeo = UDPCONN_TIMEO;
     int nconnect = 0;
     int verbose = 0;
@@ -620,6 +626,9 @@ int main(int argc, char** argv)
 
             /* short option without argument. (-opt[0]) */
             switch (opt[0]) {
+#ifdef __ANDROID__
+            case 'p':   profd = 1; continue;
+#endif
             case 'v': verbose = 1; continue;
             case 'V':
                 fprintf(stderr, "trp %s libuv %s.\n", version_string(), uv_version_string());
@@ -702,6 +711,9 @@ int main(int argc, char** argv)
             if (!item->name[0] || !item->value[0]) {
                 XLOGW("invalid config item (%s=%s), ignore.", item->name, item->value);
                 continue;
+#ifdef __ANDROID__
+            } else if (!strcmp(item->name, "p")) { profd = atoi(item->value);
+#endif
             } else if (!strcmp(item->name, "v")) { verbose = atoi(item->value);
             } else if (!strcmp(item->name, "x")) { xserver_str = item->value;
             } else if (!strcmp(item->name, "b")) { sserver_str = item->value;
@@ -777,6 +789,9 @@ int main(int argc, char** argv)
         XLOGW("invalid connection pool size (%d), reset to 1.", nconnect);
         nconnect = 1;
     }
+#ifdef __ANDROID__
+    xclient.profd = profd != 0;
+#endif
     xclient.nodelay = 0; /* disable nodelay */
     if (addrpref > FLG_ADDRPREF_IPV6) {
         XLOGW("invalid prefer addr type (%d), reset to 0.", addrpref);
@@ -888,6 +903,11 @@ int main(int argc, char** argv)
     if (devid_str) {
         XLOGI("to device id: %s.", devid_to_str(xclient.device_id));
     }
+#ifdef __ANDROID__
+    if (profd) {
+        XLOGI("protect fd ON.");
+    }
+#endif
     if (addrpref) {
         XLOGI("prefer addr type: %d.", addrpref);
     }

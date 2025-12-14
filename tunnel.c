@@ -531,6 +531,9 @@ int main(int argc, char** argv)
         XLOGW("invalid connection pool size (%d), reset to 1.", nconnect);
         nconnect = 1;
     }
+#ifdef __ANDROID__
+    xclient.profd = 0; /* disable protect fd */
+#endif
     xclient.nodelay = nodelay != 0;
     if (addrpref > FLG_ADDRPREF_IPV6) {
         XLOGW("invalid prefer addr type (%d), reset to 0.", addrpref);
