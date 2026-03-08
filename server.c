@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2025 nonikon@qq.com.
+ * Copyright (C) 2021-2026 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -24,9 +24,31 @@
  *  --------         --------------
  */
 
-/* override */ void on_peer_state_change(peer_ctx_t* ctx, int connected)
+static void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 {
-    /* do nothing */
+    peer_ctx_t* ctx = stream->data;
+    io_buf_t* iob = xcontainer_of(buf->base, io_buf_t, buffer);
+
+    if (nread > 0) {
+        iob->idx = 0;
+        iob->len = (u32_t) nread;
+
+        if (do_peer_command(ctx, iob) != 0) {
+            uv_close((uv_handle_t*) stream, on_peer_closed);
+        }
+        /* 'iob' free later. */
+        return;
+    }
+
+    if (nread < 0) {
+        XLOGD("disconnected from peer: %s.", uv_err_name((int) nread));
+
+        uv_close((uv_handle_t*) stream, on_peer_closed);
+        /* 'buf->base' may be 'NULL' when 'nread' < 0. */
+        if (!buf->base) return;
+    }
+
+    xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
 }
 
 static void on_xclient_connect(uv_stream_t* stream, int status)
@@ -46,13 +68,11 @@ static void on_xclient_connect(uv_stream_t* stream, int status)
     ctx->pending_iob = NULL;
     ctx->peer_blocked = 0;
     ctx->remote_blocked = 0;
-    ctx->stage = STAGE_COMMAND;
 
     if (uv_accept(stream, (uv_stream_t*) &ctx->io) == 0) {
-        XLOGD("proxy client connected.");
-        /* enable tcp-keepalive with proxy client. */
-        uv_tcp_keepalive(&ctx->io, 1, KEEPIDLE_TIME);
-        uv_read_start((uv_stream_t*) &ctx->io, on_iobuf_alloc, on_peer_read);
+        XLOGD("proxy client %s connected.", peeraddr_to_str(&ctx->io));
+        uv_tcp_keepalive(&ctx->io, 1, KEEPIDLE_TIME); /* keepalive with proxy client. */
+        uv_read_start((uv_stream_t*) &ctx->io, on_iobuf_alloc, on_xclient_read);
     } else {
         XLOGE("uv_accept failed.");
         uv_close((uv_handle_t*) &ctx->io, on_peer_closed);
@@ -324,7 +344,7 @@ int main(int argc, char** argv)
         XLOGE("invalid server address (%s).", server_str);
         goto end;
     }
-#endif
+#endif // WITH_CLIREMOTE
     if (parse_ip_str(xserver_str, DEF_XSERVER_PORT, &xaddr.x) != 0) {
         XLOGE("invalid proxy server address (%s).", xserver_str);
         goto end;
@@ -335,14 +355,12 @@ int main(int argc, char** argv)
 
     error = uv_tcp_bind(&io_server, &addr.x, 0);
     if (error) {
-        XLOGE("tcp bind %s failed: %s.", addr_to_str(&addr),
-            uv_strerror(error));
+        XLOGE("tcp bind %s failed: %s.", addr_to_str(&addr), uv_strerror(error));
         goto end;
     }
     error = uv_listen((uv_stream_t*) &io_server, LISTEN_BACKLOG, on_cli_remote_connect);
     if (error) {
-        XLOGE("tcp listen %s failed: %s.", addr_to_str(&addr),
-            uv_strerror(error));
+        XLOGE("tcp listen %s failed: %s.", addr_to_str(&addr), uv_strerror(error));
         goto end;
     }
 #endif
@@ -350,14 +368,12 @@ int main(int argc, char** argv)
 
     error = uv_tcp_bind(&io_xserver, &xaddr.x, 0);
     if (error) {
-        XLOGE("tcp bind %s failed: %s.", addr_to_str(&xaddr),
-            uv_strerror(error));
+        XLOGE("tcp bind %s failed: %s.", addr_to_str(&xaddr), uv_strerror(error));
         goto end;
     }
     error = uv_listen((uv_stream_t*) &io_xserver, LISTEN_BACKLOG, on_xclient_connect);
     if (error) {
-        XLOGE("tcp listen %s failed: %s.", addr_to_str(&xaddr),
-            uv_strerror(error));
+        XLOGE("tcp listen %s failed: %s.", addr_to_str(&xaddr), uv_strerror(error));
         goto end;
     }
 

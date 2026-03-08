@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2025 nonikon@qq.com.
+ * Copyright (C) 2021-2026 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -14,6 +14,13 @@
 #endif
 
 #include "xclient.h"
+
+enum {
+    STAGE_FORWARD,
+    STAGE_INIT,
+    STAGE_COMMAND,
+    STAGE_NOOP,
+};
 
 /*  --------------         --------------         --------------
  * | proxy-server | <---> | proxy-client | <---> | applications |
@@ -58,8 +65,8 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
                 return -1;
             }
 
-            XLOGD("socks5 select message from client: %d bytes, %d methods.",
-                buf->len, buf->base[1]);
+            XLOGD("socks5 select message from client: %u bytes, %d methods.",
+                (u32_t) buf->len, buf->base[1]);
 
             buf->base[1] = 0x00; /* select 'METHOD' 0x00 */
             buf->len = 2;
@@ -128,14 +135,12 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
             buf->len = 8;
 
             if (buf->base[1] == 90) { /* 'CD' == 90, no error */
-                if (connect_xserver(ctx) == 0) {
-                    /* assume that proxy server was connected successfully. */
-                    /* stop reading from socks client until proxy server connected. */
-                    uv_read_stop((uv_stream_t*) &ctx->xclient.t.io);
-                    return 0;
+                /* stop reading from socks client until proxy server connected. */
+                uv_read_stop((uv_stream_t*) &ctx->peer.t.io);
+                if (ctx->xconnected) {
+                    start_tcp_forward(ctx);
                 }
-                /* connect proxy server failed immediately. */
-                buf->base[1] = 91;
+                return 0;
             }
             return 1;
         }
@@ -192,7 +197,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
                         *(u16_t*) (buf->base + 8), (u8_t*) (buf->base + 4), 4);
                     buf->base[1] = 0x00;
                 } else {
-                    XLOGW("socks5 IPV4 request packet len (%d) error.", buf->len);
+                    XLOGW("socks5 IPV4 request packet len (%u) error.", (u32_t) buf->len);
                     buf->base[1] = 0x01;
                 }
             } else if (buf->base[3] == 0x03) { /* 'ATYP' == 0x03 (DOMAINNAME) */
@@ -215,7 +220,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
                         *(u16_t*) (buf->base + 20), (u8_t*) (buf->base + 4), 16);
                     buf->base[1] = 0x00;
                 } else {
-                    XLOGW("socks5 IPV6 request packet len (%d) error.", buf->len);
+                    XLOGW("socks5 IPV6 request packet len (%u) error.", (u32_t) buf->len);
                     buf->base[1] = 0x01;
                 }
             } else {
@@ -224,21 +229,17 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
             }
 
             if (buf->base[1] == 0x00) { /* no error */
-                if (connect_xserver(ctx) == 0) {
-                    /* assume that proxy server was connected successfully. */
-
-                    /* zero BIND.ADDR and BIND.PORT. uv_tcp_getsockname() maybe better. */
-                    memset(buf->base + 4, 0, 6);
-
-                    /* stop reading from socks client until proxy server connected. */
-                    uv_read_stop((uv_stream_t*) &ctx->xclient.t.io);
-
-                    buf->base[3] = 1; /* set response 'ATYP' to IPV4 */
-                    buf->len = 6 + 4;
-                    return 0;
+                /* stop reading from socks client until proxy server connected. */
+                uv_read_stop((uv_stream_t*) &ctx->peer.t.io);
+                if (ctx->xconnected) {
+                    start_tcp_forward(ctx);
                 }
-                /* connect proxy server failed immediately. */
-                buf->base[1] = 0x03;
+                /* zero BIND.ADDR and BIND.PORT. uv_tcp_getsockname() maybe better. */
+                memset(buf->base + 4, 0, 6);
+
+                buf->base[3] = 1; /* set response 'ATYP' to IPV4 */
+                buf->len = 6 + 4;
+                return 0;
             }
 
         } else if (buf->base[1] == 0x03) { /* 'CMD' == 0x03 (UDP ASSOCIATE) */
@@ -255,7 +256,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
                         /* record 'DST.ADDR', 'DST.PORT' and 'addr', TODO. */
                         buf->base[1] = 0x00;
                     } else {
-                        XLOGW("socks5 IPV4 udp request packet len (%d) error.", buf->len);
+                        XLOGW("socks5 IPV4 udp request packet len (%u) error.", (u32_t) buf->len);
                         buf->base[1] = 0x01;
                     }
                 } else if (buf->base[3] == 0x04) { /* 'ATYP' == 0x04 (IPV6) */
@@ -263,7 +264,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
                         /* record 'DST.ADDR', 'DST.PORT' and 'addr', TODO. */
                         buf->base[1] = 0x00;
                     } else {
-                        XLOGW("socks5 IPV6 udp request packet len (%d) error.", buf->len);
+                        XLOGW("socks5 IPV6 udp request packet len (%u) error.", (u32_t) buf->len);
                         buf->base[1] = 0x01;
                     }
                 } else {
@@ -273,7 +274,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
 
                 if (buf->base[1] == 0x00) {
                     /* no error, reply the address and port which udp relay server listen at. */
-                    uv_tcp_getsockname(&ctx->xclient.t.io, &addr.vx, &len);
+                    uv_tcp_getsockname(&ctx->peer.t.io, &addr.vx, &len);
 
                     switch (addr.vx.sa_family) {
                     case AF_INET:
@@ -315,58 +316,45 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
     return -1;
 }
 
-/* override */ void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
+static void on_sclient_write(uv_write_t* req, int status)
+{
+    io_buf_t* iob = xcontainer_of(req, io_buf_t, wreq);
+
+    xlist_erase(&xclient.io_buffers, xlist_value_iter(iob));
+}
+
+static void on_sclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 {
     xclient_ctx_t* ctx = stream->data;
     io_buf_t* iob = xcontainer_of(buf->base, io_buf_t, buffer);
 
     if (nread > 0) {
-        uv_buf_t wbuf;
-
-        wbuf.base = buf->base;
-        wbuf.len = nread;
-
-        iob->wreq.data = ctx;
-
-        if (ctx->stage == STAGE_FORWARD) {
-            XLOGD("%zd bytes from socks client, to proxy server.", nread);
-
-            xclient.cryptox.encrypt(&ctx->ectx, (u8_t*) wbuf.base, wbuf.len);
-
-            uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_xserver,
-                &wbuf, 1, on_xserver_write);
-
-            if (uv_stream_get_write_queue_size(
-                    (uv_stream_t*) &ctx->io_xserver) > MAX_WQUEUE_SIZE) {
-                XLOGD("proxy server write queue pending.");
-
-                /* stop reading from SOCKS client until proxy server write queue cleared. */
-                uv_read_stop(stream);
-                ctx->xclient_blocked = 1;
-            }
-            /* 'iob' free later. */
-            return;
-        }
-
         if (ctx->stage != STAGE_NOOP) {
+            uv_buf_t wbuf;
+
+            wbuf.base = buf->base;
+            wbuf.len = nread;
+
+            iob->wreq.data = ctx;
+
             switch (socks_handshake(ctx, &wbuf)) {
             case 0:
                 /* write response to socks client. */
-                uv_write(&iob->wreq, stream, &wbuf, 1, on_xclient_write);
+                uv_write(&iob->wreq, stream, &wbuf, 1, on_sclient_write);
                 /* 'iob' free later. */
                 return;
             case 1:
                 /* write response to socks client. */
-                uv_write(&iob->wreq, stream, &wbuf, 1, on_xclient_write);
+                uv_write(&iob->wreq, stream, &wbuf, 1, on_sclient_write);
                 /* close this connection. */
-                uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
-                uv_close((uv_handle_t*) stream, on_io_closed);
+                uv_close((uv_handle_t*) &ctx->io_xserver, on_tcp_io_closed);
+                uv_close((uv_handle_t*) stream, on_tcp_io_closed);
                 /* 'iob' free later. */
                 return;
             case -1:
                 /* error packet from client, close connection. */
-                uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
-                uv_close((uv_handle_t*) stream, on_io_closed);
+                uv_close((uv_handle_t*) &ctx->io_xserver, on_tcp_io_closed);
+                uv_close((uv_handle_t*) stream, on_tcp_io_closed);
                 break;
             }
         }
@@ -378,8 +366,8 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
         if (ctx->stage == STAGE_NOOP) {
             /* terminate associated udp connection, TODO. */
         }
-        uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
-        uv_close((uv_handle_t*) stream, on_io_closed);
+        uv_close((uv_handle_t*) &ctx->io_xserver, on_tcp_io_closed);
+        uv_close((uv_handle_t*) stream, on_tcp_io_closed);
 
         /* 'buf->base' may be 'NULL' when 'nread' < 0. */
         if (!buf->base) return;
@@ -398,28 +386,29 @@ static void on_sclient_connect(uv_stream_t* stream, int status)
     }
     ctx = xlist_alloc_back(&xclient.xclient_ctxs);
 
-    uv_tcp_init(xclient.loop, &ctx->xclient.t.io);
+    uv_tcp_init(xclient.loop, &ctx->peer.t.io);
 
-    ctx->xclient.t.io.data = ctx;
-    ctx->io_xserver.data = ctx;
+    ctx->peer.t.io.data = ctx;
+    ctx->io_xserver.data = NULL;
     ctx->pending_iob = NULL;
-    ctx->ref_count = 1;
-    ctx->is_udp = 0;
-    ctx->xclient_blocked = 0;
+    ctx->peer_blocked = 0;
     ctx->xserver_blocked = 0;
+    ctx->xconnected = 0;
     ctx->stage = STAGE_INIT;
 
-    if (uv_accept(stream, (uv_stream_t*) &ctx->xclient.t.io) == 0) {
+    if (uv_accept(stream, (uv_stream_t*) &ctx->peer.t.io) == 0) {
         XLOGD("socks client connected.");
-        uv_tcp_init(xclient.loop, &ctx->io_xserver);
-        uv_read_start((uv_stream_t*) &ctx->xclient.t.io, on_iobuf_alloc, on_xclient_read);
-        /* keepalive with socks client. */
-        uv_tcp_keepalive(&ctx->xclient.t.io, 1, KEEPIDLE_TIME);
-        /* 'ctx->io_xserver' need to be closed, increase refcount. */
-        ctx->ref_count = 2;
+        if (connect_tcp_xserver(ctx) == 0) {
+            uv_read_start((uv_stream_t*) &ctx->peer.t.io, on_iobuf_alloc,
+                on_sclient_read);
+            /* keepalive with socks client. */
+            uv_tcp_keepalive(&ctx->peer.t.io, 1, KEEPIDLE_TIME);
+        } else {
+            uv_close((uv_handle_t*) &ctx->peer.t.io, on_tcp_io_closed);
+        }
     } else {
         XLOGE("uv_accept failed.");
-        uv_close((uv_handle_t*) &ctx->xclient.t.io, on_io_closed);
+        uv_close((uv_handle_t*) &ctx->peer.t.io, on_tcp_io_closed);
     }
 }
 
@@ -460,7 +449,7 @@ static void on_udp_sclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
             *(u16_t*) buf->base);
 
     } else if (flags & UV_UDP_PARTIAL) {
-        XLOGW("socks5 udp packet too large (> %u), drop it.", buf->len);
+        XLOGW("socks5 udp packet too large (> %u), drop it.", (u32_t) buf->len);
 
     } else if (buf->base[2]) { /* 'FRAG' != 0x00 */
         XLOGW("socks5 udp packet with fragment is not supported.");
@@ -533,7 +522,7 @@ static void on_udp_sclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
     wbuf.base = (char*) cmd + 4;
     wbuf.len = ntohs(cmd->len) + 4;
 
-    XLOGD("%u udp bytes to socks5 client (%s).", wbuf.len, addr_to_str(addr));
+    XLOGD("%u udp bytes to socks5 client %s.", (u32_t) wbuf.len, addr_to_str(addr));
 
     if (uv_udp_try_send(&io_usserver, &wbuf, 1, addr) < 0) {
         XLOGD("send udp packet to socks5 client failed.");
@@ -865,14 +854,12 @@ int main(int argc, char** argv)
 
     error = uv_tcp_bind(&io_sserver, &saddr.x, 0);
     if (error) {
-        XLOGE("tcp bind (%s) failed: %s.", addr_to_str(&saddr),
-            uv_strerror(error));
+        XLOGE("tcp bind (%s) failed: %s.", addr_to_str(&saddr), uv_strerror(error));
         goto end;
     }
     error = uv_listen((uv_stream_t*) &io_sserver, LISTEN_BACKLOG, on_sclient_connect);
     if (error) {
-        XLOGE("tcp listen (%s) failed: %s.", addr_to_str(&saddr),
-            uv_strerror(error));
+        XLOGE("tcp listen (%s) failed: %s.", addr_to_str(&saddr), uv_strerror(error));
         goto end;
     }
 
@@ -882,8 +869,7 @@ int main(int argc, char** argv)
         /* start socks5 udp listen io. */
         error = uv_udp_bind(&io_usserver, &saddr.x, 0);
         if (error) {
-            XLOGE("udp bind (%s) failed: %s.", addr_to_str(&saddr),
-                uv_strerror(error));
+            XLOGE("udp bind (%s) failed: %s.", addr_to_str(&saddr), uv_strerror(error));
             goto end;
         }
         error = uv_udp_recv_start(&io_usserver, on_udp_sclient_rbuf_alloc,

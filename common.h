@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2025 nonikon@qq.com.
+ * Copyright (C) 2021-2026 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -13,8 +13,8 @@
 
 #define VERSION_MAJOR       1
 #define VERSION_MINOR       4
-#define VERSION_PATCH       4
-#define VERSION_ISREL       1
+#define VERSION_PATCH       5
+#define VERSION_ISREL       0
 
 #define DEF_CONFIG_FILE     "trp.ini"
 #define DEF_DEVID_STRING    "test"
@@ -26,9 +26,11 @@
 #define DEF_SSERVER_PORT    8801    /* default socks proxy port */
 #define LISTEN_BACKLOG      1024
 
+#define MAX_PASSWD_LEN      16      /* must be the mutiple of 4 */
 #define MAX_NONCE_LEN       16
 #define MAX_DOMAIN_LEN      64
 #define MAX_PENDING_UPKTS   16
+#define MAX_UDPSESS_COUNT   0x7FFFFFFF
 #define MAX_UDPCONN_TIMEO   40      /* s */
 #define MAX_WQUEUE_SIZE     0       /* bytes */
 #define MAX_SOCKBUF_SIZE    (8192 - sizeof(io_buf_t) - sizeof(xlist_node_t))
@@ -158,6 +160,8 @@ int parse_domain_str(const char* str, int port, struct sockaddr_dm* addr);
 int resolve_domain_sync(uv_loop_t* loop,
         const struct sockaddr_dm* dm, struct sockaddr* addr);
 
+/* getpeername and convert to string (include port). */
+const char* peeraddr_to_str(const uv_tcp_t* io);
 /* convert 'struct sockaddr' to string (include port). */
 const char* addr_to_str(const void* addr);
 /* convert 'cmd_t' address to string (include port). */

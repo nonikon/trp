@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2023 nonikon@qq.com.
+ * Copyright (C) 2021-2026 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -182,19 +182,18 @@ int crypto_init(crypto_t* c, int method)
 
 void derive_key(u8_t key[16], const char* str)
 {
-    // TODO, MD5?
     u32_t h = (u32_t) strlen(str);
     u32_t i;
 
-    if (h >= 16) {
-        memcpy(key, str, 16); /* truncate if > 16 */
-        h = 16;
+    if (h >= MAX_PASSWD_LEN) {
+        memcpy(key, str, MAX_PASSWD_LEN); /* truncate if > MAX_PASSWD_LEN */
+        h = MAX_PASSWD_LEN;
     } else {
         memcpy(key, str, h);
-        memset(key + h, 16 - h, 16 - h);
+        memset(key + h, MAX_PASSWD_LEN - h, MAX_PASSWD_LEN - h);
     }
 
-    for (i = 0; i < 16; i += 4) {
+    for (i = 0; i < MAX_PASSWD_LEN; i += 4) {
         u32_t u = (key[i + 0] <<  0)
                 | (key[i + 1] <<  8)
                 | (key[i + 2] << 16)
@@ -215,13 +214,11 @@ void derive_key(u8_t key[16], const char* str)
 
 void generate_nonce(u8_t nonce[MAX_NONCE_LEN])
 {
-    // TODO
     rand_bytes(nonce, MAX_NONCE_LEN);
 }
 
 void convert_nonce(u8_t nonce[MAX_NONCE_LEN])
 {
-    // TODO
     int i;
     for (i = 0; i < MAX_NONCE_LEN; ++i) {
         nonce[i] = ~nonce[i];

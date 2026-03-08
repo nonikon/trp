@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2025 nonikon@qq.com.
+ * Copyright (C) 2021-2026 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -11,15 +11,6 @@
 #include "xlog.h"
 #include "xlist.h"
 #include "xhash.h"
-
-enum {
-    STAGE_INIT,
-    STAGE_COMMAND,
-    STAGE_CONNECT,
-    STAGE_FORWARDCLI,
-    STAGE_FORWARDTCP,
-    STAGE_FORWARDUDP,
-};
 
 typedef struct conn_stats conn_stats_t;
 typedef struct peer_ctx peer_ctx_t;
@@ -59,17 +50,14 @@ struct peer_ctx {
     crypto_ctx_t edctx;
     u8_t peer_blocked;
     u8_t remote_blocked;
-    u8_t stage;
     u8_t nodelay;               /* TCP nodelay flag in cmd_t.flag */
     u8_t addrpref;              /* prefer addr type flag in cmd_t.flag */
 };
 
-/*  public */ void on_iobuf_alloc(uv_handle_t* handle, size_t sg_size, uv_buf_t* buf);
-/*  public */ void on_cli_remote_connect(uv_stream_t* stream, int status);
-/*  public */ void on_peer_closed(uv_handle_t* handle);
-/*  public */ void on_peer_write(uv_write_t* req, int status);
-/*  public */ void on_peer_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf);
-/* virtual */ void on_peer_state_change(peer_ctx_t* ctx, int connected);
+void on_iobuf_alloc(uv_handle_t* handle, size_t sg_size, uv_buf_t* buf);
+void on_cli_remote_connect(uv_stream_t* stream, int status);
+void on_peer_closed(uv_handle_t* handle);
+int  do_peer_command(peer_ctx_t* ctx, io_buf_t* iob);
 
 typedef struct {
     uv_loop_t* loop;

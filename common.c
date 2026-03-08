@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2023 nonikon@qq.com.
+ * Copyright (C) 2021-2026 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -235,6 +235,35 @@ int resolve_domain_sync(uv_loop_t* loop,
 
     uv_freeaddrinfo(req.addrinfo);
     return 0;
+}
+
+const char* peeraddr_to_str(const uv_tcp_t* io)
+{
+    union {
+        struct sockaddr     dx;
+        struct sockaddr_in  d4;
+        struct sockaddr_in6 d6;
+    } u;
+    int ulen = sizeof(u);
+
+    uv_tcp_getpeername(io, &u.dx, &ulen);
+    switch (u.dx.sa_family) {
+    case AF_INET:
+        uv_inet_ntop(AF_INET, &u.d4.sin_addr, __addrbuf, sizeof(__addrbuf));
+        sprintf(__addrbuf + strlen(__addrbuf), ":%d", ntohs(u.d4.sin_port));
+        break;
+
+    case AF_INET6:
+        uv_inet_ntop(AF_INET6, &u.d6.sin6_addr, __addrbuf, sizeof(__addrbuf));
+        sprintf(__addrbuf + strlen(__addrbuf), ":%d", ntohs(u.d6.sin6_port));
+        break;
+
+    default:
+        strcpy(__addrbuf, "invalid-peer-addr");
+        break;
+    }
+
+    return __addrbuf;
 }
 
 const char* addr_to_str(const void* addr)

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2025 nonikon@qq.com.
+ * Copyright (C) 2021-2026 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -29,50 +29,6 @@
 static union { cmd_t m; u8_t _[CMD_MAX_SIZE]; } tunnel_maddr;
 static uv_udp_t io_utserver; /* udp tunnel server listen io */
 
-/* override */ void on_xclient_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
-{
-    xclient_ctx_t* ctx = stream->data;
-    io_buf_t* iob = xcontainer_of(buf->base, io_buf_t, buffer);
-
-    if (nread > 0) {
-        uv_buf_t wbuf;
-        XLOGD("%zd bytes from tunnel client, to proxy server.", nread);
-
-        wbuf.base = buf->base;
-        wbuf.len = nread;
-
-        iob->wreq.data = ctx;
-
-        xclient.cryptox.encrypt(&ctx->ectx, (u8_t*) wbuf.base, wbuf.len);
-
-        uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_xserver,
-            &wbuf, 1, on_xserver_write);
-
-        if (uv_stream_get_write_queue_size(
-                (uv_stream_t*) &ctx->io_xserver) > MAX_WQUEUE_SIZE) {
-            XLOGD("proxy server write queue pending.");
-
-            /* stop reading from tunnel client until proxy server write queue cleared. */
-            uv_read_stop(stream);
-            ctx->xclient_blocked = 1;
-        }
-        /* 'iob' free later. */
-        return;
-    }
-
-    if (nread < 0) {
-        XLOGD("disconnected from tunnel client: %s.", uv_err_name((int) nread));
-
-        uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
-        uv_close((uv_handle_t*) stream, on_io_closed);
-
-        /* 'buf->base' may be 'NULL' when 'nread' < 0. */
-        if (!buf->base) return;
-    }
-
-    xlist_erase(&xclient.io_buffers, xlist_value_iter(iob));
-}
-
 static void on_tclient_connect(uv_stream_t* stream, int status)
 {
     xclient_ctx_t* ctx;
@@ -83,29 +39,29 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
     }
     ctx = xlist_alloc_back(&xclient.xclient_ctxs);
 
-    uv_tcp_init(xclient.loop, &ctx->xclient.t.io);
+    uv_tcp_init(xclient.loop, &ctx->peer.t.io);
 
-    ctx->xclient.t.io.data = ctx;
-    ctx->io_xserver.data = ctx;
-    ctx->ref_count = 1;
-    ctx->is_udp = 0;
+    ctx->peer.t.io.data = ctx;
+    ctx->io_xserver.data = NULL;
     ctx->pending_iob = NULL;
-    ctx->xclient_blocked = 0;
+    ctx->peer_blocked = 0;
     ctx->xserver_blocked = 0;
-    ctx->stage = STAGE_INIT;
+    ctx->xconnected = 0;
+    ctx->stage = 0;
 
-    if (uv_accept(stream, (uv_stream_t*) &ctx->xclient.t.io) == 0) {
+    if (uv_accept(stream, (uv_stream_t*) &ctx->peer.t.io) == 0) {
         XLOGD("tunnel client connected.");
 #ifdef __linux__
         if (tunnel_maddr.m.len) {
 #endif
-            init_connect_command(ctx, tunnel_maddr.m.cmd,
-                tunnel_maddr.m.port, tunnel_maddr.m.data, tunnel_maddr.m.len);
+            init_connect_command(ctx, tunnel_maddr.m.cmd, tunnel_maddr.m.port,
+                tunnel_maddr.m.data, tunnel_maddr.m.len);
 #ifdef __linux__
         } else {
 #ifndef IP6T_SO_ORIGINAL_DST
 #define IP6T_SO_ORIGINAL_DST 80
 #endif
+            uv_os_fd_t fd = ctx->peer.t.io.io_watcher.fd; // uv_fileno()...
             union {
                 struct sockaddr     vx;
                 struct sockaddr_in  v4;
@@ -113,39 +69,29 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
             } dest;
             socklen_t len = sizeof(dest);
 
-            if (getsockopt(ctx->xclient.t.io.io_watcher.fd,
-                    SOL_IP, SO_ORIGINAL_DST, &dest, &len) == 0) {
-                init_connect_command(ctx, CMD_CONNECT_IPV4,
-                    dest.v4.sin_port, (u8_t*) &dest.v4.sin_addr, 4);
-
-            } else if (getsockopt(ctx->xclient.t.io.io_watcher.fd,
-                    SOL_IPV6, IP6T_SO_ORIGINAL_DST, &dest, &len) == 0) {
-                init_connect_command(ctx, CMD_CONNECT_IPV6,
-                    dest.v6.sin6_port, (u8_t*) &dest.v6.sin6_addr, 16);
-
+            if (getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, &dest, &len) == 0) {
+                init_connect_command(ctx, CMD_CONNECT_IPV4, dest.v4.sin_port,
+                    (u8_t*) &dest.v4.sin_addr, 4);
+            } else if (getsockopt(fd, SOL_IPV6, IP6T_SO_ORIGINAL_DST, &dest, &len) == 0) {
+                init_connect_command(ctx, CMD_CONNECT_IPV6, dest.v6.sin6_port,
+                    (u8_t*) &dest.v6.sin6_addr, 16);
             } else {
-                XLOGW("getsockopt IP6T_SO_ORIGINAL_DST failed: %s.",
-                    strerror(errno));
-                uv_close((uv_handle_t*) &ctx->xclient.t.io, on_io_closed);
+                XLOGW("getsockopt IP6T_SO_ORIGINAL_DST failed: %s.", strerror(errno));
+                uv_close((uv_handle_t*) &ctx->peer.t.io, on_tcp_io_closed);
                 return;
             }
         }
 #endif
-        uv_tcp_init(xclient.loop, &ctx->io_xserver);
-        /* 'ctx->io_xserver' need to be closed, increase refcount. */
-        ctx->ref_count = 2;
-
-        if (connect_xserver(ctx) != 0) {
-            /* connect failed immediately, just close this connection. */
-            uv_close((uv_handle_t*) &ctx->io_xserver, on_io_closed);
-            uv_close((uv_handle_t*) &ctx->xclient.t.io, on_io_closed);
-        } else {
+        if (connect_tcp_xserver(ctx) == 0) {
             /* keepalive with tunnel client. */
-            uv_tcp_keepalive(&ctx->xclient.t.io, 1, KEEPIDLE_TIME);
+            uv_tcp_keepalive(&ctx->peer.t.io, 1, KEEPIDLE_TIME);
+        } else {
+            /* connect failed immediately, just close this connection. */
+            uv_close((uv_handle_t*) &ctx->peer.t.io, on_tcp_io_closed);
         }
     } else {
         XLOGE("uv_accept failed.");
-        uv_close((uv_handle_t*) &ctx->xclient.t.io, on_io_closed);
+        uv_close((uv_handle_t*) &ctx->peer.t.io, on_tcp_io_closed);
     }
 }
 
@@ -172,7 +118,7 @@ static void on_udp_tclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
         XLOGD("udp tunnel client read nothing.");
 
     } else if (flags & UV_UDP_PARTIAL) {
-        XLOGW("tunnel client udp packet too large (> %u), drop it.", buf->len);
+        XLOGW("tunnel client udp packet too large (> %u), drop it.", (u32_t) buf->len);
 
     } else {
         udp_cmd_t* cmd = (udp_cmd_t*) iob->buffer;
@@ -197,8 +143,7 @@ static void on_udp_tclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
             break;
         }
 
-        XLOGD("%u udp bytes from tunnel client, to proxy server id %x.",
-            iob->len, cmd->id);
+        XLOGD("%u udp bytes to proxy server, id %x.", iob->len, cmd->id);
         send_udp_packet(iob);
         /* 'iob' free later. */
         return;
@@ -219,7 +164,7 @@ static void on_udp_tclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
     wbuf.base = (char*) cmd + cmd->alen + 2 + sizeof(udp_cmd_t);
     wbuf.len = ntohs(cmd->len) - cmd->alen - 2;
 
-    XLOGD("%u udp bytes to tunel client (%s).", wbuf.len, addr_to_str(addr));
+    XLOGD("%u udp bytes to tunnel client %s.", (u32_t) wbuf.len, addr_to_str(addr));
 
     if (uv_udp_try_send(&io_utserver, &wbuf, 1, addr) < 0) {
         XLOGD("send udp packet to tunnel client failed.");
@@ -617,7 +562,8 @@ int main(int argc, char** argv)
         }
 
         if (nconnect) {
-            XLOGI("enable UDP tunnel mode, connections %d, timeout %d.", nconnect, utimeo);
+            XLOGI("enable UDP tunnel mode, connections %d, timeout %d.",
+                nconnect, utimeo);
             uv_udp_init(xclient.loop, &io_utserver);
 
             error = uv_udp_bind(&io_utserver, &taddr.x, 0);
@@ -671,8 +617,7 @@ int main(int argc, char** argv)
 
         error = uv_tcp_bind(&io_tserver, &taddr.x, 0);
         if (error) {
-            XLOGE("tcp bind (%s) failed: %s.", addr_to_str(&taddr),
-                uv_strerror(error));
+            XLOGE("tcp bind (%s) failed: %s.", addr_to_str(&taddr), uv_strerror(error));
             goto end;
         }
         error = uv_listen((uv_stream_t*) &io_tserver, LISTEN_BACKLOG,

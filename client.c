@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2025 nonikon@qq.com.
+ * Copyright (C) 2021-2026 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -33,20 +33,49 @@ static int nconnect = 1;
 
 static void new_server_connection(uv_timer_t* handle);
 
-/* override */ void on_peer_state_change(peer_ctx_t* ctx, int connected)
+static void on_server_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 {
-    if (connected) {
+    peer_ctx_t* ctx = stream->data;
+    io_buf_t* iob = xcontainer_of(buf->base, io_buf_t, buffer);
+
+    if (nread > 0) {
+        iob->idx = 0;
+        iob->len = (u32_t) nread;
+
+        ++nconnect;
         /* start a new server connection always. */
         new_server_connection(NULL);
-    } else {
+
+        if (do_peer_command(ctx, iob) != 0) {
+            uv_close((uv_handle_t*) stream, on_peer_closed);
+        }
+        /* 'iob' free later. */
+        return;
+    }
+
+    if (nread < 0) {
+        XLOGD("disconnected from server: %s.", uv_err_name((int) nread));
+
+        uv_close((uv_handle_t*) stream, on_peer_closed);
+        ++nconnect;
         XLOGW("connection closed by server at COMMAND stage.");
         if (!uv_is_active((uv_handle_t*) &reconnect_timer)) {
             /* reconnect after RECSRV_INTVL_MIN seconds. */
             uv_timer_start(&reconnect_timer, new_server_connection,
                 RECSRV_INTVL_MIN * 1000, 0);
         }
+        /* 'buf->base' may be 'NULL' when 'nread' < 0. */
+        if (!buf->base) return;
     }
-    ++nconnect;
+
+    xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
+}
+
+static void on_server_write(uv_write_t* req, int status)
+{
+    io_buf_t* iob = xcontainer_of(req, io_buf_t, wreq);
+
+    xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
 }
 
 static void report_device_id(peer_ctx_t* ctx)
@@ -77,7 +106,7 @@ static void report_device_id(peer_ctx_t* ctx)
     crypto.init(&ctx->edctx, crypto_key, (u8_t*) iob->buffer);
     crypto.encrypt(&ctx->edctx, (u8_t*) cmd, CMD_MAX_SIZE);
 
-    uv_write(&iob->wreq, (uv_stream_t*) &ctx->io, &wbuf, 1, on_peer_write);
+    uv_write(&iob->wreq, (uv_stream_t*) &ctx->io, &wbuf, 1, on_server_write);
 }
 
 static void on_server_connected(uv_connect_t* req, int status)
@@ -110,12 +139,10 @@ static void on_server_connected(uv_connect_t* req, int status)
         } else {
             XLOGD("server connected.");
         }
-        /* enable tcp-keepalive. */
-        uv_tcp_keepalive(&ctx->io, 1, KEEPIDLE_TIME);
-        uv_read_start((uv_stream_t*) &ctx->io, on_iobuf_alloc, on_peer_read);
+        uv_tcp_keepalive(&ctx->io, 1, KEEPIDLE_TIME); /* keepalive with server. */
+        uv_read_start((uv_stream_t*) &ctx->io, on_iobuf_alloc, on_server_read);
         report_device_id(ctx);
 
-        ctx->stage = STAGE_COMMAND;
         if (nconnect > 0 && !uv_is_active((uv_handle_t*) &reconnect_timer)) {
             new_server_connection(NULL);
         }
@@ -136,7 +163,6 @@ static void connect_server(struct sockaddr* addr)
     ctx->pending_iob = NULL;
     ctx->peer_blocked = 0;
     ctx->remote_blocked = 0;
-    ctx->stage = STAGE_INIT;
 
     req->data = ctx;
 
@@ -151,7 +177,6 @@ static void connect_server(struct sockaddr* addr)
             uv_timer_start(&reconnect_timer, new_server_connection,
                 RECSRV_INTVL_MIN * 1000, 0);
         }
-
         uv_close((uv_handle_t*) &ctx->io, on_peer_closed);
         xlist_erase(&remote.conn_reqs, xlist_value_iter(req));
     }
