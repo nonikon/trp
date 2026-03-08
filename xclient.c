@@ -702,28 +702,28 @@ void send_udp_packet(io_buf_t* iob)
         }
     } else {
         ctx = xlist_iter_value(iter); /* 'iter' is always valid */
-        xclient.cryptox.encrypt(&ctx->ectx, (u8_t*) iob->buffer, iob->len);
 
         if (ctx->xconnected) {
             if (ctx->io_xserver.write_queue_size <= MAX_WQUEUE_SIZE) {
                 uv_buf_t wbuf;
-
                 wbuf.base = iob->buffer;
                 wbuf.len = iob->len;
 
                 iob->wreq.data = ctx;
+                xclient.cryptox.encrypt(&ctx->ectx, (u8_t*) iob->buffer, iob->len);
+
                 uv_write(&iob->wreq, (uv_stream_t*) &ctx->io_xserver, &wbuf, 1,
                     on_udp_xserver_write);
             } else {
                 xlist_erase(&xclient.io_buffers, xlist_value_iter(iob));
                 XLOGD("proxy server write queue pending, drop this udp packet.");
             }
-
         } else if (ctx->peer.u.npending < MAX_PENDING_UPKTS) {
+            xclient.cryptox.encrypt(&ctx->ectx, (u8_t*) iob->buffer, iob->len);
+
             ctx->peer.u.pending_pkts[ctx->peer.u.npending++] = iob;
             XLOGD("pending this udp packet (%d/%d).", ctx->peer.u.npending,
                 MAX_PENDING_UPKTS);
-
         } else {
             xlist_erase(&xclient.io_buffers, xlist_value_iter(iob));
             XLOGD("pending queue full, drop this udp packet.");
