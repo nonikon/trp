@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2023 nonikon@qq.com.
+ * Copyright (C) 2019-2026 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -97,7 +97,11 @@ void xlog_ctrl(unsigned level, unsigned max_size, unsigned rotate);
 /* close the log file */
 void xlog_exit();
 /* ... */
-void xlog_println(const char* tag, const char* fmt, ...);
+void xlog_println(const char* tag, const char* fmt, ...)
+#if defined(__GNUC__)
+    __attribute__((format(printf, 2, 3)))
+#endif
+;
 void xlog_printhex(const unsigned char* data, unsigned int len);
 #else
 #define xlog_init(...) 0

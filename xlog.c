@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2023 nonikon@qq.com.
+ * Copyright (C) 2019-2026 nonikon@qq.com.
  * All rights reserved.
  */
 
@@ -380,7 +380,7 @@ int xlog_init(const char* file_path)
         return -1;
     }
 #ifndef O_CLOEXEC
-    fcntl(out_fd, F_SETFD, fcntl(out_fd, F_GETFD) | FD_CLOEXEC);
+    fcntl(out_fd, F_SETFD, FD_CLOEXEC); // currently, only FD_CLOEXEC file descriptor flag is defined
 #endif
 
     if (fstat(out_fd, &fst) == 0 && S_ISREG(fst.st_mode)) {
