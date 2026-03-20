@@ -26,6 +26,7 @@
 #define DEF_SSERVER_PORT    8801    /* default socks proxy port */
 #define LISTEN_BACKLOG      1024
 
+#define MAX_PTY_COUNT       64
 #define MAX_PASSWD_LEN      16      /* must be the mutiple of 4 */
 #define MAX_NONCE_LEN       16
 #define MAX_DOMAIN_LEN      64
@@ -60,6 +61,8 @@ enum {
     CMD_CONNECT_CLIENT, /* [DEVICE_ID_SIZE] */
     CMD_CONNECT_UDP,    /* [SESSION_ID_SIZE] */
     CMD_REPORT_DEVID,   /* [DEVICE_ID_SIZE] */
+
+    CMD_CONNECT_PTY,    /* [16] */
 };
 
 enum {
@@ -92,6 +95,21 @@ typedef struct {
     u32_t id;       /* packet id (source address) */
     u8_t data[0];   /* daddr + dport + payload */
 } udp_cmd_t;
+
+enum {
+    PTYCMD_DATA,   /* [n] */
+    PTYCMD_WNDSIZE,/* [2+2] */
+};
+
+typedef struct {
+    u8_t md[CMD_MD_SIZE]; /* digest of pty_cmd_t (MUST be the first member) */
+
+    u8_t cmd;   /* PTYCMD_xxx */
+    u8_t __1;   /* reserve */
+    u16_t len;  /* data length */
+    u32_t __2;  /* reserve */
+    u8_t data[0];
+} pty_cmd_t;
 
 typedef struct {
     u32_t idx;
@@ -179,7 +197,12 @@ config_item_t* get_config_item(config_item_t* prev);
 /* fill 'cmd->md'. */
 void fill_command_md(cmd_t* cmd);
 /* validate 'cmd->md'. */
-int check_command_md(cmd_t* cmd);
+int check_command_md(const cmd_t* cmd);
+
+/* fill 'cmd->md'. */
+void fill_pty_command_md(pty_cmd_t* cmd);
+/* validate 'cmd->md'. */
+int check_pty_command_md(const pty_cmd_t* cmd);
 
 /* get current version string. */
 const char* version_string();

@@ -57,6 +57,10 @@ set(tunnel_defines ${generic_defines})
 set(socks_sources ${generic_sources} xclient.c socks.c)
 set(socks_defines ${generic_defines})
 
+# shell
+set(shell_sources xlist.c common.c crypto.c sm4.c chacha.c ini.c shell.c)
+set(shell_defines ${generic_defines})
+
 if(MSVC)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 else()
@@ -81,3 +85,6 @@ target_compile_definitions(trp-tunnel PRIVATE ${tunnel_defines})
 
 add_executable(trp-socks ${socks_sources})
 target_compile_definitions(trp-socks PRIVATE ${socks_defines})
+
+add_executable(trp-shell ${shell_sources})
+target_compile_definitions(trp-shell PRIVATE ${shell_defines})

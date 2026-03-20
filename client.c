@@ -275,6 +275,7 @@ static void usage(const char* s)
 #ifdef WITH_CTRLSERVER
     fprintf(stderr, "  -r <address>  HTTP control server listen at. (default: disabled)\n");
 #endif
+    fprintf(stderr, "  -T <password> enable remote control (remote terminal etc.) and set password. (default: disabled)\n");
     fprintf(stderr, "  -d <devid>    device id (1~16 bytes string) of this client. (default: %s)\n", DEF_DEVID_STRING);
     fprintf(stderr, "  -k <password> crypto password with server. (default: none)\n");
     fprintf(stderr, "  -K <PASSWORD> crypto password with proxy client. (default: none)\n");
@@ -312,6 +313,7 @@ int main(int argc, char** argv)
 #ifdef WITH_CTRLSERVER
     const char* cserver_str = NULL;
 #endif
+    const char* ctrl_passwd = NULL;
     const char* devid_str = NULL;
     const char* logfile = NULL;
     const char* passwd = NULL;
@@ -368,6 +370,7 @@ int main(int argc, char** argv)
 #ifdef WITH_CTRLSERVER
             case 'r': cserver_str = arg; continue;
 #endif
+            case 'T': ctrl_passwd = arg; continue;
             case 'd':   devid_str = arg; continue;
             case 'm':      method = atoi(arg); continue;
             case 'M':     methodx = atoi(arg); continue;
@@ -431,6 +434,7 @@ int main(int argc, char** argv)
 #ifdef WITH_CTRLSERVER
             } else if (!strcmp(item->name, "r")) { cserver_str = item->value;
 #endif
+            } else if (!strcmp(item->name, "T")) { ctrl_passwd = item->value;
             } else if (!strcmp(item->name, "d")) { devid_str = item->value;
             } else if (!strcmp(item->name, "m")) { method = atoi(item->value);
             } else if (!strcmp(item->name, "M")) { methodx = atoi(item->value);
@@ -546,6 +550,11 @@ int main(int argc, char** argv)
         // goto end;
     }
 #endif
+    if (ctrl_passwd) {
+        derive_key(remote.ctrl_key, ctrl_passwd);
+    } else {
+        XLOGI("control password (-T) not set, disable remote control.");
+    }
     xlist_init(&remote.peer_ctxs, sizeof(peer_ctx_t), NULL);
     xlist_init(&remote.io_buffers, sizeof(io_buf_t) + MAX_SOCKBUF_SIZE, NULL);
     xlist_init(&remote.conn_reqs, sizeof(uv_connect_t), NULL);

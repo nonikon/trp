@@ -90,6 +90,7 @@ static void usage(const char* s)
 #ifdef WITH_CTRLSERVER
     fprintf(stderr, "  -r <address>  HTTP control server listen at. (default: disabled)\n");
 #endif
+    fprintf(stderr, "  -T <password> enable remote control (remote terminal etc.) and set password. (default: disabled)\n");
     fprintf(stderr, "  -k <password> crypto password. (default: none)\n");
     fprintf(stderr, "  -m <method>   crypto method, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
 #ifndef _WIN32
@@ -100,7 +101,7 @@ static void usage(const char* s)
     fprintf(stderr, "  -C <config>   set config file path and section. (default: trp.ini)\n");
     fprintf(stderr, "                section can be specified after colon. (default: trp.ini:server)\n");
 #ifdef WITH_CLIREMOTE
-    fprintf(stderr, "  -D            disable direct connect (connect TCP or UDP remote directly).\n");
+    fprintf(stderr, "  -D            disable direct connect (connect TCP/UDP or terminal etc.).\n");
 #endif
     fprintf(stderr, "  -v            output verbosely.\n");
     fprintf(stderr, "  -V            output version string.\n");
@@ -133,6 +134,7 @@ int main(int argc, char** argv)
 #ifdef WITH_CTRLSERVER
     const char* cserver_str = NULL;
 #endif
+    const char* ctrl_passwd = NULL;
     const char* logfile = NULL;
     const char* passwd = NULL;
     int method = CRYPTO_CHACHA20;
@@ -195,6 +197,7 @@ int main(int argc, char** argv)
 #ifdef WITH_CTRLSERVER
             case 'r': cserver_str = arg; continue;
 #endif
+            case 'T': ctrl_passwd = arg; continue;
             case 'm':      method = atoi(arg); continue;
             case 'k':      passwd = arg; continue;
 #ifndef _WIN32
@@ -252,14 +255,13 @@ int main(int argc, char** argv)
             } else if (!strcmp(item->name, "v")) { verbose = atoi(item->value);
 #ifdef WITH_CLIREMOTE
             } else if (!strcmp(item->name, "D")) { dconnoff = atoi(item->value);
-#endif
-#ifdef WITH_CLIREMOTE
             } else if (!strcmp(item->name, "s")) { server_str = item->value;
 #endif
             } else if (!strcmp(item->name, "x")) { xserver_str = item->value;
 #ifdef WITH_CTRLSERVER
             } else if (!strcmp(item->name, "r")) { cserver_str = item->value;
 #endif
+            } else if (!strcmp(item->name, "T")) { ctrl_passwd = item->value;
             } else if (!strcmp(item->name, "m")) { method = atoi(item->value);
             } else if (!strcmp(item->name, "k")) { passwd = item->value;
 #ifndef _WIN32
@@ -339,6 +341,10 @@ int main(int argc, char** argv)
     if (dconnoff) {
         XLOGI("disable direct connect.");
         remote.dconnect_off = 1;
+        if (ctrl_passwd) {
+            XLOGW("ignore control password (-T) argument.");
+            ctrl_passwd = NULL; /* force disable control remote */
+        }
     }
     if (parse_ip_str(server_str, DEF_SERVER_PORT, &addr.x) != 0) {
         XLOGE("invalid server address (%s).", server_str);
@@ -383,6 +389,11 @@ int main(int argc, char** argv)
         // goto end;
     }
 #endif
+    if (ctrl_passwd) {
+        derive_key(remote.ctrl_key, ctrl_passwd);
+    } else {
+        XLOGI("control password (-T) not set, disable remote control.");
+    }
     xlist_init(&remote.peer_ctxs, sizeof(peer_ctx_t), NULL);
     xlist_init(&remote.io_buffers, sizeof(io_buf_t) + MAX_SOCKBUF_SIZE, NULL);
     xlist_init(&remote.conn_reqs, sizeof(uv_connect_t), NULL);

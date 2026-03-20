@@ -323,6 +323,10 @@ const char* maddr_to_str(const cmd_t* cmd)
     case CMD_REPORT_DEVID:
         return devid_to_str(cmd->data);
 
+    case CMD_CONNECT_PTY:
+        strcpy(__addrbuf, "pty");
+        break;
+
     default:
         strcpy(__addrbuf, "unkown-cmd-type");
         break;
@@ -406,6 +410,7 @@ config_item_t* get_config_item(config_item_t* i)
     if (xlist_iter_valid(&__config_items, iter)) {
         return xlist_iter_value(iter);
     }
+    // xlist_destroy(&__config_items);
     return NULL;
 }
 
@@ -480,11 +485,26 @@ void fill_command_md(cmd_t* cmd)
     mmhash64(cmd->md, cmd->md + CMD_MD_SIZE, CMD_MAX_SIZE - CMD_MD_SIZE);
 }
 
-int check_command_md(cmd_t* cmd)
+int check_command_md(const cmd_t* cmd)
 {
     u8_t md[CMD_MD_SIZE];
 
     mmhash64(md, cmd->md + CMD_MD_SIZE, CMD_MAX_SIZE - CMD_MD_SIZE);
+    return memcmp(md, cmd->md, CMD_MD_SIZE) == 0;
+}
+
+void fill_pty_command_md(pty_cmd_t* cmd)
+{
+    mmhash64(cmd->md, cmd->md + CMD_MD_SIZE,
+        ntohs(cmd->len) + sizeof(pty_cmd_t) - CMD_MD_SIZE);
+}
+
+int check_pty_command_md(const pty_cmd_t* cmd)
+{
+    u8_t md[CMD_MD_SIZE];
+
+    mmhash64(md, cmd->md + CMD_MD_SIZE,
+        ntohs(cmd->len) + sizeof(pty_cmd_t) - CMD_MD_SIZE);
     return memcmp(md, cmd->md, CMD_MD_SIZE) == 0;
 }
 

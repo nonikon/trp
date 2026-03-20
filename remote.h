@@ -16,6 +16,7 @@ typedef struct conn_stats conn_stats_t;
 typedef struct peer_ctx peer_ctx_t;
 typedef struct pending_ctx pending_ctx_t;
 typedef struct udp_session udp_session_t;
+typedef struct child_ctx child_ctx_t;
 
 typedef union {
 #ifdef WITH_CLIREMOTE
@@ -40,6 +41,14 @@ typedef union {
         io_buf_t* last_iob;
         crypto_ctx_t edctx;
     } u;
+    /* pty remote */
+    struct {
+        peer_ctx_t* peer;
+        child_ctx_t* child;
+        io_buf_t* last_iob;
+        uv_pipe_t io;
+        crypto_ctx_t edctx;
+    } p;
 } remote_ctx_t;
 
 struct peer_ctx {
@@ -67,6 +76,7 @@ typedef struct {
     xlist_t addrinfo_reqs;  /* uv_getaddrinfo_t */
     crypto_t crypto;
     u8_t crypto_key[16];
+    u8_t ctrl_key[16];
 #ifdef WITH_CLIREMOTE
     u32_t dconnect_off;
 #endif
