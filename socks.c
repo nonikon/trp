@@ -398,7 +398,7 @@ static void on_sclient_connect(uv_stream_t* stream, int status)
 
     if (uv_accept(stream, (uv_stream_t*) &ctx->peer.t.io) == 0) {
         XLOGD("socks client connected.");
-        if (connect_tcp_xserver(ctx) == 0) {
+        if (connect_xserver(ctx, NULL) == 0) {
             uv_read_start((uv_stream_t*) &ctx->peer.t.io, on_iobuf_alloc,
                 on_sclient_read);
             /* keepalive with socks client. */

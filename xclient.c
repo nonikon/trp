@@ -282,34 +282,6 @@ static void on_tcp_xserver_connected(uv_connect_t* req, int status)
     xlist_erase(&xclient_pri.conn_reqs, xlist_value_iter(req));
 }
 
-int connect_tcp_xserver(xclient_ctx_t* ctx)
-{
-    uv_connect_t* req;
-
-    uv_tcp_init(xclient.loop, &ctx->io_xserver);
-    ctx->io_xserver.data = ctx;
-#ifdef __ANDROID__
-    if (xclient.profd && open_protected_fd(&ctx->io_xserver, 
-            xclient.xserver_addr.x.sa_family) != 0) {
-        uv_close((uv_handle_t*) &ctx->io_xserver, on_tcp_io_closed);
-        return -1;
-    }
-#endif
-    req = xlist_alloc_back(&xclient_pri.conn_reqs);
-
-    XLOGD("connecting porxy server %s...", addr_to_str(&xclient.xserver_addr));
-    req->data = ctx;
-
-    if (uv_tcp_connect(req, &ctx->io_xserver, &xclient.xserver_addr.x,
-            on_tcp_xserver_connected) == 0)
-        return 0;
-    XLOGW("connect proxy server failed immediately.");
-
-    uv_close((uv_handle_t*) &ctx->io_xserver, on_tcp_io_closed);
-    xlist_erase(&xclient_pri.conn_reqs, xlist_value_iter(req));
-    return -1;
-}
-
 void start_tcp_forward(xclient_ctx_t* ctx)
 {
     uv_buf_t wbuf;
@@ -527,7 +499,7 @@ static void on_udp_xserver_connected(uv_connect_t* req, int status)
     xlist_erase(&xclient_pri.conn_reqs, xlist_value_iter(req));
 }
 
-static int connect_udp_xserver(xclient_ctx_t* ctx)
+int connect_xserver(xclient_ctx_t* ctx, void* concb)
 {
     uv_connect_t* req;
 
@@ -546,7 +518,7 @@ static int connect_udp_xserver(xclient_ctx_t* ctx)
     req->data = ctx;
 
     if (uv_tcp_connect(req, &ctx->io_xserver, &xclient.xserver_addr.x,
-            on_udp_xserver_connected) == 0)
+            concb ? concb : on_tcp_xserver_connected) == 0)
         return 0;
     XLOGW("connect proxy server failed immediately.");
 
@@ -694,7 +666,7 @@ void send_udp_packet(io_buf_t* iob)
             SESSION_ID_SIZE);
         xclient.cryptox.encrypt(&ctx->ectx, (u8_t*) iob->buffer, iob->len);
 
-        if (connect_udp_xserver(ctx) == 0) {
+        if (connect_xserver(ctx, on_udp_xserver_connected) == 0) {
             /* move 'ctx' node from 'xclient_ctxs' to 'u_xclient_ctxs'. */
             xlist_paste_front(&xclient_pri.u_xclient_ctxs, xlist_cut(
                 &xclient.xclient_ctxs, xlist_value_iter(ctx)));

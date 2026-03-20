@@ -82,7 +82,7 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
             }
         }
 #endif
-        if (connect_tcp_xserver(ctx) == 0) {
+        if (connect_xserver(ctx, NULL) == 0) {
             /* keepalive with tunnel client. */
             uv_tcp_keepalive(&ctx->peer.t.io, 1, KEEPIDLE_TIME);
         } else {

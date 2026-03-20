@@ -38,7 +38,7 @@ void on_iobuf_alloc(uv_handle_t* handle, size_t sg_size, uv_buf_t* buf);
 void on_tcp_io_closed(uv_handle_t* handle);
 void init_connect_command(xclient_ctx_t* ctx, u8_t code, u16_t port, u8_t* addr, u32_t addrlen);
 void start_tcp_forward(xclient_ctx_t* ctx);
-int connect_tcp_xserver(xclient_ctx_t* ctx);
+int connect_xserver(xclient_ctx_t* ctx, void* arg);
 
 u32_t get_udp_packet_id(const struct sockaddr* saddr);
 const struct sockaddr* get_udp_packet_saddr(u32_t id);
