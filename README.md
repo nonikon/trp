@@ -9,16 +9,16 @@ If you already have libuv installed on your system, use the following command:
 ```bash
 mkdir build
 cd build
-cmake .. -DLIBUV_EMBEDDED=OFF
+cmake .. -DLIBUV_SRC_PATH=
 cmake --build .
 ```
 Otherwise, you will need to download the libuv source code and extract it first, such as:
 ```bash
-wget https://dist.libuv.org/dist/v1.46.0/libuv-v1.46.0.tar.gz
-tar xf libuv-v1.46.0.tar.gz
+wget https://dist.libuv.org/dist/v1.52.1/libuv-v1.52.1.tar.gz
+tar xf libuv-v1.52.1.tar.gz
 mkdir build
 cd build
-cmake .. -DLIBUV_SRC_PATH=../libuv-v1.46.0
+cmake .. -DLIBUV_SRC_PATH=../libuv-v1.52.1
 cmake --build .
 ```
 You can also choose to download the x86_64 windows and linux binaries directly from [release](https://github.com/nonikon/trp/releases) page.
@@ -29,7 +29,7 @@ You can also choose to download the x86_64 windows and linux binaries directly f
 APPLICATION ---> | proxy-client | ---> | proxy-server | ---> REMOTE
                  +--------------+      |      |       |
                  socks.c/tunnel.c      |      v       |      +--------+
-                                       |    server  - | ---> | client | ---> REMOTE
+                    /shell.c           |    server  - | ---> | client | ---> REMOTE
                                        +--------------+      +--------+
                                            server.c           client.c
 ```
