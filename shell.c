@@ -338,7 +338,7 @@ static void on_winch_signal(uv_signal_t* handle, int signum)
 {
     int w, h, r;
 
-    r = uv_tty_get_winsize(&xshctx.io_stdout, &w, &h);
+    r = uv_tty_get_winsize(&xshctx.io_stdout, &w, &h); /* NOTE: 'stdout' is needed. */
     if (r == 0) {
         io_buf_t* iob = xlist_alloc_back(&xshctx.io_buffers);
         pty_cmd_t* cmd = (pty_cmd_t*) iob->buffer;
@@ -378,6 +378,7 @@ static void on_xserver_connected(uv_connect_t* req, int status)
             on_xserver_read);
         uv_signal_start(&xshctx.wch_watcher, on_winch_signal, SIGWINCH);
 
+        uv_tty_set_mode(&xshctx.io_stdin, UV_TTY_MODE_RAW_VT); /* NOTE: 'stdin' and 'xx_VT' is needed. */
         /* keepalive with proxy server. */
         uv_tcp_keepalive(&xshctx.io_xserver, 1, KEEPIDLE_TIME);
         uv_tcp_nodelay(&xshctx.io_xserver, 1);
@@ -615,7 +616,6 @@ static int parse_args(int argc, char** argv)
     uv_signal_init(loop, &xshctx.wch_watcher);
     uv_tcp_init(loop, &xshctx.io_xserver);
     XLOGI("Connecting porxy server %s...", addr_to_str(&xserver_addr));
-    uv_tty_set_mode(&xshctx.io_stdin, UV_TTY_MODE_RAW);
 
     ec = uv_tcp_connect(&xshctx.conn_req, &xshctx.io_xserver, &xserver_addr.x,
             on_xserver_connected);
