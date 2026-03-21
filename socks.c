@@ -135,10 +135,11 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
             buf->len = 8;
 
             if (buf->base[1] == 90) { /* 'CD' == 90, no error */
-                /* stop reading from socks client until proxy server connected. */
-                uv_read_stop((uv_stream_t*) &ctx->peer.t.io);
                 if (ctx->xconnected) {
-                    start_tcp_forward(ctx);
+                    start_tcp_forward(ctx, 1);
+                } else {
+                    /* stop reading from socks client until proxy server connected. */
+                    uv_read_stop((uv_stream_t*) &ctx->peer.t.io);
                 }
                 return 0;
             }
@@ -229,10 +230,11 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
             }
 
             if (buf->base[1] == 0x00) { /* no error */
-                /* stop reading from socks client until proxy server connected. */
-                uv_read_stop((uv_stream_t*) &ctx->peer.t.io);
                 if (ctx->xconnected) {
-                    start_tcp_forward(ctx);
+                    start_tcp_forward(ctx, 1);
+                } else {
+                    /* stop reading from socks client until proxy server connected. */
+                    uv_read_stop((uv_stream_t*) &ctx->peer.t.io);
                 }
                 /* zero BIND.ADDR and BIND.PORT. uv_tcp_getsockname() maybe better. */
                 memset(buf->base + 4, 0, 6);

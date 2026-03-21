@@ -266,7 +266,7 @@ static void on_tcp_xserver_connected(uv_connect_t* req, int status)
         /* 'status' will be 'ECANCELED' when 'uv_close' is called before proxy server connected.
          * as a result, we should check it to avoid calling 'uv_close' twice.
          */
-        if (status != -ECANCELED) {
+        if (status != UV_ECANCELED) {
             uv_close((uv_handle_t*) &ctx->io_xserver, on_tcp_io_closed);
             uv_close((uv_handle_t*) &ctx->peer.t.io, on_tcp_io_closed);
         }
@@ -275,14 +275,14 @@ static void on_tcp_xserver_connected(uv_connect_t* req, int status)
         XLOGD("proxy server connected.");
 
         if (ctx->pending_iob) {
-            start_tcp_forward(ctx);
+            start_tcp_forward(ctx, 0);
         }
     }
 
     xlist_erase(&xclient_pri.conn_reqs, xlist_value_iter(req));
 }
 
-void start_tcp_forward(xclient_ctx_t* ctx)
+void start_tcp_forward(xclient_ctx_t* ctx, int reading)
 {
     uv_buf_t wbuf;
 
@@ -299,7 +299,12 @@ void start_tcp_forward(xclient_ctx_t* ctx)
     }
     uv_read_start((uv_stream_t*) &ctx->io_xserver, on_iobuf_alloc,
         on_tcp_xserver_read);
-    uv_read_start((uv_stream_t*) &ctx->peer.t.io, on_iobuf_alloc, on_tcp_peer_read);
+    if (reading) {
+        /* reset read callback */
+        ctx->peer.t.io.read_cb = on_tcp_peer_read; /* or 'uv_read_stop + uv_read_start' */
+    } else {
+        uv_read_start((uv_stream_t*) &ctx->peer.t.io, on_iobuf_alloc, on_tcp_peer_read);
+    }
     /* keepalive with proxy server. */
     // uv_tcp_keepalive(&ctx->io_xserver, 1, KEEPIDLE_TIME);
 
