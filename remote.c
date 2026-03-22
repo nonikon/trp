@@ -987,7 +987,22 @@ static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
     }
     if (chldpid == 0) {
         /* note: 'ptmx' was closed in 'forkpty'. */
+#ifdef WITH_PTYLOGIN
         execl("/bin/login", "/bin/login", NULL);
+#else
+        const char* paths[] = { "/bin/bash", "/bin/sh", };
+        size_t i;
+
+        for (i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
+            if (access(paths[i], X_OK) == 0) {
+                const char* home = getenv("HOME");
+
+                if (home) chdir(home);
+                execl(paths[i], paths[i], NULL);
+                break;
+            }
+        }
+#endif
         /* write errmsg to peer. */
         printf("Launch pty proc failed: %s\n", strerror(errno));
         exit(1);
