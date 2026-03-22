@@ -4,7 +4,9 @@
  */
 
 #include <string.h>
-#ifndef _WIN32
+#ifdef _WIN32
+#include <io.h> /* for _close() */
+#else
 #include <stdlib.h> /* for exit() */
 #include <unistd.h> /* for execl() etc.*/
 #if defined(__linux__)
@@ -59,8 +61,13 @@ struct pending_ctx {
 #endif
 
 struct child_ctx {
+#ifdef _WIN32
+    uv_pipe_t io;           /* read side */
+    uv_process_t pid;
+#else
     remote_ctx_t* parent;   /* the 'remote_ctx_t' belonging to */
     int pid;
+#endif
 };
 
 /* remote private data */
@@ -690,7 +697,26 @@ static void on_tcp_remote_domain_resolved(
     xlist_erase(&remote.addrinfo_reqs, xlist_value_iter(req));
 }
 
-#ifndef _WIN32
+#ifdef _WIN32
+static void on_pty_remote_closed(uv_handle_t* handle)
+{
+    remote_ctx_t* rctx = handle->data;
+    child_ctx_t* ctx = rctx->p.child;
+
+    handle->data = NULL;
+    if (!((size_t) ctx->io.data | (size_t) ctx->pid.data | (size_t) rctx->p.io.data)) {
+        if (rctx->p.last_iob) {
+            xlist_erase(&remote.io_buffers, xlist_value_iter(rctx->p.last_iob));
+        }
+        xlist_erase(&remote_pri.remote_ctxs, xlist_value_iter(rctx));
+        xlist_erase(&remote_pri.child_ctxs, xlist_value_iter(ctx));
+
+        XLOGD("current %zu remotes, %zu childs, %zu iobufs.",
+            xlist_size(&remote_pri.remote_ctxs), xlist_size(&remote_pri.child_ctxs),
+            xlist_size(&remote.io_buffers));
+    }
+}
+#else
 static void on_pty_remote_closed(uv_handle_t* handle)
 {
     remote_ctx_t* ctx = handle->data;
@@ -705,6 +731,7 @@ static void on_pty_remote_closed(uv_handle_t* handle)
         xlist_size(&remote_pri.remote_ctxs), xlist_size(&remote_pri.child_ctxs),
         xlist_size(&remote.io_buffers));
 }
+#endif
 
 static void on_pty_remote_write(uv_write_t* req, int status)
 {
@@ -734,6 +761,7 @@ static void send_pty_packet(remote_ctx_t* ctx, pty_cmd_t* cmd)
         wbuf.base = iob->buffer;
         wbuf.len = ntohs(cmd->len);
         memcpy(wbuf.base, cmd->data, wbuf.len);
+        // xlog_printhex(wbuf.base, wbuf.len);
 
         iob->wreq.data = ctx;
         ctx->p.peer->stats->rxbytes += wbuf.len;
@@ -741,6 +769,9 @@ static void send_pty_packet(remote_ctx_t* ctx, pty_cmd_t* cmd)
 
     } else if (cmd->cmd == PTYCMD_WNDSIZE) {
         if (cmd->len == htons(4)) {
+#ifdef _WIN32
+            XLOGW("TODO");
+#else
             struct winsize wsz = { 0 };
 
             wsz.ws_col = ntohs(*(u16_t*) (cmd->data + 0));
@@ -752,6 +783,7 @@ static void send_pty_packet(remote_ctx_t* ctx, pty_cmd_t* cmd)
                 XLOGW("update pid %d wndsize to %ux%u failed: %s", ctx->p.child->pid,
                     wsz.ws_col, wsz.ws_row, strerror(errno));
             }
+#endif
         } else {
             XLOGW("error pty packet len %u.", ntohs(cmd->len));
         }
@@ -855,9 +887,11 @@ static void on_pty_peer_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t*
 
     if (nread < 0) {
         XLOGD("disconnected from peer: %s.", uv_err_name((int) nread));
-
-        // uv_close((uv_handle_t*) stream, on_peer_closed);
+#ifdef _WIN32
+        uv_process_kill(&ctx->remote->p.child->pid, SIGTERM);
+#else
         uv_kill(ctx->remote->p.child->pid, SIGTERM);
+#endif
         /* 'buf->base' may be 'NULL' when 'nread' < 0. */
         if (!buf->base) return;
     }
@@ -883,8 +917,13 @@ static void on_pty_peer_write(uv_write_t* req, int status)
         XLOGD("pty peer write queue cleared.");
 
         /* peer write queue cleared, start reading from remote. */
+#ifdef _WIN32
+        uv_read_start((uv_stream_t*) &ctx->remote->p.child->io, on_pty_remote_rbuf_alloc,
+            on_pty_remote_read);
+#else
         uv_read_start((uv_stream_t*) &ctx->remote->p.io, on_pty_remote_rbuf_alloc,
             on_pty_remote_read);
+#endif
         ctx->remote_blocked = 0;
     }
 
@@ -906,6 +945,7 @@ static void on_pty_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_
         cmd->len = htons((u16_t) nread);
         cmd->__2 = 0;
         fill_pty_command_md(cmd);
+        // xlog_printhex(cmd->data, nread);
 
         wbuf.base = iob->buffer;
         wbuf.len = sizeof(pty_cmd_t) + nread;
@@ -931,6 +971,8 @@ static void on_pty_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_
 
     if (nread < 0) {
         XLOGD("disconnected from remote: %s.", uv_err_name((int) nread));
+        /* NOTE: handles will be closed in process exit callback. */
+
         /* 'buf->base' may be 'NULL' when 'nread' < 0. */
         if (!buf->base) return;
     }
@@ -938,7 +980,25 @@ static void on_pty_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_
     xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
 }
 
-static void on_child_signal(uv_signal_t* handle, int signum)
+#ifdef _WIN32
+static void on_pty_child_exit(uv_process_t* req, int64_t status, int signal)
+{
+    remote_ctx_t* rctx = req->data;
+    child_ctx_t* ctx = rctx->p.child;
+
+    if (signal) {
+        XLOGI("pty proc %d signaled by %d.", ctx->pid.pid, signal);
+    } else {
+        XLOGI("pty proc %d exited with status %d.", ctx->pid.pid, signal);
+    }
+    uv_close((uv_handle_t*) &rctx->p.peer->io, on_peer_closed);
+    uv_close((uv_handle_t*) &rctx->p.io, on_pty_remote_closed);
+
+    uv_close((uv_handle_t*) &ctx->io, on_pty_remote_closed);
+    uv_close((uv_handle_t*) &ctx->pid, on_pty_remote_closed);
+}
+#else
+static void on_pty_child_signal(uv_signal_t* handle, int signum)
 {
     xlist_iter_t iter = xlist_begin(&remote_pri.child_ctxs);
     int pid, status;
@@ -963,12 +1023,23 @@ static void on_child_signal(uv_signal_t* handle, int signum)
         iter = xlist_iter_next(iter);
     }
 }
+#endif
 
 static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
 {
     remote_ctx_t* rctx;
     io_buf_t* iob = ctx->pending_iob;
+#ifdef _WIN32
+    child_ctx_t* cctx;
+    uv_process_options_t options;
+    uv_stdio_container_t childio[2];
+    char* args[2];
+    int fds_stdin[2];
+    int fds_stdout[2];
+    int errc;
+#else
     int chldpid, ptmx;
+#endif
 
     if (*(u32_t*) remote.ctrl_key == 0) {
         XLOGD("pty function was disabled.");
@@ -978,14 +1049,74 @@ static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
         XLOGD("invalid control key.");
         return -1;
     }
-    if (!remote_pri.child_watcher.data) {
-        uv_signal_init(remote.loop, &remote_pri.child_watcher);
-        uv_signal_start(&remote_pri.child_watcher, on_child_signal, SIGCHLD);
-        remote_pri.child_watcher.data = (void*) 1;
-    }
     if (xlist_size(&remote_pri.child_ctxs) > MAX_PTY_COUNT) {
         XLOGW("pty count reach max.");
         return -1;
+    }
+#ifdef _WIN32
+    errc = uv_pipe(fds_stdin, UV_NONBLOCK_PIPE, UV_NONBLOCK_PIPE);
+    if (errc != 0) {
+        XLOGE("uv_pipe failed: %s.", uv_err_name(errc));
+        return -1;
+    }
+    errc = uv_pipe(fds_stdout, UV_NONBLOCK_PIPE, UV_NONBLOCK_PIPE);
+    if (errc != 0) {
+        _close(fds_stdin[0]);
+        _close(fds_stdin[1]);
+        XLOGE("uv_pipe failed: %s.", uv_err_name(errc));
+        return -1;
+    }
+
+    // args[0] = "C:\\Windows\\System32\\cmd.exe";
+    args[0] = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+    args[1] = NULL;
+
+    childio[0].flags = UV_INHERIT_FD;
+    childio[0].data.fd = fds_stdin[0];
+    childio[1].flags = UV_INHERIT_FD;
+    childio[1].data.fd = fds_stdout[1];
+
+    memset(&options, 0, sizeof(options));
+    options.flags = UV_PROCESS_WINDOWS_HIDE
+                        | UV_PROCESS_WINDOWS_HIDE_CONSOLE
+                        | UV_PROCESS_WINDOWS_HIDE_GUI /* | UV_PROCESS_DETACHED */;
+    options.stdio = childio;
+    options.stdio_count = sizeof(childio) / sizeof(childio[0]);
+    options.exit_cb = on_pty_child_exit;
+    options.file = args[0];
+    options.args = args;
+    options.cwd = "C:\\";
+
+    cctx = xlist_alloc_back(&remote_pri.child_ctxs);
+    errc = uv_spawn(remote.loop, &cctx->pid, &options);
+    if (errc != 0) {
+        XLOGE("uv_spawn failed: %s.", uv_err_name(errc));
+        xlist_erase(&remote_pri.child_ctxs, xlist_value_iter(cctx));
+        return -1;
+    }
+    /* close unused fds. */
+    _close(fds_stdin[0]);
+    _close(fds_stdout[1]);
+    XLOGI("pty proc spawned, pid %d, nodelay %d.", cctx->pid.pid, ctx->nodelay);
+
+    rctx = xlist_alloc_back(&remote_pri.remote_ctxs);
+
+    uv_pipe_init(remote.loop, &rctx->p.io, 0);
+    uv_pipe_init(remote.loop, &cctx->io, 0);
+    uv_pipe_open(&rctx->p.io, fds_stdin[1]);
+    uv_pipe_open(&cctx->io, fds_stdout[0]);
+
+    rctx->p.peer = ctx;
+    rctx->p.child = cctx;
+    rctx->p.last_iob = NULL;
+    rctx->p.io.data = rctx;
+    cctx->io.data = rctx; /* NOTE: can't be 'cctx'. */
+    cctx->pid.data = rctx;
+#else
+    if (!remote_pri.child_watcher.data) {
+        uv_signal_init(remote.loop, &remote_pri.child_watcher);
+        uv_signal_start(&remote_pri.child_watcher, on_pty_child_signal, SIGCHLD);
+        remote_pri.child_watcher.data = (void*) 1;
     }
     chldpid = forkpty(&ptmx, NULL, NULL, NULL);
     if (chldpid < 0) {
@@ -1023,18 +1154,18 @@ static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
     uv_pipe_init(remote.loop, &rctx->p.io, 0);
     uv_pipe_open(&rctx->p.io, ptmx);
 
-    convert_nonce((u8_t*) iob->buffer);
-    remote.crypto.init(&rctx->p.edctx, remote.crypto_key, (u8_t*) iob->buffer);
-
     rctx->p.peer = ctx;
     rctx->p.child = xlist_alloc_back(&remote_pri.child_ctxs);
     rctx->p.child->parent = rctx;
     rctx->p.child->pid = chldpid;
     rctx->p.last_iob = NULL;
     rctx->p.io.data = rctx;
-
+#endif
     ctx->remote = rctx;
     ctx->pending_iob = NULL;
+
+    convert_nonce((u8_t*) iob->buffer);
+    remote.crypto.init(&rctx->p.edctx, remote.crypto_key, (u8_t*) iob->buffer);
 
     if (iob->len == 0 || fwd_peer_pty_packets(rctx, iob) == 0) {
         /* 'iob' was processed totally, release now. */
@@ -1043,11 +1174,15 @@ static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
     if (ctx->nodelay) {
         uv_tcp_nodelay(&ctx->io, 1);
     }
+#ifdef _WIN32
+    uv_read_start((uv_stream_t*) &cctx->io, on_pty_remote_rbuf_alloc,
+        on_pty_remote_read);
+#else
     uv_read_start((uv_stream_t*) &rctx->p.io, on_pty_remote_rbuf_alloc,
         on_pty_remote_read);
+#endif
     return 0;
 }
-#endif
 
 static inline void free_udp_session(udp_session_t* sess)
 {
@@ -1637,15 +1772,12 @@ int do_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         ctx->stats = &remote_pri.stats_ctrl;
         ++remote_pri.stats_ctrl.nconnect;
         XLOGD("CONNECT_PTY cmd (%d) from peer, process.", cmd->flag);
-#ifndef _WIN32
+
         if (connect_pty_remote(ctx, cmd->data) == 0) {
             /* reset read callback */
             ctx->io.read_cb = on_pty_peer_read; /* or 'uv_read_stop + uv_read_start' */
             return 0;
         }
-#else
-        XLOGW("connect pty is not supported yet.");
-#endif
         return -1;
     }
 
