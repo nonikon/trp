@@ -7,8 +7,15 @@
 #ifndef _WIN32
 #include <stdlib.h> /* for exit() */
 #include <unistd.h> /* for execl() etc.*/
+#if defined(__linux__)
 #include <pty.h> /* for forkpty() */
+#elif defined(__OpenBSD__) || defined(__NetBSD__) || defined(__APPLE__)
+#include <util.h> /* for forkpty() */
+#elif defined(__FreeBSD__) || defined(__DragonFly__)
+#include <libutil.h> /* for forkpty() */
+#endif
 #include <sys/wait.h> /* for waitpid() */
+#include <sys/ioctl.h> /* for ioctl() */
 #endif
 
 #include "remote.h"
