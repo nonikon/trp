@@ -63,7 +63,8 @@ struct pending_ctx {
 struct child_ctx {
 #ifdef _WIN32
     uv_pipe_t io;           /* read side */
-    uv_process_t pid;
+    uv_process_t proc;
+    int sigfd;
 #else
     remote_ctx_t* parent;   /* the 'remote_ctx_t' belonging to */
     int pid;
@@ -704,7 +705,8 @@ static void on_pty_remote_closed(uv_handle_t* handle)
     child_ctx_t* ctx = rctx->p.child;
 
     handle->data = NULL;
-    if (!((size_t) ctx->io.data | (size_t) ctx->pid.data | (size_t) rctx->p.io.data)) {
+    if (!((size_t) ctx->io.data | (size_t) ctx->proc.data | (size_t) rctx->p.io.data)) {
+        _close(ctx->sigfd);
         if (rctx->p.last_iob) {
             xlist_erase(&remote.io_buffers, xlist_value_iter(rctx->p.last_iob));
         }
@@ -770,7 +772,19 @@ static void send_pty_packet(remote_ctx_t* ctx, pty_cmd_t* cmd)
     } else if (cmd->cmd == PTYCMD_WNDSIZE) {
         if (cmd->len == htons(4)) {
 #ifdef _WIN32
-            XLOGW("TODO");
+            /* https://github.com/microsoft/terminal/blob/main/src/winconpty/winconpty.cpp */
+            unsigned short sigpkt[3];
+
+            sigpkt[0] = 8; /* PTY_SIGNAL_RESIZE_WINDOW */
+            sigpkt[1] = ntohs(*(u16_t*) (cmd->data + 0));
+            sigpkt[2] = ntohs(*(u16_t*) (cmd->data + 2));
+            if (_write(ctx->p.child->sigfd, sigpkt, sizeof(sigpkt)) == sizeof(sigpkt)) {
+                XLOGD("update pid %d wndsize to %ux%u.", ctx->p.child->proc.pid,
+                    sigpkt[1], sigpkt[2]);
+            } else {
+                XLOGW("update pid %d wndsize to %ux%u failed: %s",
+                    ctx->p.child->proc.pid, sigpkt[1], sigpkt[2], strerror(errno));
+            }
 #else
             struct winsize wsz = { 0 };
 
@@ -888,7 +902,7 @@ static void on_pty_peer_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t*
     if (nread < 0) {
         XLOGD("disconnected from peer: %s.", uv_err_name((int) nread));
 #ifdef _WIN32
-        uv_process_kill(&ctx->remote->p.child->pid, SIGTERM);
+        uv_process_kill(&ctx->remote->p.child->proc, SIGTERM);
 #else
         uv_kill(ctx->remote->p.child->pid, SIGTERM);
 #endif
@@ -987,15 +1001,15 @@ static void on_pty_child_exit(uv_process_t* req, int64_t status, int signal)
     child_ctx_t* ctx = rctx->p.child;
 
     if (signal) {
-        XLOGI("pty proc %d signaled by %d.", ctx->pid.pid, signal);
+        XLOGI("pty proc %d signaled by %d.", ctx->proc.pid, signal);
     } else {
-        XLOGI("pty proc %d exited with status %d.", ctx->pid.pid, signal);
+        XLOGI("pty proc %d exited with status %d.", ctx->proc.pid, signal);
     }
     uv_close((uv_handle_t*) &rctx->p.peer->io, on_peer_closed);
     uv_close((uv_handle_t*) &rctx->p.io, on_pty_remote_closed);
 
     uv_close((uv_handle_t*) &ctx->io, on_pty_remote_closed);
-    uv_close((uv_handle_t*) &ctx->pid, on_pty_remote_closed);
+    uv_close((uv_handle_t*) &ctx->proc, on_pty_remote_closed);
 }
 #else
 static void on_pty_child_signal(uv_signal_t* handle, int signum)
@@ -1033,9 +1047,13 @@ static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
     child_ctx_t* cctx;
     uv_process_options_t options;
     uv_stdio_container_t childio[2];
-    char* args[2];
-    int fds_stdin[2];
-    int fds_stdout[2];
+    HANDLE sighd;
+    char sighds[16];
+    char cwd[MAX_PATH] = "C:\\";
+    char* args[4];
+    int fds_signal[2] = { -1, -1 };
+    int fds_stdin[2] = { -1, -1 };
+    int fds_stdout[2] = { -1, -1 };
     int errc;
 #else
     int chldpid, ptmx;
@@ -1054,22 +1072,27 @@ static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
         return -1;
     }
 #ifdef _WIN32
-    errc = uv_pipe(fds_stdin, UV_NONBLOCK_PIPE, UV_NONBLOCK_PIPE);
+    errc = uv_pipe(fds_signal, 0, UV_NONBLOCK_PIPE);
     if (errc != 0) {
         XLOGE("uv_pipe failed: %s.", uv_err_name(errc));
         return -1;
     }
-    errc = uv_pipe(fds_stdout, UV_NONBLOCK_PIPE, UV_NONBLOCK_PIPE);
-    if (errc != 0) {
-        _close(fds_stdin[0]);
-        _close(fds_stdin[1]);
-        XLOGE("uv_pipe failed: %s.", uv_err_name(errc));
-        return -1;
-    }
+    uv_pipe(fds_stdin, 0, UV_NONBLOCK_PIPE); /* no need to check result */
+    uv_pipe(fds_stdout, UV_NONBLOCK_PIPE, 0);
+    /* NOTE: use 'CreatePseudoConsole + CreateProcess' maybe better,
+     * but the subproccess can't be managed by libuv. */
+    sighd = (HANDLE) _get_osfhandle(fds_signal[0]);
+    /* NOTE: 'HANDLE' is just a index on Windows. */
+    sprintf(sighds, "0x%x", (u32_t) sighd);
+    /* let read side of pipe handle can be inherited by subproccess. */
+    SetHandleInformation(sighd, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+    GetEnvironmentVariableA("USERPROFILE", cwd, sizeof(cwd)); /* ignore failure */
 
-    // args[0] = "C:\\Windows\\System32\\cmd.exe";
-    args[0] = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
-    args[1] = NULL;
+    /* https://github.com/microsoft/terminal/blob/main/src/host/ConsoleArguments.cpp */
+    args[0] = "C:\\Windows\\System32\\conhost.exe";
+    args[1] = "--signal";
+    args[2] = sighds; /* passing read side of pipe handle to subproccess */
+    args[3] = NULL;
 
     childio[0].flags = UV_INHERIT_FD;
     childio[0].data.fd = fds_stdin[0];
@@ -1085,19 +1108,20 @@ static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
     options.exit_cb = on_pty_child_exit;
     options.file = args[0];
     options.args = args;
-    options.cwd = "C:\\";
+    options.cwd = cwd;
 
     cctx = xlist_alloc_back(&remote_pri.child_ctxs);
-    errc = uv_spawn(remote.loop, &cctx->pid, &options);
+    errc = uv_spawn(remote.loop, &cctx->proc, &options);
     if (errc != 0) {
         XLOGE("uv_spawn failed: %s.", uv_err_name(errc));
         xlist_erase(&remote_pri.child_ctxs, xlist_value_iter(cctx));
         return -1;
     }
+    XLOGI("pty proc %d spawned, nodelay %d.", cctx->proc.pid, ctx->nodelay);
     /* close unused fds. */
+    _close(fds_signal[0]);
     _close(fds_stdin[0]);
     _close(fds_stdout[1]);
-    XLOGI("pty proc spawned, pid %d, nodelay %d.", cctx->pid.pid, ctx->nodelay);
 
     rctx = xlist_alloc_back(&remote_pri.remote_ctxs);
 
@@ -1111,7 +1135,8 @@ static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
     rctx->p.last_iob = NULL;
     rctx->p.io.data = rctx;
     cctx->io.data = rctx; /* NOTE: can't be 'cctx'. */
-    cctx->pid.data = rctx;
+    cctx->proc.data = rctx;
+    cctx->sigfd = fds_signal[1];
 #else
     if (!remote_pri.child_watcher.data) {
         uv_signal_init(remote.loop, &remote_pri.child_watcher);
@@ -1146,8 +1171,7 @@ static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
         exit(1);
     }
     fcntl(ptmx, F_SETFD, FD_CLOEXEC); /* for the next 'forkpty' */
-    XLOGI("pty proc spawned, pid %d, master fd %d, nodelay %d.", chldpid, ptmx,
-        ctx->nodelay);
+    XLOGI("pty proc %d spawned, master fd %d, nodelay %d.", chldpid, ptmx, ctx->nodelay);
 
     rctx = xlist_alloc_back(&remote_pri.remote_ctxs);
 
