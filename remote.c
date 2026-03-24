@@ -901,10 +901,15 @@ static void on_pty_peer_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t*
 
     if (nread < 0) {
         XLOGD("disconnected from peer: %s.", uv_err_name((int) nread));
+
+        uv_close((uv_handle_t*) &ctx->io, on_peer_closed);
+        uv_close((uv_handle_t*) &ctx->remote->p.io, on_pty_remote_closed);
 #ifdef _WIN32
+        uv_close((uv_handle_t*) &ctx->remote->p.child->io, on_pty_remote_closed);
         uv_process_kill(&ctx->remote->p.child->proc, SIGTERM);
 #else
-        uv_kill(ctx->remote->p.child->pid, SIGTERM);
+        /* subprocess will be killed by SIGHUP when pty master fd is closed. */
+        // uv_kill(ctx->remote->p.child->pid, SIGTERM);
 #endif
         /* 'buf->base' may be 'NULL' when 'nread' < 0. */
         if (!buf->base) return;
@@ -985,8 +990,16 @@ static void on_pty_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_
 
     if (nread < 0) {
         XLOGD("disconnected from remote: %s.", uv_err_name((int) nread));
-        /* NOTE: handles will be closed in process exit callback. */
 
+        uv_close((uv_handle_t*) &ctx->p.io, on_pty_remote_closed);
+        uv_close((uv_handle_t*) &ctx->p.peer->io, on_peer_closed);
+#ifdef _WIN32
+        uv_close((uv_handle_t*) &ctx->p.child->io, on_pty_remote_closed);
+        uv_process_kill(&ctx->p.child->proc, SIGTERM);
+#else
+        /* subprocess will be killed by SIGHUP when pty master fd is closed. */
+        // uv_kill(ctx->p.child->pid, SIGTERM);
+#endif
         /* 'buf->base' may be 'NULL' when 'nread' < 0. */
         if (!buf->base) return;
     }
@@ -997,44 +1010,26 @@ static void on_pty_remote_read(uv_stream_t* stream, ssize_t nread, const uv_buf_
 #ifdef _WIN32
 static void on_pty_child_exit(uv_process_t* req, int64_t status, int signal)
 {
-    remote_ctx_t* rctx = req->data;
-    child_ctx_t* ctx = rctx->p.child;
+    child_ctx_t* ctx = ((remote_ctx_t*) req->data)->p.child;
 
+    uv_close((uv_handle_t*) req, on_pty_remote_closed);
     if (signal) {
         XLOGI("pty proc %d signaled by %d.", ctx->proc.pid, signal);
     } else {
         XLOGI("pty proc %d exited with status %d.", ctx->proc.pid, signal);
     }
-    uv_close((uv_handle_t*) &rctx->p.peer->io, on_peer_closed);
-    uv_close((uv_handle_t*) &rctx->p.io, on_pty_remote_closed);
-
-    uv_close((uv_handle_t*) &ctx->io, on_pty_remote_closed);
-    uv_close((uv_handle_t*) &ctx->proc, on_pty_remote_closed);
 }
 #else
 static void on_pty_child_signal(uv_signal_t* handle, int signum)
 {
-    xlist_iter_t iter = xlist_begin(&remote_pri.child_ctxs);
     int pid, status;
 
-    while (iter != xlist_end(&remote_pri.child_ctxs)) {
-        child_ctx_t* ctx = xlist_iter_value(iter);
-
-        do {
-            pid = waitpid(ctx->pid, &status, WNOHANG);
-        } while (pid == -1 && errno == EINTR);
-
-        if (pid == ctx->pid) {
-            if (WIFEXITED(status)) {
-                XLOGI("pty proc %d exited with status %d.", pid, WEXITSTATUS(status));
-            } else {
-                XLOGI("pty proc %d signaled by %d.", pid, WTERMSIG(status));
-            }
-            uv_close((uv_handle_t*) &ctx->parent->p.peer->io, on_peer_closed);
-            uv_close((uv_handle_t*) &ctx->parent->p.io, on_pty_remote_closed);
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        if (WIFEXITED(status)) {
+            XLOGI("pty proc %d exited with status %d.", pid, WEXITSTATUS(status));
+        } else {
+            XLOGI("pty proc %d signaled by %d.", pid, WTERMSIG(status));
         }
-
-        iter = xlist_iter_next(iter);
     }
 }
 #endif
@@ -1048,7 +1043,7 @@ static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
     uv_process_options_t options;
     uv_stdio_container_t childio[2];
     HANDLE sighd;
-    char sighds[16];
+    char sighds[20];
     char cwd[MAX_PATH] = "C:\\";
     char* args[4];
     int fds_signal[2] = { -1, -1 };
@@ -1083,7 +1078,7 @@ static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
      * but the subproccess can't be managed by libuv. */
     sighd = (HANDLE) _get_osfhandle(fds_signal[0]);
     /* NOTE: 'HANDLE' is just a index on Windows. */
-    sprintf(sighds, "0x%x", (u32_t) sighd);
+    sprintf(sighds, "0x%zx", (size_t) sighd);
     /* let read side of pipe handle can be inherited by subproccess. */
     SetHandleInformation(sighd, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
     GetEnvironmentVariableA("USERPROFILE", cwd, sizeof(cwd)); /* ignore failure */
