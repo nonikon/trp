@@ -3,6 +3,7 @@
 - SOCKS5 TCP/UDP proxy and SOCKS4/SOCKS4a TCP proxy.
 - Linux iptable redirect (TCP).
 - TCP/UDP port mapping.
+- Cross-platform remote terminal.
 
 ## Build
 If you already have libuv installed on your system, use the following command:
@@ -24,14 +25,26 @@ cmake --build .
 You can also choose to download the x86_64 windows and linux binaries directly from [release](https://github.com/nonikon/trp/releases) page.
 
 ## Architecture
+- Network proxy
 ```text
                  +--------------+      +--------------+
 APPLICATION ---> | proxy-client | ---> | proxy-server | ---> REMOTE
                  +--------------+      |      |       |
                  socks.c/tunnel.c      |      v       |      +--------+
-                    /shell.c           |    server  - | ---> | client | ---> REMOTE
+                                       |    server  - | ---> | client | ---> REMOTE
                                        +--------------+      +--------+
                                            server.c           client.c
+```
+
+- Remote terminal
+```text
+                 +--------------+      +-----------------------+
+                 |   trp-shell  | ---> | proxy-server ---> PTY |
+                 +--------------+      |      |       +--------+
+                      shell.c          |      v       |      +-----------------+
+                                       |    server  - | ---> | client ---> PTY |
+                                       +--------------+      +-----------------+
+                                           server.c                client.c
 ```
 
 ## Example Usage
@@ -128,6 +141,19 @@ Finally, start `proxy-client` locally (should have access to the `server`) on de
     ```bash
     dig -p 5353 @127.0.0.1 www.google.com
     ```
+
+### Access terminal of `server`
+- Run the following command to start remote terminal (Note: The `server` should run with an extra argument `-T CTRL_KEY_OF_SERVER` to enable remote terminal.):
+    ```bash
+    ./trp-shell -x 1.2.3.4:2222 -k KEY_OF_SERVER -T CTRL_KEY_OF_SERVER
+    ```
+
+### Access terminal of `client`
+- Run the following command to start remote terminal (Note: The `client` should run with an extra argument `-T CTRL_KEY_OF_SERVER` to enable remote terminal.):
+    ```bash
+    ./trp-shell -x 1.2.3.4:2222 -k KEY_OF_SERVER -T CTRL_KEY_OF_SERVER -d DEVID_OF_CLIENT -K KEY_OF_CLIENT
+    ```
+
 NOTE: Config file is supported by `-C` command option, see [trp.ini](trp.ini).
 
 ## Lisence
