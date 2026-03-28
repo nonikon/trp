@@ -83,7 +83,7 @@ static struct {
     uv_signal_t child_watcher;
 #endif
     xlist_t child_ctxs;     /* child_ctx_t */
-    conn_stats_t stats_ctrl; // stats_pty? TODO
+    conn_stats_t stats_pty;
     conn_stats_t stats_ipv4;
     conn_stats_t stats_ipv6;
     conn_stats_t stats_dm;
@@ -1024,6 +1024,7 @@ static void on_pty_child_signal(uv_signal_t* handle, int signum)
 {
     int pid, status;
 
+    /* NOTE: 'waitpid(-1, ...)' may affect uv_spawn()'s exit_cb... */
     while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
         if (WIFEXITED(status)) {
             XLOGI("pty proc %d exited with status %d.", pid, WEXITSTATUS(status));
@@ -1095,9 +1096,10 @@ static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
     childio[1].data.fd = fds_stdout[1];
 
     memset(&options, 0, sizeof(options));
-    options.flags = UV_PROCESS_WINDOWS_HIDE
-                        | UV_PROCESS_WINDOWS_HIDE_CONSOLE
-                        | UV_PROCESS_WINDOWS_HIDE_GUI /* | UV_PROCESS_DETACHED */;
+    if (!(ctx->addrpref & 0x01)) {
+        options.flags = UV_PROCESS_WINDOWS_HIDE | UV_PROCESS_WINDOWS_HIDE_CONSOLE
+            | UV_PROCESS_WINDOWS_HIDE_GUI;
+    }
     options.stdio = childio;
     options.stdio_count = sizeof(childio) / sizeof(childio[0]);
     options.exit_cb = on_pty_child_exit;
@@ -1112,7 +1114,7 @@ static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
         xlist_erase(&remote_pri.child_ctxs, xlist_value_iter(cctx));
         return -1;
     }
-    XLOGI("pty proc %d spawned, nodelay %d.", cctx->proc.pid, ctx->nodelay);
+    XLOGI("pty proc %d spawned.", cctx->proc.pid);
     /* close unused fds. */
     _close(fds_signal[0]);
     _close(fds_stdin[0]);
@@ -1166,7 +1168,7 @@ static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
         exit(1);
     }
     fcntl(ptmx, F_SETFD, FD_CLOEXEC); /* for the next 'forkpty' */
-    XLOGI("pty proc %d spawned, master fd %d, nodelay %d.", chldpid, ptmx, ctx->nodelay);
+    XLOGI("pty proc %d spawned, master fd %d.", chldpid, ptmx);
 
     rctx = xlist_alloc_back(&remote_pri.remote_ctxs);
 
@@ -1788,8 +1790,8 @@ int do_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
     }
 
     if (cmd->cmd == CMD_CONNECT_PTY) {
-        ctx->stats = &remote_pri.stats_ctrl;
-        ++remote_pri.stats_ctrl.nconnect;
+        ctx->stats = &remote_pri.stats_pty;
+        ++remote_pri.stats_pty.nconnect;
         XLOGD("CONNECT_PTY cmd (%d) from peer, process.", cmd->flag);
 
         if (connect_pty_remote(ctx, cmd->data) == 0) {
@@ -1863,7 +1865,7 @@ static void handle_request_status(const http_request_t* req, http_response_t* re
         "\"devices\":%zd,\n"
         "\"stats_cli\":{\"nconnect\":%zd,\"rxbytes\":%zd,\"txbytes\":%zd},\n"
 #endif
-        "\"stats_ctrl\":{\"nconnect\":%zd,\"rxbytes\":%zd,\"txbytes\":%zd},\n"
+        "\"stats_pty\":{\"nconnect\":%zd,\"rxbytes\":%zd,\"txbytes\":%zd},\n"
         "\"stats_ipv4\":{\"nconnect\":%zd,\"rxbytes\":%zd,\"txbytes\":%zd},\n"
         "\"stats_ipv6\":{\"nconnect\":%zd,\"rxbytes\":%zd,\"txbytes\":%zd},\n"
         "\"stats_dm\":{\"nconnect\":%zd,\"rxbytes\":%zd,\"txbytes\":%zd},\n"
@@ -1877,7 +1879,7 @@ static void handle_request_status(const http_request_t* req, http_response_t* re
         xhash_size(&remote_pri.pending_ctxs),
         remote_pri.stats_cli.nconnect, remote_pri.stats_cli.rxbytes, remote_pri.stats_cli.txbytes,
 #endif
-        remote_pri.stats_ctrl.nconnect, remote_pri.stats_ctrl.rxbytes, remote_pri.stats_ctrl.txbytes,
+        remote_pri.stats_pty.nconnect, remote_pri.stats_pty.rxbytes, remote_pri.stats_pty.txbytes,
         remote_pri.stats_ipv4.nconnect, remote_pri.stats_ipv4.rxbytes, remote_pri.stats_ipv4.txbytes,
         remote_pri.stats_ipv6.nconnect, remote_pri.stats_ipv6.rxbytes, remote_pri.stats_ipv6.txbytes,
         remote_pri.stats_dm.nconnect, remote_pri.stats_dm.rxbytes, remote_pri.stats_dm.txbytes,

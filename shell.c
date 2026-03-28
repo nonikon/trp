@@ -29,6 +29,7 @@ struct {
     u8_t device_id[DEVICE_ID_SIZE];
     u8_t stdin_blocked;
     u8_t xserver_blocked;
+    u8_t fgrnd;
     u8_t verbose;
 } xshctx;
 
@@ -311,7 +312,7 @@ static void send_connect_command()
     cmd->tag = CMD_TAG;
     cmd->major = VERSION_MAJOR;
     cmd->minor = VERSION_MINOR;
-    cmd->flag = 1 << 2; /* nodelay */
+    cmd->flag = (1 << 2) | xshctx.fgrnd; /* nodelay */
     cmd->cmd = CMD_CONNECT_PTY;
     cmd->len = (u8_t) sizeof(xshctx.ctrl_key);
     cmd->port = 0;
@@ -400,6 +401,7 @@ static void show_usage(const char* s)
     fprintf(stderr, "  -M <METHOD>   crypto method with client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
     fprintf(stderr, "  -C <config>   set config file path and section. (default: trp.ini)\n");
     fprintf(stderr, "                section can be specified after colon. (default: trp.ini:shell)\n");
+    fprintf(stderr, "  -f            show the remote terminal in the foreground (for Windows remote only).\n");
     fprintf(stderr, "  -v            output verbosely.\n");
     fprintf(stderr, "  -V            output version string.\n");
     fprintf(stderr, "  -h            print this help message.\n");
@@ -433,6 +435,7 @@ static int parse_args(int argc, char** argv)
     int method = CRYPTO_CHACHA20;
     int methodx = CRYPTO_CHACHA20;
     int cfg_specified = 0;
+    int fgrnd = 0;
     int verbose = 0;
     int ec, i;
 
@@ -451,6 +454,7 @@ static int parse_args(int argc, char** argv)
 
             /* short option without argument. (-opt[0]) */
             switch (opt[0]) {
+            case 'f':   fgrnd = 1; continue;
             case 'v': verbose = 1; continue;
             case 'V':
                 XLOGE("trp %s libuv %s.", version_string(), uv_version_string());
@@ -516,6 +520,7 @@ static int parse_args(int argc, char** argv)
             if (!item->name[0] || !item->value[0]) {
                 XLOGE("Invalid config item (%s=%s), ignore.", item->name, item->value);
                 continue;
+            } else if (!strcmp(item->name, "v")) { fgrnd = atoi(item->value);
             } else if (!strcmp(item->name, "v")) { verbose = atoi(item->value);
             } else if (!strcmp(item->name, "x")) { xserver_str = item->value;
             } else if (!strcmp(item->name, "T")) { ctrl_passwd = item->value;
@@ -532,6 +537,9 @@ static int parse_args(int argc, char** argv)
         }
     }
 
+    if (fgrnd) {
+        xshctx.fgrnd = 1;
+    }
     if (verbose) {
         xshctx.verbose = 1;
     }
