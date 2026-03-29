@@ -751,25 +751,32 @@ static void on_pty_remote_write(uv_write_t* req, int status)
     xlist_erase(&remote.io_buffers, xlist_value_iter(iob));
 }
 
-static void send_pty_packet(remote_ctx_t* ctx, pty_cmd_t* cmd)
+static int send_pty_packet(remote_ctx_t* ctx, pty_cmd_t* cmd, io_buf_t* iob)
 {
     if (!check_pty_command_md(cmd)) {
         XLOGW("invalid pty packet digest.");
-
-    } else if (cmd->cmd == PTYCMD_DATA) {
-        io_buf_t* iob = xlist_alloc_back(&remote.io_buffers);
+        return 0;
+    }
+    if (cmd->cmd == PTYCMD_DATA) {
         uv_buf_t wbuf;
 
-        wbuf.base = iob->buffer;
+        wbuf.base = (char*) cmd->data;
         wbuf.len = ntohs(cmd->len);
-        memcpy(wbuf.base, cmd->data, wbuf.len);
-        // xlog_printhex(wbuf.base, wbuf.len);
 
+        if (iob == NULL) {
+            iob = xlist_alloc_back(&remote.io_buffers);
+            XLOGD("copy and send pty data %u bytes.", (u32_t) wbuf.len);
+            memcpy(iob->buffer, wbuf.base, wbuf.len);
+            wbuf.base = iob->buffer;
+        }
         iob->wreq.data = ctx;
         ctx->p.peer->stats->rxbytes += wbuf.len;
-        uv_write(&iob->wreq, (uv_stream_t*) &ctx->p.io, &wbuf, 1, on_pty_remote_write);
 
-    } else if (cmd->cmd == PTYCMD_WNDSIZE) {
+        uv_write(&iob->wreq, (uv_stream_t*) &ctx->p.io, &wbuf, 1, on_pty_remote_write);
+        /* 'iob' free later */
+        return 1;
+    }
+    if (cmd->cmd == PTYCMD_WNDSIZE) {
         if (cmd->len == htons(4)) {
 #ifdef _WIN32
             /* https://github.com/microsoft/terminal/blob/main/src/winconpty/winconpty.cpp */
@@ -799,16 +806,18 @@ static void send_pty_packet(remote_ctx_t* ctx, pty_cmd_t* cmd)
             }
 #endif
         } else {
-            XLOGW("error pty packet len %u.", ntohs(cmd->len));
+            XLOGW("invalid wndsize packet length (%u).", ntohs(cmd->len));
         }
-    } else {
-        XLOGW("invalid pty packet cmd %u.", cmd->cmd);
+        return 0;
     }
+    XLOGW("invalid pty packet cmd (%u).", cmd->cmd);
+    return 0;
 }
 
 static int fwd_peer_pty_packets(remote_ctx_t* ctx, io_buf_t* iob)
 {
     pty_cmd_t* cmd;
+    pty_cmd_t* last_cmd = NULL;
     u32_t need;
 
     remote.crypto.decrypt(&ctx->p.peer->edctx, (u8_t*) iob->buffer + iob->idx, iob->len);
@@ -835,10 +844,14 @@ static int fwd_peer_pty_packets(remote_ctx_t* ctx, io_buf_t* iob)
         if (__iob_move(last_iob, iob, need) != 0)
             return 0;
 
-        send_pty_packet(ctx, cmd);
-
         ctx->p.last_iob = NULL;
-        xlist_erase(&remote.io_buffers, xlist_value_iter(last_iob));
+        if (send_pty_packet(ctx, cmd, last_iob) == 0) {
+            xlist_erase(&remote.io_buffers, xlist_value_iter(last_iob));
+        }
+        if (iob->len == 0) {
+            /* no more data, exit */
+            return 0;
+        }
     }
 
     while (iob->len > sizeof(pty_cmd_t)) {
@@ -853,24 +866,29 @@ static int fwd_peer_pty_packets(remote_ctx_t* ctx, io_buf_t* iob)
             /* pty packet need more. */
             break;
         }
-        send_pty_packet(ctx, cmd);
-
+        if (last_cmd) {
+            send_pty_packet(ctx, last_cmd, NULL);
+        }
+        last_cmd = cmd;
         iob->idx += need;
         iob->len -= need;
     }
 
-    if (iob->len) {
-        if (iob->idx) {
-            memmove(iob->buffer, iob->buffer + iob->idx, iob->len);
-            iob->idx = 0;
-        }
-        XLOGD("%u pty bytes left.", iob->len);
-
-        ctx->p.last_iob = iob;
-        return 1;
+    if (iob->len == 0) {
+        /* 'last_cmd' never NULL. */
+        return send_pty_packet(ctx, last_cmd, iob);
     }
+    if (last_cmd) {
+        send_pty_packet(ctx, last_cmd, NULL);
+    }
+    if (iob->idx) {
+        memmove(iob->buffer, iob->buffer + iob->idx, iob->len);
+        iob->idx = 0;
+    }
+    XLOGD("%u pty bytes left.", iob->len);
 
-    return 0;
+    ctx->p.last_iob = iob;
+    return 1;
 }
 
 static void on_pty_peer_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)

@@ -136,24 +136,30 @@ static void on_stdin_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* bu
     xlist_erase(&xshctx.io_buffers, xlist_value_iter(iob));
 }
 
-static void recv_pty_packet(pty_cmd_t* cmd)
+static int recv_pty_packet(pty_cmd_t* cmd, io_buf_t* iob)
 {
     if (!check_pty_command_md(cmd)) {
         XLOGE("Error pty packet digest.");
-
-    } else if (cmd->cmd == PTYCMD_DATA) {
-        io_buf_t* iob = xlist_alloc_back(&xshctx.io_buffers);
+        return 0;
+    }
+    if (cmd->cmd == PTYCMD_DATA) {
         uv_buf_t wbuf;
 
-        wbuf.base = iob->buffer;
+        wbuf.base = (char*) cmd->data;
         wbuf.len = ntohs(cmd->len);
-        memcpy(wbuf.base, cmd->data, wbuf.len);
 
+        if (iob == NULL) {
+            iob = xlist_alloc_back(&xshctx.io_buffers);
+            XLOGD("copy and send pty data %u bytes.", (u32_t) wbuf.len);
+            memcpy(iob->buffer, wbuf.base, wbuf.len);
+            wbuf.base = iob->buffer;
+        }
         uv_write(&iob->wreq, (uv_stream_t*) &xshctx.io_stdout, &wbuf, 1,
             on_stdout_write);
-    } else {
-        XLOGE("Error packet cmd %u.", cmd->cmd);
+        return 1; /* 'iob' free later */
     }
+    XLOGE("Error packet cmd %u.", cmd->cmd);
+    return 0;
 }
 
 static int __iob_move(io_buf_t* dst, io_buf_t* src, u32_t need)
@@ -174,6 +180,7 @@ static int __iob_move(io_buf_t* dst, io_buf_t* src, u32_t need)
 static int fwd_xserver_packets(io_buf_t* iob)
 {
     pty_cmd_t* cmd;
+    pty_cmd_t* last_cmd = NULL;
     u32_t need;
 
     if (xshctx.last_iob) {
@@ -198,10 +205,14 @@ static int fwd_xserver_packets(io_buf_t* iob)
         if (__iob_move(last_iob, iob, need) != 0)
             return 0;
 
-        recv_pty_packet(cmd);
-
         xshctx.last_iob = NULL;
-        xlist_erase(&xshctx.io_buffers, xlist_value_iter(last_iob));
+        if (recv_pty_packet(cmd, last_iob) == 0) {
+            xlist_erase(&xshctx.io_buffers, xlist_value_iter(last_iob));
+        }
+        if (iob->len == 0) {
+            /* no more data, exit */
+            return 0;
+        }
     }
 
     while (iob->len > sizeof(pty_cmd_t)) {
@@ -216,24 +227,29 @@ static int fwd_xserver_packets(io_buf_t* iob)
             /* udp packet need more. */
             break;
         }
-        recv_pty_packet(cmd);
-
+        if (last_cmd) {
+            recv_pty_packet(last_cmd, NULL);
+        }
+        last_cmd = cmd;
         iob->idx += need;
         iob->len -= need;
     }
 
-    if (iob->len) {
-        if (iob->idx) {
-            memmove(iob->buffer, iob->buffer + iob->idx, iob->len);
-            iob->idx = 0;
-        }
-        XLOGD("%u bytes left.", iob->len);
-
-        xshctx.last_iob = iob;
-        return 1;
+    if (iob->len == 0) {
+        /* 'last_cmd' never NULL. */
+        return recv_pty_packet(last_cmd, iob);
     }
+    if (last_cmd) {
+        recv_pty_packet(last_cmd, NULL);
+    }
+    if (iob->idx) {
+        memmove(iob->buffer, iob->buffer + iob->idx, iob->len);
+        iob->idx = 0;
+    }
+    XLOGD("%u bytes left.", iob->len);
 
-    return 0;
+    xshctx.last_iob = iob;
+    return 1;
 }
 
 static void on_xserver_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
