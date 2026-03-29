@@ -34,7 +34,7 @@
 #define MAX_UDPSESS_COUNT   0x7FFFFFFF
 #define MAX_UDPCONN_TIMEO   40      /* s */
 #define MAX_WQUEUE_SIZE     0       /* bytes */
-#define MAX_SOCKBUF_SIZE    (8192 - sizeof(io_buf_t) - sizeof(xlist_node_t))
+#define MAX_SOCKBUF_SIZE    7936    /* 8192 - sizeof(io_buf_t) - sizeof(xlist_node_t) */
 
 #define SESSION_ID_SIZE     16      /* proxy-client session id size */
 #define DEVICE_ID_SIZE      16      /* client device id size, MUST <= MAX_DOMAIN_LEN */
