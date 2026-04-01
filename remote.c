@@ -1130,6 +1130,12 @@ static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
     if (errc != 0) {
         XLOGE("uv_spawn failed: %s.", uv_err_name(errc));
         xlist_erase(&remote_pri.child_ctxs, xlist_value_iter(cctx));
+        _close(fds_signal[0]);
+        _close(fds_signal[1]);
+        _close(fds_stdin[0]);
+        _close(fds_stdin[1]);
+        _close(fds_stdout[0]);
+        _close(fds_stdout[1]);
         return -1;
     }
     XLOGI("pty proc %d spawned.", cctx->proc.pid);
@@ -1827,6 +1833,7 @@ int do_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 #ifdef WITH_CTRLSERVER
 static void handle_request_index(const http_request_t* req, http_response_t* resp);
 static void handle_request_status(const http_request_t* req, http_response_t* resp);
+static void handle_request_child_list(const http_request_t* req, http_response_t* resp);
 static void handle_request_usession_list(const http_request_t* req, http_response_t* resp);
 #ifdef WITH_CLIREMOTE
 static void handle_request_device_list(const http_request_t* req, http_response_t* resp);
@@ -1839,6 +1846,7 @@ static void handle_request_log_verbose_off(const http_request_t* req, http_respo
 static const http_handler_t __ctrl_server_handler[] = {
     { "/", handle_request_index },
     { "/status", handle_request_status },
+    { "/child/list", handle_request_child_list },
     { "/usession/list", handle_request_usession_list },
 #ifdef WITH_CLIREMOTE
     { "/device/list", handle_request_device_list },
@@ -1902,6 +1910,34 @@ static void handle_request_status(const http_request_t* req, http_response_t* re
         remote_pri.stats_ipv6.nconnect, remote_pri.stats_ipv6.rxbytes, remote_pri.stats_ipv6.txbytes,
         remote_pri.stats_dm.nconnect, remote_pri.stats_dm.rxbytes, remote_pri.stats_dm.txbytes,
         remote_pri.stats_udp.nconnect, remote_pri.stats_udp.rxbytes, remote_pri.stats_udp.txbytes);
+}
+
+static void handle_request_child_list(const http_request_t* req, http_response_t* resp)
+{
+    http_buf_add_string(resp->headers, &resp->header_len,
+        "Content-Type: application/json\r\n");
+
+    http_buf_add_string(resp->body, &resp->body_len, "[\n");
+
+    if (!xlist_empty(&remote_pri.child_ctxs)) {
+        xlist_iter_t iter = xlist_begin(&remote_pri.child_ctxs);
+
+        do {
+            child_ctx_t* s = xlist_iter_value(iter);
+
+#ifdef _WIN32
+            http_buf_add_printf(resp->body, &resp->body_len, "%d,", s->proc.pid);
+#else
+            http_buf_add_printf(resp->body, &resp->body_len, "%d,", s->pid);
+#endif
+            iter = xlist_iter_next(iter);
+        }
+        while (xlist_iter_valid(&remote_pri.child_ctxs, iter)
+            && resp->body_len + 16 <= sizeof(resp->body));
+
+        resp->body_len -= 1; /* delete ',' at the end of 'resp->body'. */
+    }
+    http_buf_add_string(resp->body, &resp->body_len, "\n]");
 }
 
 static void handle_request_usession_list(const http_request_t* req, http_response_t* resp)
