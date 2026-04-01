@@ -150,7 +150,7 @@ static int recv_pty_packet(pty_cmd_t* cmd, io_buf_t* iob)
 
         if (iob == NULL) {
             iob = xlist_alloc_back(&xshctx.io_buffers);
-            XLOGD("copy and send pty data %u bytes.", (u32_t) wbuf.len);
+            XLOGD("Copy and receive pty data %u bytes.", (u32_t) wbuf.len);
             memcpy(iob->buffer, wbuf.base, wbuf.len);
             wbuf.base = iob->buffer;
         }
@@ -194,7 +194,7 @@ static int fwd_xserver_packets(io_buf_t* iob)
         cmd = (pty_cmd_t*) last_iob->buffer;
         need = ntohs(cmd->len) + sizeof(pty_cmd_t);
 
-        if (need > MAX_SOCKBUF_SIZE || need < sizeof(pty_cmd_t)) {
+        if (need > MAX_SOCKBUF_SIZE || need <= sizeof(pty_cmd_t)) {
             XLOGE("Error packet length (%u).", need);
 
             xshctx.last_iob = NULL;
@@ -219,7 +219,7 @@ static int fwd_xserver_packets(io_buf_t* iob)
         cmd = (pty_cmd_t*) (iob->buffer + iob->idx);
         need = ntohs(cmd->len) + sizeof(pty_cmd_t);
 
-        if (need > MAX_SOCKBUF_SIZE || need < sizeof(pty_cmd_t)) {
+        if (need > MAX_SOCKBUF_SIZE || need <= sizeof(pty_cmd_t)) {
             XLOGE("Error packet length (%u).", need);
             return 0;
         }

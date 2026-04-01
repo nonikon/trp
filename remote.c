@@ -833,7 +833,7 @@ static int fwd_peer_pty_packets(remote_ctx_t* ctx, io_buf_t* iob)
         cmd = (pty_cmd_t*) last_iob->buffer;
         need = ntohs(cmd->len) + sizeof(pty_cmd_t);
 
-        if (need > MAX_SOCKBUF_SIZE || need < sizeof(pty_cmd_t)) {
+        if (need > MAX_SOCKBUF_SIZE || need <= sizeof(pty_cmd_t)) {
             XLOGW("error pty packet length (%u).", need);
 
             ctx->p.last_iob = NULL;
@@ -858,7 +858,7 @@ static int fwd_peer_pty_packets(remote_ctx_t* ctx, io_buf_t* iob)
         cmd = (pty_cmd_t*) (iob->buffer + iob->idx);
         need = ntohs(cmd->len) + sizeof(pty_cmd_t);
 
-        if (need > MAX_SOCKBUF_SIZE || need < sizeof(pty_cmd_t)) {
+        if (need > MAX_SOCKBUF_SIZE || need <= sizeof(pty_cmd_t)) {
             XLOGW("error pty packet length (%u).", need);
             return 0;
         }
