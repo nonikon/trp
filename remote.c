@@ -69,6 +69,7 @@ struct child_ctx {
     remote_ctx_t* parent;   /* the 'remote_ctx_t' belonging to */
     int pid;
 #endif
+    int nrefs;
 };
 
 /* remote private data */
@@ -698,42 +699,25 @@ static void on_tcp_remote_domain_resolved(
     xlist_erase(&remote.addrinfo_reqs, xlist_value_iter(req));
 }
 
-#ifdef _WIN32
 static void on_pty_remote_closed(uv_handle_t* handle)
 {
-    remote_ctx_t* rctx = handle->data;
-    child_ctx_t* ctx = rctx->p.child;
+    remote_ctx_t* ctx = handle->data;
 
-    handle->data = NULL;
-    if (!((size_t) ctx->io.data | (size_t) ctx->proc.data | (size_t) rctx->p.io.data)) {
-        _close(ctx->sigfd);
-        if (rctx->p.last_iob) {
-            xlist_erase(&remote.io_buffers, xlist_value_iter(rctx->p.last_iob));
+    if (--ctx->p.child->nrefs == 0) {
+#ifdef _WIN32
+        _close(ctx->p.child->sigfd);
+#endif
+        if (ctx->p.last_iob) {
+            xlist_erase(&remote.io_buffers, xlist_value_iter(ctx->p.last_iob));
         }
-        xlist_erase(&remote_pri.remote_ctxs, xlist_value_iter(rctx));
-        xlist_erase(&remote_pri.child_ctxs, xlist_value_iter(ctx));
+        xlist_erase(&remote_pri.child_ctxs, xlist_value_iter(ctx->p.child));
+        xlist_erase(&remote_pri.remote_ctxs, xlist_value_iter(ctx));
 
         XLOGD("current %zu remotes, %zu childs, %zu iobufs.",
             xlist_size(&remote_pri.remote_ctxs), xlist_size(&remote_pri.child_ctxs),
             xlist_size(&remote.io_buffers));
     }
 }
-#else
-static void on_pty_remote_closed(uv_handle_t* handle)
-{
-    remote_ctx_t* ctx = handle->data;
-
-    if (ctx->p.last_iob) {
-        xlist_erase(&remote.io_buffers, xlist_value_iter(ctx->p.last_iob));
-    }
-    xlist_erase(&remote_pri.child_ctxs, xlist_value_iter(ctx->p.child));
-    xlist_erase(&remote_pri.remote_ctxs, xlist_value_iter(ctx));
-
-    XLOGD("current %zu remotes, %zu childs, %zu iobufs.",
-        xlist_size(&remote_pri.remote_ctxs), xlist_size(&remote_pri.child_ctxs),
-        xlist_size(&remote.io_buffers));
-}
-#endif
 
 static void on_pty_remote_write(uv_write_t* req, int status)
 {
@@ -1030,25 +1014,37 @@ static void on_pty_child_exit(uv_process_t* req, int64_t status, int signal)
 {
     child_ctx_t* ctx = ((remote_ctx_t*) req->data)->p.child;
 
-    uv_close((uv_handle_t*) req, on_pty_remote_closed);
     if (signal) {
         XLOGI("pty proc %d signaled by %d.", ctx->proc.pid, signal);
     } else {
         XLOGI("pty proc %d exited with status %d.", ctx->proc.pid, signal);
     }
+    uv_close((uv_handle_t*) req, on_pty_remote_closed);
 }
 #else
 static void on_pty_child_signal(uv_signal_t* handle, int signum)
 {
+    xlist_iter_t iter = xlist_begin(&remote_pri.child_ctxs);
     int pid, status;
 
-    /* NOTE: 'waitpid(-1, ...)' may affect uv_spawn()'s exit_cb... */
-    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
-        if (WIFEXITED(status)) {
-            XLOGI("pty proc %d exited with status %d.", pid, WEXITSTATUS(status));
-        } else {
-            XLOGI("pty proc %d signaled by %d.", pid, WTERMSIG(status));
-        }
+    while (iter != xlist_end(&remote_pri.child_ctxs)) {
+        child_ctx_t* ctx = xlist_iter_value(iter);
+
+        do { /* NOTE: 'waitpid(-1, ...)' may affect uv_spawn()'s exit_cb, so... */
+            pid = waitpid(ctx->pid, &status, WNOHANG);
+        } while (pid == -1 && errno == EINTR);
+
+        iter = xlist_iter_next(iter);
+        if (pid == ctx->pid) {
+            if (WIFEXITED(status)) {
+                XLOGI("pty proc %d exited with status %d.", pid, WEXITSTATUS(status));
+            } else {
+                XLOGI("pty proc %d signaled by %d.", pid, WTERMSIG(status));
+            }
+            on_pty_remote_closed((uv_handle_t*) &ctx->parent->p.io);
+        } else if (pid != 0) {
+            XLOGW("waitpid failed with %d: %s.", pid, strerror(errno));
+        } /* NOTE: pid == 0 means pid has not exited yet. */
     }
 }
 #endif
@@ -1056,9 +1052,9 @@ static void on_pty_child_signal(uv_signal_t* handle, int signum)
 static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
 {
     remote_ctx_t* rctx;
+    child_ctx_t* cctx;
     io_buf_t* iob = ctx->pending_iob;
 #ifdef _WIN32
-    child_ctx_t* cctx;
     uv_process_options_t options;
     uv_stdio_container_t childio[2];
     HANDLE sighd;
@@ -1158,6 +1154,7 @@ static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
     cctx->io.data = rctx; /* NOTE: can't be 'cctx'. */
     cctx->proc.data = rctx;
     cctx->sigfd = fds_signal[1];
+    cctx->nrefs = 3; /* rctx->p.io + cctx->io + cctx->proc */
 #else
     if (!remote_pri.child_watcher.data) {
         uv_signal_init(remote.loop, &remote_pri.child_watcher);
@@ -1176,35 +1173,37 @@ static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
 #else
         const char* paths[] = { "/bin/bash", "/bin/sh", };
         size_t i;
-
         for (i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
             if (access(paths[i], X_OK) == 0) {
                 const char* home = getenv("HOME");
 
-                if (home) chdir(home);
+                if (home && chdir(home) == 0)
+                    /* just ignore build warnings. */;
                 execl(paths[i], paths[i], NULL);
                 break;
             }
         }
 #endif
         /* write errmsg to peer. */
-        printf("Launch pty proc failed: %s\n", strerror(errno));
+        printf("Launch pty proc failed: %s.\n", strerror(errno));
         exit(1);
     }
     fcntl(ptmx, F_SETFD, FD_CLOEXEC); /* for the next 'forkpty' */
     XLOGI("pty proc %d spawned, master fd %d.", chldpid, ptmx);
 
     rctx = xlist_alloc_back(&remote_pri.remote_ctxs);
+    cctx = xlist_alloc_back(&remote_pri.child_ctxs);
 
     uv_pipe_init(remote.loop, &rctx->p.io, 0);
     uv_pipe_open(&rctx->p.io, ptmx);
 
     rctx->p.peer = ctx;
-    rctx->p.child = xlist_alloc_back(&remote_pri.child_ctxs);
-    rctx->p.child->parent = rctx;
-    rctx->p.child->pid = chldpid;
+    rctx->p.child = cctx;
     rctx->p.last_iob = NULL;
     rctx->p.io.data = rctx;
+    cctx->parent = rctx;
+    cctx->pid = chldpid;
+    cctx->nrefs = 2; /* rctx->p.io + cctx->pid */
 #endif
     ctx->remote = rctx;
     ctx->pending_iob = NULL;
