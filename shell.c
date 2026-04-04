@@ -31,6 +31,7 @@ struct {
     u8_t xserver_blocked;
     u8_t fgrnd;
     u8_t verbose;
+    u8_t exit_ok;
 } xshctx;
 
 #define XLOGE(fmt, ...) fprintf(stderr, fmt "\n", ##__VA_ARGS__)
@@ -124,7 +125,7 @@ static void on_stdin_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* bu
     }
 
     if (nread < 0) {
-        XLOGI("Disconnected from stdin: %s.", uv_err_name((int) nread));
+        XLOGE("Disconnected from stdin: %s.", uv_err_name((int) nread));
         uv_signal_stop(&xshctx.wch_watcher);
 
         uv_close((uv_handle_t*) &xshctx.io_xserver, NULL);
@@ -278,7 +279,12 @@ static void on_xserver_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* 
     }
 
     if (nread < 0) {
-        XLOGI("Disconnected from proxy server: %s.", uv_err_name((int) nread));
+        if (nread == UV_EOF) {
+            XLOGI("Disconnected from proxy server: EOF.");
+            xshctx.exit_ok = 1;
+        } else {
+            XLOGE("Disconnected from proxy server: %s.", uv_err_name((int) nread));
+        }
         uv_signal_stop(&xshctx.wch_watcher);
 
         uv_close((uv_handle_t*) &xshctx.io_stdin, NULL);
@@ -655,5 +661,5 @@ int main(int argc, char** argv)
         uv_run(uv_default_loop(), UV_RUN_DEFAULT);
         uv_tty_reset_mode();
     }
-    return 0;
+    return xshctx.exit_ok ? 0 : 1;
 }
