@@ -40,17 +40,14 @@ void init_connect_command(xclient_ctx_t* ctx, u8_t code, u16_t port, u8_t* addr,
 void start_tcp_forward(xclient_ctx_t* ctx, int reading);
 int connect_xserver(xclient_ctx_t* ctx, void* arg);
 
-u32_t get_udp_packet_id(const struct sockaddr* saddr);
-const struct sockaddr* get_udp_packet_saddr(u32_t id);
+u32_t get_udp_packet_id(const addrx_t* saddr);
+const addrx_t* get_udp_packet_saddr(u32_t id);
 void send_udp_packet(io_buf_t* iob);
 void recv_udp_packet(udp_cmd_t* cmd); /* virtual */
 
 typedef struct {
     uv_loop_t* loop;
-    union {
-        struct sockaddr x;
-        struct sockaddr_in6 d;
-    } xserver_addr;
+    union { addrx_t x; addr6_t _; } xserver_addr;
 #ifdef __ANDROID__
     u8_t profd;             /* protect fd */
 #endif

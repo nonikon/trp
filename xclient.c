@@ -20,9 +20,9 @@ typedef struct id2addr id2addr_t;
 
 struct addr2id {
     union {
-        struct sockaddr     vx;
-        struct sockaddr_in  v4;
-        struct sockaddr_in6 v6;
+        addrx_t vx;
+        addr4_t v4;
+        addr6_t v6;
     } addr;            /* MUST be the first member */
     u8_t alive;
     uv_timer_t timer;
@@ -129,7 +129,10 @@ void on_tcp_io_closed(uv_handle_t* handle)
 {
     xclient_ctx_t* ctx = handle->data;
 
-    handle->data = NULL;
+    /* NOTE: don't use 'handle->data = NULL', this statement may be executed last
+     * after Compiler Instruction Reordering. Use 'volatile' to ensure it is executed immediately. */
+    *(volatile void**) &handle->data = NULL;
+
     if (!((size_t) ctx->peer.t.io.data | (size_t) ctx->io_xserver.data)) {
         if (ctx->pending_iob) {
             xlist_erase(&xclient.io_buffers, xlist_value_iter(ctx->pending_iob));
@@ -597,7 +600,7 @@ static void on_udp_packet_id_free(uv_handle_t* handle)
 {
     addr2id_t* ai = handle->data;
 
-    XLOGD("free udp packet id %x, %zd left.", ai->ia->id,
+    XLOGD("free udp packet id %x, %zu left.", ai->ia->id,
         xhash_size(&xclient_pri.id2addrs) - 1);
     xhash_remove_data(&xclient_pri.id2addrs, ai->ia);
     xhash_remove_data(&xclient_pri.addr2ids, ai);
@@ -613,7 +616,7 @@ static void on_udp_packet_id_check(uv_timer_t* timer)
         ai->alive = 0;
 }
 
-u32_t get_udp_packet_id(const struct sockaddr* saddr)
+u32_t get_udp_packet_id(const addrx_t* saddr)
 {
     addr2id_t* ai = xhash_get_data(&xclient_pri.addr2ids, saddr);
 
@@ -640,7 +643,7 @@ u32_t get_udp_packet_id(const struct sockaddr* saddr)
     return xclient_pri.next_upktid++;
 }
 
-const struct sockaddr* get_udp_packet_saddr(u32_t id)
+const addrx_t* get_udp_packet_saddr(u32_t id)
 {
     id2addr_t* ia = xhash_get_data(&xclient_pri.id2addrs, &id);
 

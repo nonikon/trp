@@ -22,8 +22,8 @@
 
 static uv_timer_t reconnect_timer;
 
-static union { struct sockaddr x; struct sockaddr_dm  d; } server_addr;
-static union { struct sockaddr x; struct sockaddr_in6 d; } server_addr_r; /* store resolved server domain */
+static union { addrx_t x; addrm_t d; } server_addr;
+static union { addrx_t x; addr6_t _; } server_addr_r; /* store resolved server domain */
 
 static crypto_t crypto;     /* crypto between client and server */
 static u8_t crypto_key[16]; /* crypto key between client and server */
@@ -151,7 +151,7 @@ static void on_server_connected(uv_connect_t* req, int status)
     xlist_erase(&remote.conn_reqs, xlist_value_iter(req));
 }
 
-static void connect_server(struct sockaddr* addr)
+static void connect_server(addrx_t* addr)
 {
     peer_ctx_t* ctx = xlist_alloc_back(&remote.peer_ctxs);
     uv_connect_t* req = xlist_alloc_back(&remote.conn_reqs);

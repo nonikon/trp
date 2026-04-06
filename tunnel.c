@@ -62,11 +62,7 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
 #define IP6T_SO_ORIGINAL_DST 80
 #endif
             uv_os_fd_t fd = ctx->peer.t.io.io_watcher.fd; // uv_fileno()...
-            union {
-                struct sockaddr     vx;
-                struct sockaddr_in  v4;
-                struct sockaddr_in6 v6;
-            } dest;
+            union { addrx_t vx; addr4_t v4; addr6_t v6; } dest;
             socklen_t len = sizeof(dest);
 
             if (getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, &dest, &len) == 0) {
@@ -154,7 +150,7 @@ static void on_udp_tclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
 
 /* override */ void recv_udp_packet(udp_cmd_t* cmd)
 {
-    const struct sockaddr* addr = get_udp_packet_saddr(cmd->id);
+    const addrx_t* addr = get_udp_packet_saddr(cmd->id);
     uv_buf_t wbuf;
 
     if (!addr) {
@@ -173,12 +169,7 @@ static void on_udp_tclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
 
 static int init_tunnel_maddr(const char* addrstr, int allow_domain)
 {
-    union {
-        struct sockaddr     dx;
-        struct sockaddr_in  d4;
-        struct sockaddr_in6 d6;
-        struct sockaddr_dm  dm;
-    } _;
+    union { addrx_t dx; addr4_t d4; addr6_t d6; addrm_t dm; } _;
 
     if (parse_ip_str(addrstr, -1, &_.dx) != 0) {
         if (parse_domain_str(addrstr, -1, &_.dm) != 0) {
@@ -270,7 +261,7 @@ static void usage(const char* s)
 int main(int argc, char** argv)
 {
     uv_tcp_t io_tserver; /* tcp tunner server listen io */
-    union { struct sockaddr x; struct sockaddr_in6 d; } taddr;
+    union { addrx_t x; addr6_t _; } taddr;
     char* cfg_path = NULL;
     const char* cfg_sec = "tunnel";
     const char* xserver_str = "127.0.0.1";
@@ -537,7 +528,7 @@ int main(int argc, char** argv)
     XLOGI("crypto method %d, METHOD %d.", method, methodx);
 
     if (parse_ip_str(xserver_str, DEF_XSERVER_PORT, &xclient.xserver_addr.x) != 0) {
-        struct sockaddr_dm dm;
+        addrm_t dm;
 
         if (parse_domain_str(xserver_str, DEF_XSERVER_PORT, &dm) != 0) {
             XLOGE("invalid proxy server address (%s).", xserver_str);

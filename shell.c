@@ -442,10 +442,7 @@ static void show_usage(const char* s)
 
 static int parse_args(int argc, char** argv)
 {
-    union {
-        struct sockaddr x;
-        struct sockaddr_in6 d;
-    } xserver_addr;
+    union { addrx_t x; addr6_t _; } xserver_addr;
     uv_loop_t* loop;
     char* cfg_path = NULL;
     const char* cfg_sec = "shell";
@@ -619,7 +616,7 @@ static int parse_args(int argc, char** argv)
     loop = uv_default_loop();
 
     if (parse_ip_str(xserver_str, DEF_XSERVER_PORT, &xserver_addr.x) != 0) {
-        struct sockaddr_dm dm;
+        addrm_t dm;
 
         if (parse_domain_str(xserver_str, DEF_XSERVER_PORT, &dm) != 0) {
             XLOGE("Invalid proxy server address (%s).", xserver_str);

@@ -246,11 +246,7 @@ static int socks_handshake(xclient_ctx_t* ctx, uv_buf_t* buf)
 
         } else if (buf->base[1] == 0x03) { /* 'CMD' == 0x03 (UDP ASSOCIATE) */
             if (xclient.n_uconnect) {
-                union {
-                    struct sockaddr     vx;
-                    struct sockaddr_in  v4;
-                    struct sockaddr_in6 v6;
-                } addr;
+                union { addrx_t vx; addr4_t v4; addr6_t v6; } addr;
                 int len = sizeof(addr);
 
                 if (buf->base[3] == 0x01) { /* 'ATYP' == 0x01 (IPV4) */
@@ -509,7 +505,7 @@ static void on_udp_sclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
 
 /* override */ void recv_udp_packet(udp_cmd_t* cmd)
 {
-    const struct sockaddr* addr = get_udp_packet_saddr(cmd->id);
+    const addrx_t* addr = get_udp_packet_saddr(cmd->id);
     uv_buf_t wbuf;
 
     if (!addr) {
@@ -574,7 +570,7 @@ static void usage(const char* s)
 int main(int argc, char** argv)
 {
     uv_tcp_t io_sserver; /* socks server listen io */
-    union { struct sockaddr x; struct sockaddr_in6 d; } saddr;
+    union { addrx_t x; addr6_t _; } saddr;
     char* cfg_path = NULL;
     const char* cfg_sec = "socks";
     const char* xserver_str = "127.0.0.1";
@@ -835,7 +831,7 @@ int main(int argc, char** argv)
     XLOGI("crypto method %d, METHOD %d.", method, methodx);
 
     if (parse_ip_str(xserver_str, DEF_XSERVER_PORT, &xclient.xserver_addr.x) != 0) {
-        struct sockaddr_dm dm;
+        addrm_t dm;
 
         if (parse_domain_str(xserver_str, DEF_XSERVER_PORT, &dm) != 0) {
             XLOGE("invalid proxy server address (%s).", xserver_str);

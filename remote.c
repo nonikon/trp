@@ -171,7 +171,7 @@ static int query_deny_object(const addrx_t* addr)
             return 0; /* not in deny list. */
         }
         /* remove this expired 'deny_obj_t'. */
-        XLOGD("remove deny object %s.", addr_to_str(&obj->addr.vx));
+        XLOGI("remove deny object %s.", addr_to_str(&obj->addr.vx));
         xhash_remove_data(&remote_pri.deny_objs, obj);
         itr = xlist_erase(&remote_pri.deny_list, itr);
     }
@@ -186,7 +186,7 @@ static void insert_deny_object(const addrx_t* addr)
                 sizeof(obj->addr)));
 
     if (xlist_size(&remote_pri.deny_list) != xhash_size(&remote_pri.deny_objs)) {
-        XLOGD("add deny object %s.", addr_to_str(addr));
+        XLOGI("add deny object %s.", addr_to_str(addr));
         obj->lasts = uv_now(remote.loop);
         obj->iter = xlist_push_back(&remote_pri.deny_list, &obj);
     }
@@ -1304,7 +1304,10 @@ static void on_udp_conn_closed(uv_handle_t* handle)
     udp_conn_t* conn = handle->data;
     udp_session_t* sess = conn->parent;
 
-    handle->data = NULL;
+    /* NOTE: don't use 'handle->data = NULL', this statement may be executed last
+     * after Compiler Instruction Reordering. Use 'volatile' to ensure it is executed immediately. */
+    *(volatile void**) &handle->data = NULL;
+
     if (!((size_t) conn->io.data | (size_t) conn->timer.data)) {
         XLOGD("free udp connection %x, %zu left in current session.", conn->id,
             xhash_size(&sess->conns) - 1);
