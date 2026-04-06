@@ -116,7 +116,7 @@ void parse_config_str(char** str, const char** sec)
     }
 }
 
-int parse_ip_str(const char* str, int port, struct sockaddr* addr)
+int parse_ip_str(const char* str, int port, addrx_t* addr)
 {
     const char* p;
     int len;
@@ -148,7 +148,7 @@ int parse_ip_str(const char* str, int port, struct sockaddr* addr)
             strcpy(tmp, "127.0.0.1");
         }
 
-        return uv_ip4_addr(tmp, port, (struct sockaddr_in*) addr);
+        return uv_ip4_addr(tmp, port, (addr4_t*) addr);
 
     } else {
         /* "[ipv6addr]:port". */
@@ -177,11 +177,11 @@ int parse_ip_str(const char* str, int port, struct sockaddr* addr)
             strcpy(tmp, "::1");
         }
 
-        return uv_ip6_addr(tmp, port, (struct sockaddr_in6*) addr);
+        return uv_ip6_addr(tmp, port, (addr6_t*) addr);
     }
 }
 
-int parse_domain_str(const char* str, int port, struct sockaddr_dm* addr)
+int parse_domain_str(const char* str, int port, addrm_t* addr)
 {
     /* validate domain, TODO. */
     const char* p = strchr(str, ':');
@@ -210,8 +210,7 @@ int parse_domain_str(const char* str, int port, struct sockaddr_dm* addr)
     return 0;
 }
 
-int resolve_domain_sync(uv_loop_t* loop,
-        const struct sockaddr_dm* dm, struct sockaddr* addr)
+int resolve_domain_sync(uv_loop_t* loop, const addrm_t* dm, addrx_t* addr)
 {
     struct addrinfo hints;
     char portstr[8];
@@ -237,42 +236,13 @@ int resolve_domain_sync(uv_loop_t* loop,
     return 0;
 }
 
-const char* peeraddr_to_str(const uv_tcp_t* io)
-{
-    union {
-        struct sockaddr     dx;
-        struct sockaddr_in  d4;
-        struct sockaddr_in6 d6;
-    } u;
-    int ulen = sizeof(u);
-
-    uv_tcp_getpeername(io, &u.dx, &ulen);
-    switch (u.dx.sa_family) {
-    case AF_INET:
-        uv_inet_ntop(AF_INET, &u.d4.sin_addr, __addrbuf, sizeof(__addrbuf));
-        sprintf(__addrbuf + strlen(__addrbuf), ":%d", ntohs(u.d4.sin_port));
-        break;
-
-    case AF_INET6:
-        uv_inet_ntop(AF_INET6, &u.d6.sin6_addr, __addrbuf, sizeof(__addrbuf));
-        sprintf(__addrbuf + strlen(__addrbuf), ":%d", ntohs(u.d6.sin6_port));
-        break;
-
-    default:
-        strcpy(__addrbuf, "invalid-peer-addr");
-        break;
-    }
-
-    return __addrbuf;
-}
-
 const char* addr_to_str(const void* addr)
 {
     union {
-        const struct sockaddr*     dx;
-        const struct sockaddr_in*  d4;
-        const struct sockaddr_in6* d6;
-        const struct sockaddr_dm*  dm;
+        const addrx_t* dx;
+        const addr4_t* d4;
+        const addr6_t* d6;
+        const addrm_t* dm;
     } u = { addr };
 
     switch (u.dx->sa_family) {

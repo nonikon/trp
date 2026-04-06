@@ -25,6 +25,7 @@ typedef union {
         peer_ctx_t* peer;
         pending_ctx_t* parent;  /* the 'pending_ctx_t' belonging to */
         uv_tcp_t io;
+        union { addrx_t x; addr6_t _; } addr;
         crypto_ctx_t edctx;
     } c;
 #endif
@@ -52,6 +53,7 @@ typedef union {
 } remote_ctx_t;
 
 struct peer_ctx {
+    union { addrx_t x; addr6_t _; } addr;
     uv_tcp_t io;
     remote_ctx_t* remote;
     conn_stats_t* stats;

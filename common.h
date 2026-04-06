@@ -43,16 +43,20 @@
 #define RECSRV_INTVL_MAX    (600)   /* max reconnect interval time */
 #define RECSRV_INTVL_STEP   (10)    /* increase reconnect interval time after connect failed */
 
+#define DENY_OBJ_TIMEO      (15)    /* s */
 #define CONNECT_CLI_TIMEO   (10)    /* s */
 #define UDPCONN_TIMEO       (20)    /* s */
 #define KEEPIDLE_TIME       (40)    /* s */
 
-typedef unsigned char   u8_t;
-typedef signed char     s8_t;
-typedef unsigned short  u16_t;
-typedef signed short    s16_t;
-typedef unsigned int    u32_t;
-typedef signed int      s32_t;
+typedef uint8_t     u8_t;
+typedef uint16_t    u16_t;
+typedef uint32_t    u32_t;
+typedef uint64_t    u64_t;
+
+typedef struct sockaddr     addrx_t;
+typedef struct sockaddr_in  addr4_t;
+typedef struct sockaddr_in6 addr6_t;
+typedef struct sockaddr_dm  addrm_t;
 
 enum {
     CMD_CONNECT_IPV4,   /* [4] */
@@ -165,21 +169,18 @@ void parse_config_str(char** str, const char** sec);
  * - "[]:8080" -> [::1], [8080]
  * - "[::]" -> [::], [port]
  */
-int parse_ip_str(const char* str, int port, struct sockaddr* addr);
+int parse_ip_str(const char* str, int port, addrx_t* addr);
 
 /* parse domain address string to 'struct sockaddr_dm'. Eg:
  * - "www.example.com:8080" -> [www.example.com], [8080]
  * - ":8080" -> [localhost], [8080]
  * - "www.example.com" -> [www.example.com], [port]
  */
-int parse_domain_str(const char* str, int port, struct sockaddr_dm* addr);
+int parse_domain_str(const char* str, int port, addrm_t* addr);
 
 /* resolve domain synchronously. */
-int resolve_domain_sync(uv_loop_t* loop,
-        const struct sockaddr_dm* dm, struct sockaddr* addr);
+int resolve_domain_sync(uv_loop_t* loop, const addrm_t* dm, addrx_t* addr);
 
-/* getpeername and convert to string (include port). */
-const char* peeraddr_to_str(const uv_tcp_t* io);
 /* convert 'struct sockaddr' to string (include port). */
 const char* addr_to_str(const void* addr);
 /* convert 'cmd_t' address to string (include port). */

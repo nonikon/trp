@@ -70,7 +70,10 @@ static void on_xclient_connect(uv_stream_t* stream, int status)
     ctx->remote_blocked = 0;
 
     if (uv_accept(stream, (uv_stream_t*) &ctx->io) == 0) {
-        XLOGD("proxy client %s connected.", peeraddr_to_str(&ctx->io));
+        int addrlen = sizeof(ctx->addr);
+        uv_tcp_getpeername(&ctx->io, &ctx->addr.x, &addrlen);
+
+        XLOGD("proxy client %s connected.", addr_to_str(&ctx->addr.x));
         uv_tcp_keepalive(&ctx->io, 1, KEEPIDLE_TIME); /* keepalive with proxy client. */
         uv_read_start((uv_stream_t*) &ctx->io, on_iobuf_alloc, on_xclient_read);
     } else {
@@ -123,8 +126,8 @@ int main(int argc, char** argv)
     uv_tcp_t io_server;  /* server listen io */
 #endif
     uv_tcp_t io_xserver; /* proxy-server listen io */
-    union { struct sockaddr x; struct sockaddr_in6 d; } addr;
-    union { struct sockaddr x; struct sockaddr_in6 d; } xaddr;
+    union { addrx_t x; addr6_t _; } addr;
+    union { addrx_t x; addr6_t _; } xaddr;
     char* cfg_path = NULL;
     const char* cfg_sec = "server";
 #ifdef WITH_CLIREMOTE

@@ -37,9 +37,19 @@ typedef struct {
     udp_session_t* parent;
 } udp_conn_t;
 
+typedef struct deny_obj {
+    union {
+        addrx_t vx;
+        addr4_t v4;
+        addr6_t v6;
+    } addr;             /* (must be the first member) */
+    u64_t lasts;        /* last fail timestamp */
+    xlist_iter_t iter;  /* the 'xlist_iter_t' in 'remote_pri.deny_list' */
+} deny_obj_t;
+
 struct udp_session {
     u8_t sid[SESSION_ID_SIZE];  /* (must be the first member) */
-    xlist_iter_t iter;          /* the 'remote_ctx_t' used for next udp packet. */
+    xlist_iter_t iter;          /* the 'remote_ctx_t' used for next udp packet */
     xlist_t rctxs;              /* remote_ctx_t, udp remote contexts with this sid */
     xhash_t conns;              /* udp_conn_t, udp connections with this sid */
 };
@@ -50,7 +60,6 @@ struct conn_stats {
     size_t nconnect;    /* the count of connect command from peer */
 };
 
-#ifdef WITH_CLIREMOTE
 struct pending_ctx {
     u8_t devid[DEVICE_ID_SIZE]; /* (must be the first member) */
     xlist_t clients;            /* remote_ctx_t, the clients which at COMMAND stage */
@@ -58,7 +67,6 @@ struct pending_ctx {
     uv_timer_t timer;           /* peers connect timeout timer */
     conn_stats_t stats;
 };
-#endif
 
 struct child_ctx {
 #ifdef _WIN32
@@ -77,6 +85,9 @@ static struct {
     xlist_t remote_ctxs;    /* remote_ctx_t */
     xhash_t udp_sessions;   /* udp_session_t */
 #ifdef WITH_CLIREMOTE
+    xhash_t deny_objs;      /* deny_obj_t */
+    xlist_t deny_list;      /* deny_obj_t*, arranged by timestamp */
+    size_t deny_count;      /* the count of access denied */
     xhash_t pending_ctxs;   /* pending_ctx_t */
     conn_stats_t stats_cli;
 #endif
@@ -144,6 +155,43 @@ static void on_peer_write(uv_write_t* req, int status)
 }
 
 #ifdef WITH_CLIREMOTE
+static int query_deny_object(const addrx_t* addr)
+{
+    xlist_iter_t itr = xlist_begin(&remote_pri.deny_list);
+
+    while (itr != xlist_end(&remote_pri.deny_list)) {
+        deny_obj_t* obj = *(deny_obj_t**) xlist_iter_value(itr);
+
+        if (uv_now(remote.loop) - obj->lasts < DENY_OBJ_TIMEO * 1000) {
+            /* check whether 'addr' is in 'remote_pri.deny_objs'. */
+            if (xhash_get_data(&remote_pri.deny_objs, addr) != XHASH_INVALID_DATA) {
+                ++remote_pri.deny_count;
+                return 1;
+            }
+            return 0; /* not in deny list. */
+        }
+        /* remove this expired 'deny_obj_t'. */
+        XLOGD("remove deny object %s.", addr_to_str(&obj->addr.vx));
+        xhash_remove_data(&remote_pri.deny_objs, obj);
+        itr = xlist_erase(&remote_pri.deny_list, itr);
+    }
+
+    return 0; /* deny list alredy empty. */
+}
+
+static void insert_deny_object(const addrx_t* addr)
+{
+    /* NOTE: the memory of 'addr' must larger than 'sizeof(obj->addr))'. */
+    deny_obj_t* obj = xhash_iter_data(xhash_put_ex(&remote_pri.deny_objs, addr,
+                sizeof(obj->addr)));
+
+    if (xlist_size(&remote_pri.deny_list) != xhash_size(&remote_pri.deny_objs)) {
+        XLOGD("add deny object %s.", addr_to_str(addr));
+        obj->lasts = uv_now(remote.loop);
+        obj->iter = xlist_push_back(&remote_pri.deny_list, &obj);
+    }
+}
+
 static void on_cli_remote_closed(uv_handle_t* handle)
 {
     remote_ctx_t* ctx = handle->data;
@@ -285,11 +333,17 @@ static int do_cli_remote_command(remote_ctx_t* ctx, char* data, u32_t len)
         return -1;
     }
 
+    if (query_deny_object(&ctx->c.addr.x)) {
+        XLOGD("deny access of %s.", addr_to_str(&ctx->c.addr.x));
+        return -1;
+    }
+
     remote.crypto.init(&ctx->c.edctx, remote.crypto_key, (u8_t*) data);
     remote.crypto.decrypt(&ctx->c.edctx, (u8_t*) cmd, CMD_MAX_SIZE);
 
     if (!check_command_md(cmd)) {
         XLOGW("error packet from client (digest).");
+        insert_deny_object(&ctx->c.addr.x);
         return -1;
     }
 
@@ -337,11 +391,9 @@ static int do_cli_remote_command(remote_ctx_t* ctx, char* data, u32_t len)
                     on_cli_peer_read);
 
                 if (!xlist_empty(&pdctx->peers)) {
-                    /* still have some pending peers, reset timer. */
-                    uv_timer_again(&pdctx->timer);
+                    uv_timer_again(&pdctx->timer); /* still have some pending peers, reset timer. */
                 } else {
-                    /* no pending peers exist, stop timer. */
-                    uv_timer_stop(&pdctx->timer);
+                    uv_timer_stop(&pdctx->timer); /* no pending peers exist, stop timer. */
                 }
             }
 
@@ -426,7 +478,10 @@ void on_cli_remote_connect(uv_stream_t* stream, int status)
     ctx->c.io.data = ctx;
 
     if (uv_accept(stream, (uv_stream_t*) &ctx->c.io) == 0) {
-        XLOGD("client %s connected.", peeraddr_to_str(&ctx->c.io));
+        int addrlen = sizeof(ctx->c.addr);
+        uv_tcp_getpeername(&ctx->c.io, &ctx->c.addr.x, &addrlen);
+
+        XLOGD("client %s connected.", addr_to_str(&ctx->c.addr.x));
         uv_tcp_keepalive(&ctx->c.io, 1, KEEPIDLE_TIME); /* keepalive with client. */
         uv_read_start((uv_stream_t*) &ctx->c.io, on_iobuf_alloc, on_cli_remote_read);
     } else {
@@ -635,7 +690,7 @@ static void on_tcp_remote_connected(uv_connect_t* req, int status)
     xlist_erase(&remote.conn_reqs, xlist_value_iter(req));
 }
 
-static int connect_tcp_remote(peer_ctx_t* ctx, struct sockaddr* addr)
+static int connect_tcp_remote(peer_ctx_t* ctx, const addrx_t* addr)
 {
     uv_connect_t* req = xlist_alloc_back(&remote.conn_reqs);
     remote_ctx_t* rctx = xlist_alloc_back(&remote_pri.remote_ctxs);
@@ -1024,17 +1079,20 @@ static void on_pty_child_exit(uv_process_t* req, int64_t status, int signal)
 #else
 static void on_pty_child_signal(uv_signal_t* handle, int signum)
 {
-    xlist_iter_t iter = xlist_begin(&remote_pri.child_ctxs);
+    xlist_iter_t itr = xlist_begin(&remote_pri.child_ctxs);
     int pid, status;
 
-    while (iter != xlist_end(&remote_pri.child_ctxs)) {
-        child_ctx_t* ctx = xlist_iter_value(iter);
+    while (itr != xlist_end(&remote_pri.child_ctxs)) {
+        child_ctx_t* ctx = xlist_iter_value(itr);
 
-        do { /* NOTE: 'waitpid(-1, ...)' may affect uv_spawn()'s exit_cb, so... */
-            pid = waitpid(ctx->pid, &status, WNOHANG);
-        } while (pid == -1 && errno == EINTR);
+        itr = xlist_iter_next(itr);
+        /* NOTE: 'waitpid(-1, ...)' may affect uv_spawn()'s exit_cb, so... */
+        pid = waitpid(ctx->pid, &status, WNOHANG);
 
-        iter = xlist_iter_next(iter);
+        if (pid == 0) {
+            // XLOGD("pty proc %d not exited yet.", ctx->pid);
+            continue;
+        }
         if (pid == ctx->pid) {
             if (WIFEXITED(status)) {
                 XLOGI("pty proc %d exited with status %d.", pid, WEXITSTATUS(status));
@@ -1042,9 +1100,9 @@ static void on_pty_child_signal(uv_signal_t* handle, int signum)
                 XLOGI("pty proc %d signaled by %d.", pid, WTERMSIG(status));
             }
             on_pty_remote_closed((uv_handle_t*) &ctx->parent->p.io);
-        } else if (pid != 0) {
-            XLOGW("waitpid failed with %d: %s.", pid, strerror(errno));
-        } /* NOTE: pid == 0 means pid has not exited yet. */
+            continue;
+        }
+        XLOGW("waitpid failed with %d: %s.", pid, strerror(errno));
     }
 }
 #endif
@@ -1075,6 +1133,9 @@ static int connect_pty_remote(peer_ctx_t* ctx, const uint8_t* ctrlk)
     }
     if (memcmp(ctrlk, remote.ctrl_key, 16) != 0) {
         XLOGD("invalid control key.");
+#ifdef WITH_CLIREMOTE
+        insert_deny_object(&ctx->addr.x);
+#endif
         return -1;
     }
     if (xlist_size(&remote_pri.child_ctxs) > MAX_PTY_COUNT) {
@@ -1303,7 +1364,7 @@ static remote_ctx_t* choose_udp_remote_ctx(udp_session_t* s)
 }
 
 static void on_udp_remote_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf,
-        const struct sockaddr* addr, unsigned int flags)
+        const addrx_t* addr, unsigned int flags)
 {
     udp_conn_t* conn = io->data;
     io_buf_t* iob = xcontainer_of(buf->base - sizeof(udp_cmd_t) - 2 - conn->alen,
@@ -1335,9 +1396,7 @@ static void on_udp_remote_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf,
 
         } else {
             union {
-                const struct sockaddr*     vx;
-                const struct sockaddr_in*  v4;
-                const struct sockaddr_in6* v6;
+                const addrx_t* vx; const addr4_t* v4; const addr6_t* v6;
             } _ =  { addr };
             udp_cmd_t* cmd = (udp_cmd_t*) iob->buffer;
             uv_buf_t wbuf;
@@ -1407,14 +1466,10 @@ static void on_udp_remote_rbuf_alloc(uv_handle_t* handle, size_t sg_size, uv_buf
 
 static void send_udp_packet(remote_ctx_t* ctx, udp_cmd_t* cmd)
 {
-    union {
-        struct sockaddr     vx;
-        struct sockaddr_in  v4;
-        struct sockaddr_in6 v6;
-    } addr;
-    int rt;
+    union { addrx_t vx; addr4_t v4; addr6_t v6; } addr;
     uv_buf_t wbuf;
     udp_conn_t* conn;
+    int rt;
 
     switch (cmd->alen) {
     case 4:
@@ -1651,6 +1706,12 @@ int do_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         return -1;
     }
 
+#ifdef WITH_CLIREMOTE
+    if (query_deny_object(&ctx->addr.x)) {
+        XLOGD("deny access of %s.", addr_to_str(&ctx->addr.x));
+        return -1;
+    }
+#endif
     remote.crypto.init(&ctx->edctx, remote.crypto_key, (u8_t*) iob->buffer);
     remote.crypto.decrypt(&ctx->edctx, (u8_t*) cmd, CMD_MAX_SIZE);
 
@@ -1659,6 +1720,9 @@ int do_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 
     if (!check_command_md(cmd)) {
         XLOGW("error packet from peer (digest).");
+#ifdef WITH_CLIREMOTE
+        insert_deny_object(&ctx->addr.x);
+#endif
         return -1;
     }
 
@@ -1720,7 +1784,7 @@ int do_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
 #endif
 
     if (cmd->cmd == CMD_CONNECT_IPV4) {
-        struct sockaddr_in addr;
+        addr4_t addr;
 
         memset(&addr, 0, sizeof(addr));
 
@@ -1736,7 +1800,7 @@ int do_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         /* stop reading from peer until remote connected. */
         uv_read_stop((uv_stream_t*) &ctx->io);
 
-        if (connect_tcp_remote(ctx, (struct sockaddr*) &addr) == 0)
+        if (connect_tcp_remote(ctx, (addrx_t*) &addr) == 0)
             return 0;
         /* connect failed immediately. */
         return -1;
@@ -1777,7 +1841,7 @@ int do_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
     }
 
     if (cmd->cmd == CMD_CONNECT_IPV6) {
-        struct sockaddr_in6 addr;
+        addr6_t addr;
 
         memset(&addr, 0, sizeof(addr));
 
@@ -1793,7 +1857,7 @@ int do_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         /* stop reading from peer until remote connected. */
         uv_read_stop((uv_stream_t*) &ctx->io);
 
-        if (connect_tcp_remote(ctx, (struct sockaddr*) &addr) == 0)
+        if (connect_tcp_remote(ctx, (addrx_t*) &addr) == 0)
             return 0;
         /* connect failed immediately. */
         return -1;
@@ -1835,6 +1899,7 @@ static void handle_request_status(const http_request_t* req, http_response_t* re
 static void handle_request_child_list(const http_request_t* req, http_response_t* resp);
 static void handle_request_usession_list(const http_request_t* req, http_response_t* resp);
 #ifdef WITH_CLIREMOTE
+static void handle_request_deny_list(const http_request_t* req, http_response_t* resp);
 static void handle_request_device_list(const http_request_t* req, http_response_t* resp);
 static void handle_request_dconnect_on(const http_request_t* req, http_response_t* resp);
 static void handle_request_dconnect_off(const http_request_t* req, http_response_t* resp);
@@ -1848,6 +1913,7 @@ static const http_handler_t __ctrl_server_handler[] = {
     { "/child/list", handle_request_child_list },
     { "/usession/list", handle_request_usession_list },
 #ifdef WITH_CLIREMOTE
+    { "/deny/list", handle_request_deny_list },
     { "/device/list", handle_request_device_list },
     { "/dconnect/on", handle_request_dconnect_on },
     { "/dconnect/off", handle_request_dconnect_off },
@@ -1881,26 +1947,29 @@ static void handle_request_status(const http_request_t* req, http_response_t* re
         "Content-Type: application/json\r\n");
 
     http_buf_add_printf(resp->body, &resp->body_len, "{\n"
-        "\"peer_ctxs\":%zd,\n"
-        "\"remote_ctxs\":%zd,\n"
-        "\"child_ctxs\":%zd,\n"
-        "\"io_buffers\":%zd,\n"
-        "\"udp_sessions\":%zd,\n"
+        "\"peer_ctxs\":%zu,\n"
+        "\"remote_ctxs\":%zu,\n"
+        "\"child_ctxs\":%zu,\n"
+        "\"io_buffers\":%zu,\n"
+        "\"udp_sessions\":%zu,\n"
 #ifdef WITH_CLIREMOTE
-        "\"devices\":%zd,\n"
-        "\"stats_cli\":{\"nconnect\":%zd,\"rxbytes\":%zd,\"txbytes\":%zd},\n"
+        "\"deny_objs\":%zu,\n"
+        "\"deny_count\":%zu,\n"
+        "\"devices\":%zu,\n"
+        "\"stats_cli\":{\"nconnect\":%zu,\"rxbytes\":%zu,\"txbytes\":%zu},\n"
 #endif
-        "\"stats_pty\":{\"nconnect\":%zd,\"rxbytes\":%zd,\"txbytes\":%zd},\n"
-        "\"stats_ipv4\":{\"nconnect\":%zd,\"rxbytes\":%zd,\"txbytes\":%zd},\n"
-        "\"stats_ipv6\":{\"nconnect\":%zd,\"rxbytes\":%zd,\"txbytes\":%zd},\n"
-        "\"stats_dm\":{\"nconnect\":%zd,\"rxbytes\":%zd,\"txbytes\":%zd},\n"
-        "\"stats_udp\":{\"nconnect\":%zd,\"rxbytes\":%zd,\"txbytes\":%zd}\n}",
+        "\"stats_pty\":{\"nconnect\":%zu,\"rxbytes\":%zu,\"txbytes\":%zu},\n"
+        "\"stats_ipv4\":{\"nconnect\":%zu,\"rxbytes\":%zu,\"txbytes\":%zu},\n"
+        "\"stats_ipv6\":{\"nconnect\":%zu,\"rxbytes\":%zu,\"txbytes\":%zu},\n"
+        "\"stats_dm\":{\"nconnect\":%zu,\"rxbytes\":%zu,\"txbytes\":%zu},\n"
+        "\"stats_udp\":{\"nconnect\":%zu,\"rxbytes\":%zu,\"txbytes\":%zu}\n}",
         xlist_size(&remote.peer_ctxs),
         xlist_size(&remote_pri.remote_ctxs),
         xlist_size(&remote_pri.child_ctxs),
         xlist_size(&remote.io_buffers),
         xhash_size(&remote_pri.udp_sessions),
 #ifdef WITH_CLIREMOTE
+        xhash_size(&remote_pri.deny_objs), remote_pri.deny_count,
         xhash_size(&remote_pri.pending_ctxs),
         remote_pri.stats_cli.nconnect, remote_pri.stats_cli.rxbytes, remote_pri.stats_cli.txbytes,
 #endif
@@ -1922,12 +1991,12 @@ static void handle_request_child_list(const http_request_t* req, http_response_t
         xlist_iter_t iter = xlist_begin(&remote_pri.child_ctxs);
 
         do {
-            child_ctx_t* s = xlist_iter_value(iter);
+            child_ctx_t* c = xlist_iter_value(iter);
 
 #ifdef _WIN32
-            http_buf_add_printf(resp->body, &resp->body_len, "%d,", s->proc.pid);
+            http_buf_add_printf(resp->body, &resp->body_len, "%d,", c->proc.pid);
 #else
-            http_buf_add_printf(resp->body, &resp->body_len, "%d,", s->pid);
+            http_buf_add_printf(resp->body, &resp->body_len, "%d,", c->pid);
 #endif
             iter = xlist_iter_next(iter);
         }
@@ -1953,7 +2022,7 @@ static void handle_request_usession_list(const http_request_t* req, http_respons
             udp_session_t* s = xhash_iter_data(iter);
 
             http_buf_add_printf(resp->body, &resp->body_len,
-                "{\"sid\":\"%x\",\"nrctxs\":%zd,\"nconns\":%zd},\n",
+                "{\"sid\":\"%x\",\"nrctxs\":%zu,\"nconns\":%zu},\n",
                 *(u32_t*) s->sid, xlist_size(&s->rctxs), xhash_size(&s->conns));
 
             iter = xhash_iter_next(&remote_pri.udp_sessions, iter);
@@ -1966,6 +2035,39 @@ static void handle_request_usession_list(const http_request_t* req, http_respons
 }
 
 #ifdef WITH_CLIREMOTE
+static void handle_request_deny_list(const http_request_t* req, http_response_t* resp)
+{
+    char buf[46];
+    http_buf_add_string(resp->headers, &resp->header_len,
+        "Content-Type: application/json\r\n");
+
+    http_buf_add_string(resp->body, &resp->body_len, "[\n");
+
+    if (!xlist_empty(&remote_pri.deny_list)) {
+        xlist_iter_t iter = xlist_begin(&remote_pri.deny_list);
+
+        do {
+            deny_obj_t* o = *(deny_obj_t**) xlist_iter_value(iter);
+
+            if (o->addr.vx.sa_family == AF_INET) {
+                uv_inet_ntop(AF_INET, &o->addr.v4.sin_addr, buf, sizeof(buf));
+                http_buf_add_printf(resp->body, &resp->body_len,
+                    "{\"type\":4,\"addr\":\"%s\"},\n", buf);
+            } else { /* AF_INET6 */
+                uv_inet_ntop(AF_INET6, &o->addr.v6.sin6_addr, buf, sizeof(buf));
+                http_buf_add_printf(resp->body, &resp->body_len,
+                    "{\"type\":6,\"addr\":\"%s\"},\n", buf);
+            }
+            iter = xlist_iter_next(iter);
+        }
+        while (xlist_iter_valid(&remote_pri.deny_list, iter)
+            && resp->body_len + sizeof(buf) + 32 <= sizeof(resp->body));
+
+        resp->body_len -= 2; /* delete ',\n' at the end of 'resp->body'. */
+    }
+    http_buf_add_string(resp->body, &resp->body_len, "\n]");
+}
+
 static void handle_request_device_list(const http_request_t* req, http_response_t* resp)
 {
     http_buf_add_string(resp->headers, &resp->header_len,
@@ -1980,8 +2082,8 @@ static void handle_request_device_list(const http_request_t* req, http_response_
             pending_ctx_t* c = xhash_iter_data(iter);
 
             http_buf_add_printf(resp->body, &resp->body_len,
-                "{\"devid\":\"%s\",\"nclients\":%zd,\"npeers\":%zd,"
-                "\"nconnect\":%zd,\"rxbytes\":%zd,\"txbytes\":%zd},\n",
+                "{\"devid\":\"%s\",\"nclients\":%zu,\"npeers\":%zu,"
+                "\"nconnect\":%zu,\"rxbytes\":%zu,\"txbytes\":%zu},\n",
                 devid_to_str(c->devid), xlist_size(&c->clients), xlist_size(&c->peers),
                 c->stats.nconnect, c->stats.rxbytes, c->stats.txbytes);
 
@@ -2038,10 +2140,7 @@ static void handle_request_log_verbose_off(const http_request_t* req, http_respo
 
 int start_ctrl_server(uv_loop_t* loop, const char* addrstr)
 {
-    union {
-        struct sockaddr x;
-        struct sockaddr_in6 d;
-    } addr;
+    union { addrx_t x; addr6_t _; } addr;
 
     if (parse_ip_str(addrstr, DEF_CSERVER_PORT, &addr.x) != 0) {
         XLOGE("invalid control server address (%s).", addrstr);
@@ -2061,6 +2160,29 @@ static int __pending_ctx_equal(void* l, void* r)
 {
     return !memcmp(l, r, DEVICE_ID_SIZE);
 }
+
+static unsigned __deny_obj_hash(void* _v)
+{
+    deny_obj_t* v = _v;
+
+    /* NOTE: port is not included. */
+    if (v->addr.vx.sa_family == AF_INET)
+        return xhash_data_hash((u8_t*) &v->addr.v4.sin_addr, 4);
+    return xhash_data_hash((u8_t*) &v->addr.v6.sin6_addr, 16); /* AF_INET6 */
+}
+static int __deny_obj_equal(void* _l, void* _r)
+{
+    deny_obj_t* l = _l;
+    deny_obj_t* r = _r;
+
+    /* NOTE: port is not included. */
+    if (l->addr.vx.sa_family == r->addr.vx.sa_family) {
+        if (l->addr.vx.sa_family == AF_INET)
+            return !memcmp(&l->addr.v4.sin_addr, &r->addr.v4.sin_addr, 4);
+        return !memcmp(&l->addr.v6.sin6_addr, &r->addr.v6.sin6_addr, 16); /* AF_INET6 */
+    }
+    return 0;
+}
 #endif
 
 static unsigned __udp_session_hash(void* v)
@@ -2078,8 +2200,11 @@ void remote_private_init()
     xlist_init(&remote_pri.remote_ctxs, sizeof(remote_ctx_t), NULL);
     xlist_init(&remote_pri.child_ctxs, sizeof(child_ctx_t), NULL);
 #ifdef WITH_CLIREMOTE
+    xlist_init(&remote_pri.deny_list, sizeof(deny_obj_t*), NULL);
     xhash_init(&remote_pri.pending_ctxs, -1, sizeof(pending_ctx_t),
         __pending_ctx_hash, __pending_ctx_equal, NULL);
+    xhash_init(&remote_pri.deny_objs, -1, sizeof(deny_obj_t),
+        __deny_obj_hash, __deny_obj_equal, NULL);
 #endif
     xhash_init(&remote_pri.udp_sessions, -1, sizeof(udp_session_t),
         __udp_session_hash, __udp_session_equal, NULL);
@@ -2089,7 +2214,9 @@ void remote_private_destroy()
 {
     xhash_destroy(&remote_pri.udp_sessions);
 #ifdef WITH_CLIREMOTE
+    xhash_destroy(&remote_pri.deny_objs);
     xhash_destroy(&remote_pri.pending_ctxs);
+    xlist_destroy(&remote_pri.deny_list);
 #endif
     xlist_destroy(&remote_pri.child_ctxs);
     xlist_destroy(&remote_pri.remote_ctxs);
