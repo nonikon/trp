@@ -53,7 +53,9 @@ typedef union {
 } remote_ctx_t;
 
 struct peer_ctx {
+#ifdef WITH_CLIREMOTE
     union { addrx_t x; addr6_t _; } addr;
+#endif
     uv_tcp_t io;
     remote_ctx_t* remote;
     conn_stats_t* stats;

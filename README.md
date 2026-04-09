@@ -3,7 +3,7 @@
 - SOCKS5 TCP/UDP proxy and SOCKS4/SOCKS4a TCP proxy.
 - Linux iptable redirect (TCP).
 - TCP/UDP port mapping.
-- Cross-platform remote terminal.
+- Cross-platform remote shell.
 
 ## Build
 If you already have libuv installed on your system, use the following command:
@@ -36,7 +36,7 @@ APPLICATION ---> | proxy-client | ---> | proxy-server | ---> REMOTE
                                            server.c           client.c
 ```
 
-- Remote terminal
+- Remote shell
 ```text
                  +--------------+      +-----------------------+
                  |   trp-shell  | ---> | proxy-server ---> PTY |
@@ -142,16 +142,16 @@ Finally, start `proxy-client` locally (should have access to the `server`) on de
     dig -p 5353 @127.0.0.1 www.google.com
     ```
 
-### Access terminal of `server`
-- Run the following command to start remote terminal (Note: The `server` should run with an extra argument `-T CTRL_KEY_OF_SERVER` to enable remote terminal.):
+### Access shell of `server`
+- Run the following command to start remote shell (Note: The `server` should run with an extra argument `-T CTRL_KEY_OF_SERVER` to enable remote shell.):
     ```bash
     ./trp-shell -x 1.2.3.4:2222 -k KEY_OF_SERVER -T CTRL_KEY_OF_SERVER
     ```
 
-### Access terminal of `client`
-- Run the following command to start remote terminal (Note: The `client` should run with an extra argument `-T CTRL_KEY_OF_SERVER` to enable remote terminal.):
+### Access shell of `client`
+- Run the following command to start remote shell (Note: The `client` should run with an extra argument `-T CTRL_KEY_OF_CLIENT` to enable remote shell.):
     ```bash
-    ./trp-shell -x 1.2.3.4:2222 -k KEY_OF_SERVER -T CTRL_KEY_OF_SERVER -d DEVID_OF_CLIENT -K KEY_OF_CLIENT
+    ./trp-shell -x 1.2.3.4:2222 -k KEY_OF_SERVER -T CTRL_KEY_OF_CLIENT -d DEVID_OF_CLIENT -K KEY_OF_CLIENT
     ```
 
 NOTE: Config file is supported by `-C` command option, see [trp.ini](trp.ini).

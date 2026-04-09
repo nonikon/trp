@@ -300,8 +300,7 @@ void start_tcp_forward(xclient_ctx_t* ctx, int reading)
         uv_tcp_nodelay(&ctx->peer.t.io, 1);
         uv_tcp_nodelay(&ctx->io_xserver, 1);
     }
-    uv_read_start((uv_stream_t*) &ctx->io_xserver, on_iobuf_alloc,
-        on_tcp_xserver_read);
+    uv_read_start((uv_stream_t*) &ctx->io_xserver, on_iobuf_alloc, on_tcp_xserver_read);
     if (reading) {
         /* reset read callback */
         ctx->peer.t.io.read_cb = on_tcp_peer_read; /* or 'uv_read_stop + uv_read_start' */
@@ -526,7 +525,7 @@ int connect_xserver(xclient_ctx_t* ctx, void* concb)
     req->data = ctx;
 
     if (uv_tcp_connect(req, &ctx->io_xserver, &xclient.xserver_addr.x,
-            concb ? concb : on_tcp_xserver_connected) == 0)
+            concb ? concb : (void*) on_tcp_xserver_connected) == 0)
         return 0;
     XLOGW("connect proxy server failed immediately.");
 
@@ -555,8 +554,11 @@ void init_connect_command(xclient_ctx_t* ctx,
         cmd->flag = xclient.nodelay << 2; /* addrpref always 0 */
         cmd->cmd = CMD_CONNECT_CLIENT;
         cmd->len = DEVICE_ID_SIZE;
+        cmd->port = 0;
 
         memcpy(cmd->data, xclient.device_id, DEVICE_ID_SIZE);
+        memset(cmd->data + DEVICE_ID_SIZE, 0,
+            CMD_MAX_SIZE - sizeof(cmd_t) - DEVICE_ID_SIZE);
 
         fill_command_md(cmd);
         xclient.crypto.init(&ctx->ectx, xclient.crypto_key, pbuf);
@@ -578,6 +580,7 @@ void init_connect_command(xclient_ctx_t* ctx,
     cmd->len = (u8_t) addrlen;
     cmd->port = port;
 
+    memset(cmd->data, 0, CMD_MAX_SIZE - sizeof(cmd_t));
     memcpy(cmd->data, addr, addrlen);
 
     XLOGD("proxy to %s.", maddr_to_str(cmd));

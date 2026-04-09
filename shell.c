@@ -316,8 +316,11 @@ static void send_connect_command()
         cmd->flag = 1 << 2; /* nodelay */
         cmd->cmd = CMD_CONNECT_CLIENT;
         cmd->len = DEVICE_ID_SIZE;
+        cmd->port = 0;
 
         memcpy(cmd->data, xshctx.device_id, DEVICE_ID_SIZE);
+        memset(cmd->data + DEVICE_ID_SIZE, 0,
+            CMD_MAX_SIZE - sizeof(cmd_t) - DEVICE_ID_SIZE);
 
         fill_command_md(cmd);
         xshctx.crypto.init(&xshctx.ectx, xshctx.crypto_key, pbuf);
@@ -340,6 +343,8 @@ static void send_connect_command()
     cmd->port = 0;
 
     memcpy(cmd->data, xshctx.ctrl_key, sizeof(xshctx.ctrl_key));
+    memset(cmd->data + sizeof(xshctx.ctrl_key), 0,
+        CMD_MAX_SIZE - sizeof(cmd_t) - sizeof(xshctx.ctrl_key));
 
     memcpy(dnonce, pbuf, MAX_NONCE_LEN);
     convert_nonce(dnonce);

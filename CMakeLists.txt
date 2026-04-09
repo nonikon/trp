@@ -6,7 +6,7 @@ set(LIBUV_SRC_PATH "./libuv" CACHE PATH "Enable build-in libuv and set source pa
 
 option(DISABLE_LOG "Disable log output" OFF)
 option(DISABLE_CTRLSERVER "Disable http control server" OFF)
-option(DISABLE_PTYLOGIN "Launch remote terminal without login (Unix remote only)" ON)
+option(DISABLE_PTYLOGIN "Launch remote shell without login (Unix remote only)" ON)
 
 # Get Git current commit id
 find_package(Git QUIET)

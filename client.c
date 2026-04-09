@@ -98,8 +98,11 @@ static void report_device_id(peer_ctx_t* ctx)
     cmd->flag = 0;
     cmd->cmd = CMD_REPORT_DEVID;
     cmd->len = DEVICE_ID_SIZE;
+    cmd->port = 0;
 
     memcpy(cmd->data, device_id, DEVICE_ID_SIZE);
+    memset(cmd->data + DEVICE_ID_SIZE, 0,
+        CMD_MAX_SIZE - sizeof(cmd_t) - DEVICE_ID_SIZE);
 
     fill_command_md(cmd);
     /* use 'ctx->edctx' temporarily. */
@@ -275,7 +278,7 @@ static void usage(const char* s)
 #ifdef WITH_CTRLSERVER
     fprintf(stderr, "  -r <address>  HTTP control server listen at. (default: disabled)\n");
 #endif
-    fprintf(stderr, "  -T <password> enable remote control (remote terminal etc.) and set password. (default: disabled)\n");
+    fprintf(stderr, "  -T <password> enable remote control (remote shell etc.) and set password. (default: disabled)\n");
     fprintf(stderr, "  -d <devid>    device id (1~16 bytes string) of this client. (default: %s)\n", DEF_DEVID_STRING);
     fprintf(stderr, "  -k <password> crypto password with server. (default: none)\n");
     fprintf(stderr, "  -K <PASSWORD> crypto password with proxy client. (default: none)\n");

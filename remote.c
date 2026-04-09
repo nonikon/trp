@@ -43,7 +43,7 @@ typedef struct deny_obj {
         addr4_t v4;
         addr6_t v6;
     } addr;             /* (must be the first member) */
-    u64_t lasts;        /* last fail timestamp */
+    u64_t exts;         /* expire timestamp */
     xlist_iter_t iter;  /* the 'xlist_iter_t' in 'remote_pri.deny_list' */
 } deny_obj_t;
 
@@ -157,23 +157,29 @@ static void on_peer_write(uv_write_t* req, int status)
 #ifdef WITH_CLIREMOTE
 static int query_deny_object(const addrx_t* addr)
 {
-    xlist_iter_t itr = xlist_begin(&remote_pri.deny_list);
+    if (!xlist_empty(&remote_pri.deny_list)) {
+        xlist_iter_t itr = xlist_begin(&remote_pri.deny_list);
+        const u64_t now = uv_now(remote.loop);
 
-    while (itr != xlist_end(&remote_pri.deny_list)) {
-        deny_obj_t* obj = *(deny_obj_t**) xlist_iter_value(itr);
+        do {
+            deny_obj_t* obj = *(deny_obj_t**) xlist_iter_value(itr);
 
-        if (uv_now(remote.loop) - obj->lasts < DENY_OBJ_TIMEO * 1000) {
-            /* check whether 'addr' is in 'remote_pri.deny_objs'. */
-            if (xhash_get_data(&remote_pri.deny_objs, addr) != XHASH_INVALID_DATA) {
-                ++remote_pri.deny_count;
-                return 1;
+            if (now > obj->exts) {
+                /* remove this expired 'deny_obj_t'. */
+                XLOGI("remove deny object %s.", addr_to_str(&obj->addr.vx));
+                xhash_remove_data(&remote_pri.deny_objs, obj);
+                itr = xlist_erase(&remote_pri.deny_list, itr);
+                continue;
             }
-            return 0; /* not in deny list. */
+            /* check whether 'addr' is in 'remote_pri.deny_objs'. */
+            obj = xhash_get_data(&remote_pri.deny_objs, addr);
+            if (obj == XHASH_INVALID_DATA) {
+                return 0; /* not in deny list. */
+            }
+            ++remote_pri.deny_count;
+            return 1;
         }
-        /* remove this expired 'deny_obj_t'. */
-        XLOGI("remove deny object %s.", addr_to_str(&obj->addr.vx));
-        xhash_remove_data(&remote_pri.deny_objs, obj);
-        itr = xlist_erase(&remote_pri.deny_list, itr);
+        while (itr != xlist_end(&remote_pri.deny_list));
     }
 
     return 0; /* deny list alredy empty. */
@@ -187,7 +193,7 @@ static void insert_deny_object(const addrx_t* addr)
 
     if (xlist_size(&remote_pri.deny_list) != xhash_size(&remote_pri.deny_objs)) {
         XLOGI("add deny object %s.", addr_to_str(addr));
-        obj->lasts = uv_now(remote.loop);
+        obj->exts = uv_now(remote.loop) + DENY_OBJ_TIMEO * 1000;
         obj->iter = xlist_push_back(&remote_pri.deny_list, &obj);
     }
 }
@@ -1776,6 +1782,7 @@ int do_peer_command(peer_ctx_t* ctx, io_buf_t* iob)
         }
 
         XLOGW("device id (%s) not exist for peer.", devid_to_str(cmd->data));
+        insert_deny_object(&ctx->addr.x);
         return -1;
     }
 

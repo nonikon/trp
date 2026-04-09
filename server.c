@@ -93,7 +93,7 @@ static void usage(const char* s)
 #ifdef WITH_CTRLSERVER
     fprintf(stderr, "  -r <address>  HTTP control server listen at. (default: disabled)\n");
 #endif
-    fprintf(stderr, "  -T <password> enable remote control (remote terminal etc.) and set password. (default: disabled)\n");
+    fprintf(stderr, "  -T <password> enable remote control (remote shell etc.) and set password. (default: disabled)\n");
     fprintf(stderr, "  -k <password> crypto password. (default: none)\n");
     fprintf(stderr, "  -m <method>   crypto method, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
 #ifndef _WIN32
@@ -104,7 +104,7 @@ static void usage(const char* s)
     fprintf(stderr, "  -C <config>   set config file path and section. (default: trp.ini)\n");
     fprintf(stderr, "                section can be specified after colon. (default: trp.ini:server)\n");
 #ifdef WITH_CLIREMOTE
-    fprintf(stderr, "  -D            disable direct connect (connect TCP/UDP or terminal etc.).\n");
+    fprintf(stderr, "  -D            disable direct connect (connect TCP/UDP or shell etc.).\n");
 #endif
     fprintf(stderr, "  -v            output verbosely.\n");
     fprintf(stderr, "  -V            output version string.\n");
