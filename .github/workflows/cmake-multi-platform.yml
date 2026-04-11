@@ -1,0 +1,65 @@
+name: CMake on multiple platforms
+
+on:
+  workflow_dispatch:
+    inputs:
+      libuv_version:
+        description: "Libuv version"
+        required: true
+        type: string
+        default: "1.52.1"
+
+jobs:
+  build-unix:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-18.04, ubuntu-latest, macos-latest]
+    steps:
+    - uses: actions/checkout@v6
+    - name: Download libuv source code
+      run: |
+        wget "https://dist.libuv.org/dist/v${{ inputs.libuv_version }}/libuv-v${{ inputs.libuv_version }}.tar.gz"
+        tar xf "libuv-v${{ inputs.libuv_version }}.tar.gz"
+    - name: Configure and build
+      run: |
+        cmake -B build -S . -DLIBUV_SRC_PATH="libuv-v${{ inputs.libuv_version }}" -DCMAKE_BUILD_TYPE=Release
+        cmake --build build
+        cmake --install build --prefix install
+    - name: Package
+      working-directory: install/bin
+      run: |
+        strip trp-*
+        cp ../../trp.ini .
+        zip ../trp-${{ github.ref_name }}-${{ matrix.os }}.zip *
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v7
+      with:
+        name: trp-${{ github.ref_name }}-${{ matrix.os }}
+        path: install/trp-*.zip
+        archive: false
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v6
+    - name: Download libuv source code
+      run: |
+        Invoke-WebRequest -Uri "https://dist.libuv.org/dist/v${{ inputs.libuv_version }}/libuv-v${{ inputs.libuv_version }}.tar.gz" -OutFile "libuv-v${{ inputs.libuv_version }}.tar.gz"
+        tar xf libuv-v${{ inputs.libuv_version }}.tar.gz
+    - name: Configure and build
+      run: |
+        cmake -B build -S . -DLIBUV_SRC_PATH="libuv-v${{ inputs.libuv_version }}" -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>"
+        cmake --build build --config Release
+        cmake --install build --prefix install
+    - name: Package
+      working-directory: install/bin
+      run: |
+        Copy-Item ../../trp.ini -Destination .
+        Compress-Archive -Path * -DestinationPath ../trp-${{ github.ref_name }}-windows-latest.zip
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v7
+      with:
+        name: trp-${{ github.ref_name }}-windows-latest
+        path: install/trp-*.zip
+        archive: false
