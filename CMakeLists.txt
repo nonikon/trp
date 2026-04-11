@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.10)
 
+if(POLICY CMP0091)
+  cmake_policy(SET CMP0091 NEW) # Enable MSVC_RUNTIME_LIBRARY setting
+endif()
+
 project(trp LANGUAGES C)
 
 set(LIBUV_SRC_PATH "./libuv" CACHE PATH "Enable build-in libuv and set source path")
@@ -102,4 +106,5 @@ add_executable(trp-shell ${shell_sources})
 target_compile_definitions(trp-shell PRIVATE ${shell_defines})
 target_link_libraries(trp-shell PRIVATE ${shell_libraries})
 
-install(TARGETS trp-server trp-client trp-tunnel trp-socks trp-shell)
+install(TARGETS trp-server trp-client trp-tunnel trp-socks trp-shell
+  DESTINATION ${CMAKE_INSTALL_BINDIR})
