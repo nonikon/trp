@@ -1,4 +1,4 @@
-name: CMake on multiple platforms
+name: package
 
 on:
   workflow_dispatch:
@@ -10,11 +10,8 @@ on:
         default: "1.52.1"
 
 jobs:
-  build-unix:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-18.04, ubuntu-latest, macos-latest]
+  build-linux:
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
     - name: Download libuv source code
@@ -23,22 +20,30 @@ jobs:
         tar xf "libuv-v${{ inputs.libuv_version }}.tar.gz"
     - name: Configure and build
       run: |
-        cmake -B build -S . -DLIBUV_SRC_PATH="libuv-v${{ inputs.libuv_version }}" -DCMAKE_BUILD_TYPE=Release
-        cmake --build build
-        cmake --install build --prefix install
+        docker run --rm -v $PWD:/src -w /src ubuntu:18.04 bash -c '\
+          set -e; \
+          apt update; \
+          apt install -y cmake git; \
+          mkdir build; \
+          cd build; \
+          cmake .. -DLIBUV_SRC_PATH="../libuv-v${{ inputs.libuv_version }}" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=../install; \
+          make install; \
+        '
+        sudo chown -R $USER: install
     - name: Package
       working-directory: install/bin
       run: |
+        commitid=$(git rev-parse --short HEAD)
         strip trp-*
         cp ../../trp.ini .
-        zip ../trp-${{ github.ref_name }}-${{ matrix.os }}.zip *
+        zip ../trp-${commitid}-linux-x86_64.zip *
     - name: Upload artifacts
       uses: actions/upload-artifact@v7
       with:
-        name: trp-${{ github.ref_name }}-${{ matrix.os }}
+        name: trp-linux-x86_64
         path: install/trp-*.zip
         archive: false
-
   build-windows:
     runs-on: windows-latest
     steps:
@@ -55,11 +60,12 @@ jobs:
     - name: Package
       working-directory: install/bin
       run: |
+        $CommitId = git rev-parse --short HEAD
         Copy-Item ../../trp.ini -Destination .
-        Compress-Archive -Path * -DestinationPath ../trp-${{ github.ref_name }}-windows-latest.zip
+        Compress-Archive -Path * -DestinationPath ../trp-$CommitId-windows-x86_64.zip
     - name: Upload artifacts
       uses: actions/upload-artifact@v7
       with:
-        name: trp-${{ github.ref_name }}-windows-latest
+        name: trp-windows-x86_64
         path: install/trp-*.zip
         archive: false

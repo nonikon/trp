@@ -1,0 +1,35 @@
+name: test
+
+on:
+  workflow_dispatch:
+    inputs:
+      libuv_version:
+        description: "Libuv version"
+        required: true
+        type: string
+        default: "1.52.1"
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+    - uses: actions/checkout@v6
+    - name: Download libuv source code (Unix)
+      if: ${{ ! contains(matrix.os, 'windows') }}
+      run: |
+        wget "https://dist.libuv.org/dist/v${{ inputs.libuv_version }}/libuv-v${{ inputs.libuv_version }}.tar.gz"
+    - name: Download libuv source code (Windows)
+      if: contains(matrix.os, 'windows')
+      run: |
+        Invoke-WebRequest -Uri "https://dist.libuv.org/dist/v${{ inputs.libuv_version }}/libuv-v${{ inputs.libuv_version }}.tar.gz" -OutFile "libuv-v${{ inputs.libuv_version }}.tar.gz"
+    - name: Extract libuv source code
+      run: |
+        tar xf "libuv-v${{ inputs.libuv_version }}.tar.gz"
+    - name: Configure and build
+      # Currently only testing compilation
+      run: |
+        cmake -B build -S . -DLIBUV_SRC_PATH="libuv-v${{ inputs.libuv_version }}"
+        cmake --build build
