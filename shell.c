@@ -417,7 +417,7 @@ static void on_xserver_connected(uv_connect_t* req, int status)
 
 static void show_usage(const char* s)
 {
-    fprintf(stderr, "trp %s libuv %s, usage: %s [option]...\n", version_string(), uv_version_string(), s);
+    fprintf(stderr, "trp %s libuv %s, usage: %s [option]... [secname]\n", version_string(), uv_version_string(), s);
     fprintf(stderr, "[options]:\n");
     fprintf(stderr, "  -x <address>  proxy server connect to. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
     fprintf(stderr, "  -T <password> remote control password.\n");
@@ -426,8 +426,7 @@ static void show_usage(const char* s)
     fprintf(stderr, "  -K <PASSWORD> crypto password with client. (default: none)\n");
     fprintf(stderr, "  -m <method>   crypto method with proxy server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
     fprintf(stderr, "  -M <METHOD>   crypto method with client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
-    fprintf(stderr, "  -C <config>   set config file path and section. (default: trp.ini)\n");
-    fprintf(stderr, "                section can be specified after colon. (default: trp.ini:shell)\n");
+    fprintf(stderr, "  -C <config>   set config file path. (default: trp.ini or env from TRP_CONFIG_FILLE)\n");
     fprintf(stderr, "  -f            show the remote terminal in the foreground (for Windows remote only).\n");
     fprintf(stderr, "  -v            output verbosely.\n");
     fprintf(stderr, "  -V            output version string.\n");
@@ -442,6 +441,8 @@ static void show_usage(const char* s)
     fprintf(stderr, "  []            IPV6 string with default address and port.\n");
     fprintf(stderr, "  abc.com:8080  DOMAIN string with port.\n");
     fprintf(stderr, "  abc.com       DOMAIN string with default port.\n");
+    fprintf(stderr, "[secname]:\n");
+    fprintf(stderr, "  Use section 'shell@secname' instead of the default 'shell' when parsing config file.\n");
     fprintf(stderr, "\n");
 }
 
@@ -449,8 +450,8 @@ static int parse_args(int argc, char** argv)
 {
     union { addrx_t x; addr6_t _; } xserver_addr;
     uv_loop_t* loop;
-    char* cfg_path = NULL;
-    const char* cfg_sec = "shell";
+    char cfg_sec[32] = "shell";
+    const char* cfg_path = NULL;
     const char* xserver_str = "127.0.0.1";
     const char* devid_str = NULL;
     const char* ctrl_passwd = NULL;
@@ -458,7 +459,6 @@ static int parse_args(int argc, char** argv)
     const char* passwdx = NULL;
     int method = CRYPTO_CHACHA20;
     int methodx = CRYPTO_CHACHA20;
-    int cfg_specified = 0;
     int fgrnd = 0;
     int verbose = 0;
     int ec, i;
@@ -469,8 +469,8 @@ static int parse_args(int argc, char** argv)
 
         if (opt[0] != '-') {
             /* argument only. (opt) */
-            XLOGE("Invalid parameter [%s].", opt);
-            return 1;
+            snprintf(cfg_sec, sizeof(cfg_sec), "shell@%s", opt);
+            continue;
         }
 
         if (opt[1] != '-') {
@@ -506,7 +506,7 @@ static int parse_args(int argc, char** argv)
             case 'M':     methodx = atoi(arg); continue;
             case 'k':      passwd = arg; continue;
             case 'K':     passwdx = arg; continue;
-            case 'C':    cfg_path = arg; cfg_specified = 1; continue;
+            case 'C':    cfg_path = arg; continue;
             }
 
             XLOGE("Invalid parameter [-%c %s].", opt[0], arg);
@@ -528,24 +528,16 @@ static int parse_args(int argc, char** argv)
     }
 
     i = 0;
-    parse_config_str(&cfg_path, &cfg_sec);
-    ec = load_config_file(cfg_path, cfg_sec);
-    if (ec < 0) {
-        if (cfg_specified) {
-            XLOGE("Open config file (%s) failed, exit.", cfg_path);
-            return 1;
-        }
-    } else if (ec > 0) {
-        XLOGE("Error at config file %s:%d, ignore configs.", cfg_path, ec);
-    } else {
+    ec = load_config_file(&cfg_path, cfg_sec);
+    if (ec == 0) {
         config_item_t* item = NULL;
 
-        while (!!(item = get_config_item(item))) {
+        for (; !!(item = get_config_item(item)); ) {
             if (!item->name[0] || !item->value[0]) {
                 XLOGE("Invalid config item (%s=%s), ignore.", item->name, item->value);
                 continue;
-            } else if (!strcmp(item->name, "v")) { fgrnd = atoi(item->value);
-            } else if (!strcmp(item->name, "v")) { verbose = atoi(item->value);
+            } else if (!strcmp(item->name, "f")) { fgrnd = !!atoi(item->value);
+            } else if (!strcmp(item->name, "v")) { verbose = !!atoi(item->value);
             } else if (!strcmp(item->name, "x")) { xserver_str = item->value;
             } else if (!strcmp(item->name, "T")) { ctrl_passwd = item->value;
             } else if (!strcmp(item->name, "d")) { devid_str = item->value;
@@ -554,11 +546,13 @@ static int parse_args(int argc, char** argv)
             } else if (!strcmp(item->name, "k")) { passwd = item->value;
             } else if (!strcmp(item->name, "K")) { passwdx = item->value;
             } else {
-                XLOGE("Invalid config item name (%s), ignore.", item->name);
+                XLOGE("Invalid config item (%s=%s), ignore.", item->name, item->value);
                 continue;
             }
             ++i;
         }
+    } else if (ec > 0) {
+        XLOGE("Error at config file %s:%d, ignore configs.", cfg_path, ec);
     }
 
     if (fgrnd) {
@@ -569,7 +563,7 @@ static int parse_args(int argc, char** argv)
     }
     XLOGI("Current version %s, libuv %s.", version_string(), uv_version_string());
     if (i > 0) {
-        XLOGI("Load %d item(s) from config file (%s:%s).", i, cfg_path, cfg_sec);
+        XLOGI("Loaded %d item(s) from config file %s (%s).", i, cfg_path, cfg_sec);
     }
 #ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);

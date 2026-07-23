@@ -87,35 +87,6 @@ void rand_bytes(u8_t* data, u32_t len)
     }
 }
 
-void parse_config_str(char** str, const char** sec)
-{
-    if (!*str) {
-        *str = DEF_CONFIG_FILE;
-    } else {
-        char* p = strrchr(*str, ':');
-
-#ifdef _WIN32
-        /* in case of "D:\trp.ini" and so on... */
-        if (p && p[1] != '/' && p[1] != '\\') {
-#else
-        if (p) {
-#endif
-            /* "file:section" */
-            if (p != *str) {
-                /* with 'file' */
-                p[0] = '\0';
-            } else {
-                /* without 'file' */
-                *str = DEF_CONFIG_FILE;
-            }
-            if (p[1]) {
-                /* with 'section' */
-                *sec = p + 1;
-            }
-        }
-    }
-}
-
 int parse_ip_str(const char* str, int port, addrx_t* addr)
 {
     const char* p;
@@ -331,21 +302,21 @@ int str_to_devid(u8_t id[DEVICE_ID_SIZE], const char* str)
 static int on_config_item(void* user, const char* section,
                 const char* name, const char* value)
 {
-    unsigned nlen, vlen;
+    size_t nlen, vlen;
     config_item_t* item;
 
     if (strcmp(section, user) != 0) {
         return 1;
     }
 
-    item = xlist_alloc_back(&__config_items);
-    nlen = (int) strlen(name);
-    vlen = (int) strlen(value);
+    nlen = strlen(name);
+    vlen = strlen(value);
 
     if (nlen + vlen > INI_MAX_LINE - 2) {
         return 0;
     }
 
+    item = xlist_alloc_back(&__config_items);
     item->name = item->buffer;
     item->value = item->buffer + nlen + 1;
     memcpy(item->name, name, nlen + 1);
@@ -354,8 +325,10 @@ static int on_config_item(void* user, const char* section,
     return 1;
 }
 
-int load_config_file(const char* path, const char* sec)
+int load_config_file(const char** path, const char* sec)
 {
+    static char buf[INI_MAX_LINE];
+
     if (__config_items.val_size == 0) {
         xlist_init(&__config_items, sizeof(config_item_t) + INI_MAX_LINE, NULL);
     } else {
@@ -363,19 +336,30 @@ int load_config_file(const char* path, const char* sec)
     }
 
     /* ini_parse() > 0 means config file content error, -1 means open file failed. */
-    return ini_parse(path, on_config_item, (void*) sec);
+    if (*path == NULL) {
+        size_t bufsz = sizeof(buf);
+        // try default config file when 'path' is not specified
+        int rc = ini_parse(DEF_CONFIG_FILE, on_config_item, (void*) sec);
+
+        if (rc < 0) {
+            // try config file from env when default config file not exists
+            if (uv_os_getenv("TRP_CONFIG_FILE", buf, &bufsz) == 0) {
+                *path = buf;
+                return ini_parse(buf, on_config_item, (void*) sec);
+            }
+            return -1; // env TRP_CONFIG_FILE not specified
+        }
+        *path = DEF_CONFIG_FILE;
+        return rc;
+    }
+    return ini_parse(*path, on_config_item, (void*) sec);
 }
 
 config_item_t* get_config_item(config_item_t* i)
 {
     /* NOTE: load_config() must be called before. */
-    xlist_iter_t iter;
-
-    if (i) {
-        iter = xlist_iter_next(xlist_value_iter(i));
-    } else {
-        iter = xlist_begin(&__config_items);
-    }
+    xlist_iter_t iter = i ? xlist_iter_next(xlist_value_iter(i))
+                          : xlist_begin(&__config_items);
 
     if (xlist_iter_valid(&__config_items, iter)) {
         return xlist_iter_value(iter);

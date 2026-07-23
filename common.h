@@ -13,8 +13,8 @@
 
 #define VERSION_MAJOR       1
 #define VERSION_MINOR       4
-#define VERSION_PATCH       5
-#define VERSION_ISREL       1
+#define VERSION_PATCH       6
+#define VERSION_ISREL       0
 
 #define DEF_CONFIG_FILE     "trp.ini"
 #define DEF_DEVID_STRING    "test"
@@ -152,15 +152,6 @@ int daemon(int argc, char** argv);
 void seed_rand(u32_t seed);
 void rand_bytes(u8_t* data, u32_t len);
 
-/* parse config path string. Eg:
- * - "file:section" -> [file], [section]
- * - ":section" -> [DEF_CONFIG_FILE], [section]
- * - "file" -> [file], [sec]
- * - NULL -> [DEF_CONFIG_FILE], [sec]
- * NOTE: content of '*str' may be modified.
- */
-void parse_config_str(char** str, const char** sec);
-
 /* parse ipv4/ipv6 address string to 'struct sockaddr'. Eg:
  * - "1.2.3.4:8080" -> [1.2.3.4], [8080]
  * - ":8080" -> [127.0.0.1], [8080]
@@ -191,7 +182,7 @@ const char* devid_to_str(const u8_t id[DEVICE_ID_SIZE]);
 int str_to_devid(u8_t id[DEVICE_ID_SIZE], const char* str);
 
 /* load config file from 'path' with section 'sec'. */
-int load_config_file(const char* path, const char* sec);
+int load_config_file(const char** path, const char* sec);
 /* get the next config item. */
 config_item_t* get_config_item(config_item_t* prev);
 

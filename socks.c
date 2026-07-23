@@ -529,7 +529,7 @@ static void on_udp_sclient_read(uv_udp_t* io, ssize_t nread, const uv_buf_t* buf
 
 static void usage(const char* s)
 {
-    fprintf(stderr, "trp %s libuv %s, usage: %s [option]...\n", version_string(), uv_version_string(), s);
+    fprintf(stderr, "trp %s libuv %s, usage: %s [option]... [secname]\n", version_string(), uv_version_string(), s);
     fprintf(stderr, "[options]:\n");
     fprintf(stderr, "  -x <address>  proxy server connect to. (default: 127.0.0.1:%d)\n", DEF_XSERVER_PORT);
     fprintf(stderr, "  -b <address>  SOCKS4/SOCKS5 server listen at. (default: 127.0.0.1:%d)\n", DEF_SSERVER_PORT);
@@ -549,8 +549,7 @@ static void usage(const char* s)
 #endif
     fprintf(stderr, "  -l <path>     write output to file. (default: write to STDOUT)\n");
     fprintf(stderr, "  -L <path>     write output to file and run as daemon. (default: write to STDOUT)\n");
-    fprintf(stderr, "  -C <config>   set config file path and section. (default: trp.ini)\n");
-    fprintf(stderr, "                section can be specified after colon. (default: trp.ini:socks)\n");
+    fprintf(stderr, "  -C <config>   set config file path. (default: trp.ini or env from TRP_CONFIG_FILLE)\n");
     fprintf(stderr, "  -v            output verbosely.\n");
     fprintf(stderr, "  -V            output version string.\n");
     fprintf(stderr, "  -h            print this help message.\n");
@@ -564,6 +563,8 @@ static void usage(const char* s)
     fprintf(stderr, "  []            IPV6 string with default address and port.\n");
     fprintf(stderr, "  abc.com:8080  DOMAIN string with port.\n");
     fprintf(stderr, "  abc.com       DOMAIN string with default port.\n");
+    fprintf(stderr, "[secname]:\n");
+    fprintf(stderr, "  Use section 'socks@secname' instead of the default 'socks' when parsing config file.\n");
     fprintf(stderr, "\n");
 }
 
@@ -571,8 +572,8 @@ int main(int argc, char** argv)
 {
     uv_tcp_t io_sserver; /* socks server listen io */
     union { addrx_t x; addr6_t _; } saddr;
-    char* cfg_path = NULL;
-    const char* cfg_sec = "socks";
+    char cfg_sec[32] = "socks";
+    const char* cfg_path = NULL;
     const char* xserver_str = "127.0.0.1";
     const char* sserver_str = "127.0.0.1";
     const char* devid_str = NULL;
@@ -582,7 +583,6 @@ int main(int argc, char** argv)
     int method = CRYPTO_CHACHA20;
     int methodx = CRYPTO_CHACHA20;
     int daemonize = 0;
-    int cfg_specified = 0;
 #ifdef _WIN32
     int is_childproc = 0;
 #else
@@ -604,8 +604,8 @@ int main(int argc, char** argv)
 
         if (opt[0] != '-') {
             /* argument only. (opt) */
-            fprintf(stderr, "%s: invalid parameter [%s].\n", argv[0], opt);
-            return 1;
+            snprintf(cfg_sec, sizeof(cfg_sec), "socks@%s", opt);
+            continue;
         }
 
         if (opt[1] != '-') {
@@ -649,9 +649,9 @@ int main(int argc, char** argv)
 #ifndef _WIN32
             case 'n':      nofile = atoi(arg); continue;
 #endif
-            case 'l':     logfile = arg;     daemonize = 0; continue;
-            case 'L':     logfile = arg;     daemonize = 1; continue;
-            case 'C':    cfg_path = arg; cfg_specified = 1; continue;
+            case 'l':     logfile = arg; daemonize = 0; continue;
+            case 'L':     logfile = arg; daemonize = 1; continue;
+            case 'C':    cfg_path = arg; continue;
             }
 
             fprintf(stderr, "%s: invalid parameter [-%c %s].\n", argv[0], opt[0], arg);
@@ -681,27 +681,18 @@ int main(int argc, char** argv)
 
     xlog_init(NULL); /* output to STDOUT first */
 
-    i = 0;
-    parse_config_str(&cfg_path, &cfg_sec);
-    error = load_config_file(cfg_path, cfg_sec);
-    if (error < 0) {
-        if (cfg_specified) {
-            XLOGE("open config file (%s) failed, exit.", cfg_path);
-            return 1;
-        }
-    } else if (error > 0) {
-        XLOGE("error at config file %s:%d, ignore configs.", cfg_path, error);
-    } else {
+    error = load_config_file(&cfg_path, cfg_sec);
+    if (error == 0) {
         config_item_t* item = NULL;
 
-        while (!!(item = get_config_item(item))) {
+        for (i = 0; !!(item = get_config_item(item)); ) {
             if (!item->name[0] || !item->value[0]) {
                 XLOGW("invalid config item (%s=%s), ignore.", item->name, item->value);
                 continue;
 #ifdef __ANDROID__
-            } else if (!strcmp(item->name, "p")) { profd = atoi(item->value);
+            } else if (!strcmp(item->name, "p")) { profd = !!atoi(item->value);
 #endif
-            } else if (!strcmp(item->name, "v")) { verbose = atoi(item->value);
+            } else if (!strcmp(item->name, "v")) { verbose = !!atoi(item->value);
             } else if (!strcmp(item->name, "x")) { xserver_str = item->value;
             } else if (!strcmp(item->name, "b")) { sserver_str = item->value;
             } else if (!strcmp(item->name, "d")) { devid_str = item->value;
@@ -718,11 +709,15 @@ int main(int argc, char** argv)
             } else if (!strcmp(item->name, "l")) { logfile = item->value; daemonize = 0;
             } else if (!strcmp(item->name, "L")) { logfile = item->value; daemonize = 1;
             } else {
-                XLOGW("invalid config item name (%s), ignore.", item->name);
+                XLOGW("invalid config item (%s=%s), ignore.", item->name, item->value);
                 continue;
             }
             ++i;
         }
+        XLOGI("loaded %d item(s) from config file %s (%s).", i, cfg_path, cfg_sec);
+
+    } else if (error > 0) {
+        XLOGE("error at config file %s:%d, ignore configs.", cfg_path, error);
     }
 
     if (logfile) {
@@ -750,9 +745,6 @@ int main(int argc, char** argv)
         xlog_ctrl(XLOG_INFO, 0, 0);
     } else {
         XLOGI("enable verbose output.");
-    }
-    if (i > 0) {
-        XLOGI("load %d item(s) from config file (%s:%s).", i, cfg_path, cfg_sec);
     }
 #ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
