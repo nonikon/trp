@@ -33,3 +33,9 @@ jobs:
       run: |
         cmake -B build -S . -DLIBUV_SRC_PATH="libuv-v${{ inputs.libuv_version }}"
         cmake --build build
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v7
+      with:
+        name: trp-${{ matrix.os }}-build
+        path: build
+        archive: true
