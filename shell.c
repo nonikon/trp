@@ -426,7 +426,7 @@ static void show_usage(const char* s)
     fprintf(stderr, "  -K <PASSWORD> crypto password with client. (default: none)\n");
     fprintf(stderr, "  -m <method>   crypto method with proxy server, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
     fprintf(stderr, "  -M <METHOD>   crypto method with client, 0 - none, 1 - chacha20, 2 - sm4ofb. (default: 1)\n");
-    fprintf(stderr, "  -C <config>   set config file path. (default: trp.ini or env from TRP_CONFIG_FILLE)\n");
+    fprintf(stderr, "  -C <config>   set config file path. (default: trp.ini or env from TRP_CONFIG_FILE)\n");
     fprintf(stderr, "  -f            show the remote terminal in the foreground (for Windows remote only).\n");
     fprintf(stderr, "  -v            output verbosely.\n");
     fprintf(stderr, "  -V            output version string.\n");

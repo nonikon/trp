@@ -290,7 +290,7 @@ static void usage(const char* s)
 #endif
     fprintf(stderr, "  -l <path>     write output to file. (default: write to STDOUT)\n");
     fprintf(stderr, "  -L <path>     write output to file and run as daemon. (default: write to STDOUT)\n");
-    fprintf(stderr, "  -C <config>   set config file path. (default: trp.ini or env from TRP_CONFIG_FILLE)\n");
+    fprintf(stderr, "  -C <config>   set config file path. (default: trp.ini or env from TRP_CONFIG_FILE)\n");
     fprintf(stderr, "  -v            output verbosely.\n");
     fprintf(stderr, "  -V            output version string.\n");
     fprintf(stderr, "  -h            print this help message.\n");
