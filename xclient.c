@@ -39,6 +39,7 @@ static struct {
     xhash_t id2addrs;       /* id2addr_t */
     xlist_t u_xclient_ctxs; /* xclient_ctx_t */
     xlist_t conn_reqs;      /* uv_connect_t */
+    xlist_t addrinfo_reqs;  /* uv_getaddrinfo_t */
     u8_t session_id[SESSION_ID_SIZE];
     u32_t next_upktid;
 } xclient_pri;
@@ -272,6 +273,8 @@ static void on_tcp_xserver_connected(uv_connect_t* req, int status)
         if (status != UV_ECANCELED) {
             uv_close((uv_handle_t*) &ctx->io_xserver, on_tcp_io_closed);
             uv_close((uv_handle_t*) &ctx->peer.t.io, on_tcp_io_closed);
+            /* mark proxy server domain need to be resolved again. */
+            xclient.xserver_addr_r.x.sa_family = 0;
         }
     } else {
         ctx->xconnected = 1;
@@ -506,32 +509,118 @@ static void on_udp_xserver_connected(uv_connect_t* req, int status)
     xlist_erase(&xclient_pri.conn_reqs, xlist_value_iter(req));
 }
 
-int connect_xserver(xclient_ctx_t* ctx, void* concb)
+static int connect_xserver_addr(addrx_t* addr, xclient_ctx_t* ctx, int udp)
 {
     uv_connect_t* req;
 
-    uv_tcp_init(xclient.loop, &ctx->io_xserver);
-    ctx->io_xserver.data = ctx;
 #ifdef __ANDROID__
     if (xclient.profd && open_protected_fd(&ctx->io_xserver, 
-            xclient.xserver_addr.x.sa_family) != 0) {
-        uv_close((uv_handle_t*) &ctx->io_xserver, on_udp_io_closed);
+            xclient.xserver_addr.x.sa_family) != 0)
         return -1;
-    }
 #endif
     req = xlist_alloc_back(&xclient_pri.conn_reqs);
 
-    XLOGD("connecting porxy server %s...", addr_to_str(&xclient.xserver_addr));
+    XLOGD("connecting porxy server %s...", addr_to_str(addr));
     req->data = ctx;
 
-    if (uv_tcp_connect(req, &ctx->io_xserver, &xclient.xserver_addr.x,
-            concb ? concb : (void*) on_tcp_xserver_connected) == 0)
+    if (uv_tcp_connect(req, &ctx->io_xserver, addr,
+            udp ? on_udp_xserver_connected : on_tcp_xserver_connected) == 0)
         return 0;
-    XLOGW("connect proxy server failed immediately.");
+    XLOGW("connect proxy server %s failed immediately.", addr_to_str(addr));
 
-    uv_close((uv_handle_t*) &ctx->io_xserver, on_udp_io_closed);
     xlist_erase(&xclient_pri.conn_reqs, xlist_value_iter(req));
     return -1;
+}
+
+static void on_tcp_xserver_domain_resolved(uv_getaddrinfo_t* req,
+                int status, struct addrinfo* res)
+{
+    xclient_ctx_t* ctx = req->data;
+
+    if (status < 0) {
+        XLOGW("resolve proxy server domain failed: %s.", uv_err_name(status));
+
+        /* NOTE: io may be closed during domain resolving. */
+        if (!uv_is_closing((uv_handle_t*) &ctx->io_xserver)) {
+            uv_close((uv_handle_t*) &ctx->io_xserver, on_tcp_io_closed);
+            uv_close((uv_handle_t*) &ctx->peer.t.io, on_tcp_io_closed);
+        }
+    } else {
+        XLOGD("proxy server domain resolved: %s.", addr_to_str(res->ai_addr));
+
+        /* NOTE: io may be closed during domain resolving. */
+        if (!uv_is_closing((uv_handle_t*) &ctx->io_xserver)
+                && connect_xserver_addr(res->ai_addr, ctx, 0) != 0) {
+            uv_close((uv_handle_t*) &ctx->io_xserver, on_tcp_io_closed);
+            uv_close((uv_handle_t*) &ctx->peer.t.io, on_tcp_io_closed);
+        }
+        /* save resolved server domain. */
+        memcpy(&xclient.xserver_addr_r, res->ai_addr, res->ai_addrlen);
+
+        uv_freeaddrinfo(res);
+    }
+
+    xlist_erase(&xclient_pri.addrinfo_reqs, xlist_value_iter(req));
+}
+
+static void on_udp_xserver_domain_resolved(uv_getaddrinfo_t* req,
+                int status, struct addrinfo* res)
+{
+    xclient_ctx_t* ctx = req->data;
+
+    if (status < 0) {
+        XLOGW("resolve proxy server domain failed: %s.", uv_err_name(status));
+
+        uv_close((uv_handle_t*) &ctx->io_xserver, on_udp_io_closed);
+    } else {
+        XLOGD("proxy server domain resolved: %s.", addr_to_str(res->ai_addr));
+
+        if (connect_xserver_addr(res->ai_addr, ctx, 1) != 0) {
+            uv_close((uv_handle_t*) &ctx->io_xserver, on_udp_io_closed);
+        }
+        /* save resolved server domain. */
+        memcpy(&xclient.xserver_addr_r, res->ai_addr, res->ai_addrlen);
+
+        uv_freeaddrinfo(res);
+    }
+
+    xlist_erase(&xclient_pri.addrinfo_reqs, xlist_value_iter(req));
+}
+
+int connect_xserver(xclient_ctx_t* ctx, int udp)
+{
+    if (xclient.xserver_addr.x.sa_family) {
+        /* server address is ipv4/ipv6, connect it directly. */
+        return connect_xserver_addr(&xclient.xserver_addr.x, ctx, udp);
+    }
+    if (xclient.xserver_addr_r.x.sa_family) {
+        /* use cached resolve result. */
+        return connect_xserver_addr(&xclient.xserver_addr_r.x, ctx, udp);
+    }
+    {
+        /* server address is domain, resolve it. */
+        struct addrinfo hints;
+        char portstr[8];
+        uv_getaddrinfo_t* req = xlist_alloc_back(&xclient_pri.addrinfo_reqs);
+
+        req->data = ctx;
+        sprintf(portstr, "%d", ntohs(xclient.xserver_addr.d.sdm_port));
+        memset(&hints, 0, sizeof(hints));
+
+        hints.ai_family = AF_UNSPEC; /* ipv4 and ipv6 */
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_protocol = IPPROTO_TCP;
+        hints.ai_flags = 0;
+
+        if (uv_getaddrinfo(xclient.loop, req, udp ? on_udp_xserver_domain_resolved
+                    : on_tcp_xserver_domain_resolved,
+                xclient.xserver_addr.d.sdm_addr, portstr, &hints) == 0)
+            return 0;
+        XLOGE("uv_getaddrinfo (%s) failed immediately.", xclient.xserver_addr.d.sdm_addr);
+
+        xlist_erase(&xclient_pri.addrinfo_reqs, xlist_value_iter(req));
+        return -1;
+    }
 }
 
 void init_connect_command(xclient_ctx_t* ctx,
@@ -665,6 +754,8 @@ void send_udp_packet(io_buf_t* iob)
     if (xlist_size(&xclient_pri.u_xclient_ctxs) < xclient.n_uconnect) {
         ctx = xlist_alloc_back(&xclient.xclient_ctxs);
 
+        uv_tcp_init(xclient.loop, &ctx->io_xserver);
+        ctx->io_xserver.data = ctx;
         ctx->peer.u.last_iob = NULL;
         ctx->peer.u.pending_pkts[0] = iob;
         ctx->peer.u.npending = 1;
@@ -677,11 +768,13 @@ void send_udp_packet(io_buf_t* iob)
             SESSION_ID_SIZE);
         xclient.cryptox.encrypt(&ctx->ectx, (u8_t*) iob->buffer, iob->len);
 
-        if (connect_xserver(ctx, on_udp_xserver_connected) == 0) {
+        if (connect_xserver(ctx, 1) == 0) {
             /* move 'ctx' node from 'xclient_ctxs' to 'u_xclient_ctxs'. */
             xlist_paste_front(&xclient_pri.u_xclient_ctxs, xlist_cut(
                 &xclient.xclient_ctxs, xlist_value_iter(ctx)));
             iter = xlist_value_iter(ctx);
+        } else {
+            uv_close((uv_handle_t*) &ctx->io_xserver, on_udp_io_closed);
         }
     } else {
         ctx = xlist_iter_value(iter); /* 'iter' is always valid */
@@ -802,6 +895,7 @@ void xclient_private_init()
         __id2addr_hash, __id2addr_equal, NULL);
     xlist_init(&xclient_pri.u_xclient_ctxs, sizeof(xclient_ctx_t), NULL);
     xlist_init(&xclient_pri.conn_reqs, sizeof(uv_connect_t), NULL);
+    xlist_init(&xclient_pri.addrinfo_reqs, sizeof(uv_getaddrinfo_t), NULL);
 
     if (uv_random(NULL, NULL, xclient_pri.session_id, SESSION_ID_SIZE, 0, NULL) != 0) {
         XLOGW("uv_random failed, use default random.");
@@ -812,6 +906,7 @@ void xclient_private_init()
 
 void xclient_private_destroy()
 {
+    xlist_destroy(&xclient_pri.addrinfo_reqs);
     xlist_destroy(&xclient_pri.conn_reqs);
     xlist_destroy(&xclient_pri.u_xclient_ctxs);
     xhash_destroy(&xclient_pri.id2addrs);

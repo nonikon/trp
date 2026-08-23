@@ -40,9 +40,10 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
     ctx = xlist_alloc_back(&xclient.xclient_ctxs);
 
     uv_tcp_init(xclient.loop, &ctx->peer.t.io);
+    uv_tcp_init(xclient.loop, &ctx->io_xserver);
 
     ctx->peer.t.io.data = ctx;
-    ctx->io_xserver.data = NULL;
+    ctx->io_xserver.data = ctx;
     ctx->pending_iob = NULL;
     ctx->peer_blocked = 0;
     ctx->xserver_blocked = 0;
@@ -74,21 +75,21 @@ static void on_tclient_connect(uv_stream_t* stream, int status)
             } else {
                 XLOGW("getsockopt IP6T_SO_ORIGINAL_DST failed: %s.", strerror(errno));
                 uv_close((uv_handle_t*) &ctx->peer.t.io, on_tcp_io_closed);
+                uv_close((uv_handle_t*) &ctx->io_xserver, on_tcp_io_closed);
                 return;
             }
         }
 #endif
-        if (connect_xserver(ctx, NULL) == 0) {
+        if (connect_xserver(ctx, 0) == 0) {
             /* keepalive with tunnel client. */
             uv_tcp_keepalive(&ctx->peer.t.io, 1, KEEPIDLE_TIME);
-        } else {
-            /* connect failed immediately, just close this connection. */
-            uv_close((uv_handle_t*) &ctx->peer.t.io, on_tcp_io_closed);
+            return;
         }
     } else {
         XLOGE("uv_accept failed.");
-        uv_close((uv_handle_t*) &ctx->peer.t.io, on_tcp_io_closed);
     }
+    uv_close((uv_handle_t*) &ctx->peer.t.io, on_tcp_io_closed);
+    uv_close((uv_handle_t*) &ctx->io_xserver, on_tcp_io_closed);
 }
 
 static void on_udp_tclient_rbuf_alloc(uv_handle_t* handle, size_t sg_size, uv_buf_t* buf)
@@ -519,17 +520,10 @@ int main(int argc, char** argv)
     }
     XLOGI("crypto method %d, METHOD %d.", method, methodx);
 
-    if (parse_ip_str(xserver_str, DEF_XSERVER_PORT, &xclient.xserver_addr.x) != 0) {
-        addrm_t dm;
-
-        if (parse_domain_str(xserver_str, DEF_XSERVER_PORT, &dm) != 0) {
-            XLOGE("invalid proxy server address (%s).", xserver_str);
-            goto end;
-        }
-        if (resolve_domain_sync(xclient.loop, &dm, &xclient.xserver_addr.x) != 0) {
-            XLOGE("resolve domain (%s) failed.", xserver_str);
-            goto end;
-        }
+    if (parse_ip_str(xserver_str, DEF_XSERVER_PORT, &xclient.xserver_addr.x) != 0
+            && parse_domain_str(xserver_str, DEF_XSERVER_PORT, &xclient.xserver_addr.d) != 0) {
+        XLOGE("invalid proxy server address (%s).", xserver_str);
+        goto end;
     }
 
     if (parse_ip_str(tserver_str, DEF_TSERVER_PORT, &taddr.x) != 0) {
