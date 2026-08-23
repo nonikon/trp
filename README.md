@@ -154,7 +154,7 @@ Finally, start `proxy-client` locally (should have access to the `server`) on de
     ./trp-shell -x 1.2.3.4:2222 -k KEY_OF_SERVER -T CTRL_KEY_OF_CLIENT -d DEVID_OF_CLIENT -K KEY_OF_CLIENT
     ```
 
-NOTE: Config file is supported by `-C` command option, see [trp.ini](trp.ini).
+NOTE: Config file is supported by `-C` command option, or `TRP_CONFIG_FILE` environment variable. See [trp.ini](trp.ini).
 
 ## Lisence
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
