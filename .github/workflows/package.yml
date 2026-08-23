@@ -10,7 +10,33 @@ on:
         default: "1.52.1"
 
 jobs:
-  build-linux:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v6
+    - name: Download libuv source code
+      run: |
+        wget "https://dist.libuv.org/dist/v${{ inputs.libuv_version }}/libuv-v${{ inputs.libuv_version }}.tar.gz"
+        tar xf "libuv-v${{ inputs.libuv_version }}.tar.gz"
+    - name: Configure and build
+      run: |
+        cmake -B build -DLIBUV_SRC_PATH="libuv-v${{ inputs.libuv_version }}" -DCMAKE_BUILD_TYPE=Release
+        cmake --build build
+        cmake --install build --prefix install
+    - name: Package
+      working-directory: install/bin
+      run: |
+        commitid=$(git rev-parse --short HEAD)
+        strip trp-*
+        cp ../../trp.ini .
+        zip ../trp-${commitid}-darwin-arm64.zip *
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v7
+      with:
+        name: trp-darwin-arm64
+        path: install/trp-*.zip
+        archive: false
+  build-ubuntu:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
