@@ -12,7 +12,7 @@ for %%I in (arm64-v8a armeabi-v7a x86_64 x86) do (
     %CMK%\bin\cmake -DCMAKE_TOOLCHAIN_FILE=%NDK%\build\cmake\android.toolchain.cmake -DANDROID_ABI=%%I ^
         -DANDROID_NATIVE_API_LEVEL=%MINSDKVER% -DCMAKE_MAKE_PROGRAM=%CMK%\bin\ninja ^
         -DCMAKE_BUILD_TYPE=MinSizeRel -DDISABLE_LOG=ON -G Ninja -B build_ndk\%%I
-    %CMK%\bin\cmake --build build_ndk\%%I --config MinSizeRel
+    %CMK%\bin\cmake --build build_ndk\%%I --config MinSizeRel --target trp-socks
 
     if not exist build_ndk\%%I\trp-socks (
         echo Build Trp for %%I failed

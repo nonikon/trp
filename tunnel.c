@@ -525,6 +525,15 @@ int main(int argc, char** argv)
         XLOGE("invalid proxy server address (%s).", xserver_str);
         goto end;
     }
+#ifdef __ANDROID__
+    /* proxy server's domain name must be resolved at this time. */
+    if (xclient.xserver_addr.x.sa_family == 0
+            && resolve_domain_sync(xclient.loop, &xclient.xserver_addr.d,
+                &xclient.xserver_addr.x) != 0) { /* NOTE: not 'xserver_addr_r' */
+        XLOGE("resolve domain (%s) failed.", xserver_str);
+        goto end;
+    }
+#endif
 
     if (parse_ip_str(tserver_str, DEF_TSERVER_PORT, &taddr.x) != 0) {
         XLOGE("invalid tunnel server address (%s).", tserver_str);
